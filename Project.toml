@@ -1,0 +1,18 @@
+name = "SimilaritySearchEngine"
+uuid = "727cb942-cf72-4dec-85ff-a934ba36de1c"
+version = "0.1.0"
+authors = ["Eric S. Tellez <donsadit@gmail.com>"]
+
+[deps]
+Avro = "65fc3dcb-49af-4f0c-a340-607eef534a14"
+JLD2 = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+RocksDB = "ed16a602-456b-4bce-8851-d9cfcf778d34"
+SimilaritySearch = "053f045d-5466-53fd-b400-a066f88fe02a"
+TextSearch = "7f6f6c8a-3b03-11e9-223d-e7d88259bd6c"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
