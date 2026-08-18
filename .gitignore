@@ -1,0 +1,16 @@
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+*~
+.DS_Store
+.vscode/
+
+# Documenter.jl build output/lockfile (docs/ -- API reference)
+/docs/build/
+/docs/Manifest.toml
+
+# Quarto site build output/cache (manual/ -- description, architecture, tutorial)
+/manual/docs/
+/manual/.quarto/
+/manual/_freeze/
+**/*.quarto_ipynb

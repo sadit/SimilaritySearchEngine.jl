@@ -1,10 +1,10 @@
-module Dataset
+module Project
 
 using RocksDB
-using JSON
+using JSON3
 using ..Schema
 
-export DatasetManager, open_dataset, close_dataset, put_metadata!, get_metadata, find_by_original_id, generate_id
+export ProjectManager, open_project, close_project, put_metadata!, get_metadata, find_by_original_id, generate_id
 
 """
     generate_id() -> String
@@ -19,51 +19,59 @@ function generate_id()
 end
 
 """
-    DatasetManager
+    ProjectManager
 
-Manages a dataset backed by RocksDB.
+Manages a project backed by RocksDB.
 
 # Fields
-- `id::String`: Unique dataset identifier.
+- `dataset::String`: Unique identifier of the dataset stored in this project.
 - `db::RocksDB.DB`: The main RocksDB database handle.
 - `cf_meta::RocksDB.ColumnFamily`: Column family for metadata.
 - `cf_op_log::RocksDB.ColumnFamily`: Column family for operation logs.
 - `cf_secondary_indices::Dict{String, RocksDB.ColumnFamily}`: Secondary indices.
 - `schema::MetaSchema`: In-memory schema definition.
 """
-mutable struct DatasetManager
-    id::String
+mutable struct ProjectManager
+    dataset::String
     db::RocksDB.DB
     cf_meta::RocksDB.ColumnFamily
     cf_op_log::RocksDB.ColumnFamily
     # Secondary indices can be stored in a dict of field_name => ColumnFamily
     cf_secondary_indices::Dict{String, RocksDB.ColumnFamily}
-    
+
     # Store schema in memory for quick checks
     schema::MetaSchema
 end
 
 """
-    open_dataset(path::String, id::String, schema::MetaSchema=MetaSchema(); read_only::Bool=false) -> DatasetManager
+    open_project(path::String, dataset::String, schema::MetaSchema=MetaSchema(); read_only::Bool=false) -> ProjectManager
 
-Opens or creates a RocksDB dataset at the given path.
+Opens or creates a RocksDB-backed project at the given path.
 
 # Arguments
-- `path::String`: The directory path where the dataset will be stored.
-- `id::String`: The unique identifier for this dataset.
-- `schema::MetaSchema`: The schema definition for the dataset metadata.
+- `path::String`: The directory path where the project will be stored.
+- `dataset::String`: The unique identifier of the dataset held by this project.
+- `schema::MetaSchema`: The schema definition for the project's metadata.
 
 # Keyword Arguments
 - `read_only::Bool`: Opens without acquiring RocksDB's exclusive per-process write lock
   (`RocksDB.jl`'s `opendb(...; read_only=true)`) -- lets a read-only caller (e.g. the CLI
-  `describe` command) inspect a dataset a `similarity-search-serve` process still has open
+  `describe` command) inspect a project a `similarity-search-serve` process still has open
   for writing, instead of failing with a lock-contention error. Never pass this when the
   caller intends to write (e.g. `rebuild`): a read-only handle can't `put!`/`delete!`.
+- `extra_cf_names::Vector{String}`: additional column family names to open alongside this
+  module's own (`"meta"`/`"op_log"`/secondary indices), for a caller (e.g. `IndexEngine`'s
+  persistence layer) that wants to share this same RocksDB connection/directory for its
+  own column family rather than opening a second `DB`. `Project` doesn't interpret these
+  names at all -- it just makes sure RocksDB knows about them, since every column family
+  that exists on disk must be listed at `opendb` time on *every* open, not only the first
+  (see `RocksDB.create_column_family`'s docstring): a caller that creates one ad hoc after
+  the fact and never adds it here would find the *next* `open_project` call failing.
 
 # Returns
-- `DatasetManager`: The initialized dataset manager object.
+- `ProjectManager`: The initialized project manager object.
 """
-function open_dataset(path::String, id::String, schema::MetaSchema=MetaSchema(); read_only::Bool=false)
+function open_project(path::String, dataset::String, schema::MetaSchema=MetaSchema(); read_only::Bool=false, extra_cf_names::Vector{String}=String[])
     # Note: In a production environment, we would also need to gracefully handle
     # the known ColumnFamily handle leak in RocksDB.jl when closing/reopening frequently.
 
@@ -77,51 +85,53 @@ function open_dataset(path::String, id::String, schema::MetaSchema=MetaSchema();
         end
     end
 
+    append!(cf_names, extra_cf_names)
+
     # Open DB with all column families
     db = read_only ?
         RocksDB.opendb(path, column_families=cf_names, read_only=true) :
         RocksDB.opendb(path, column_families=cf_names, create_if_missing=true, create_missing_column_families=true)
-    
+
     # Retrieve handles
     cfs = db.column_families
-    
+
     cf_meta = cfs["meta"]
     cf_op_log = cfs["op_log"]
-    
+
     cf_secondary = Dict{String, RocksDB.ColumnFamily}()
     for field in schema.fields
         if field.indexed
             cf_secondary[field.name] = cfs["meta_idx_$(field.name)"]
         end
     end
-    
-    return DatasetManager(id, db, cf_meta, cf_op_log, cf_secondary, schema)
+
+    return ProjectManager(dataset, db, cf_meta, cf_op_log, cf_secondary, schema)
 end
 
 """
-    close_dataset(manager::DatasetManager)
+    close_project(manager::ProjectManager)
 
-Closes the dataset and its underlying RocksDB connection.
+Closes the project and its underlying RocksDB connection.
 
 # Arguments
-- `manager::DatasetManager`: The dataset manager to close.
+- `manager::ProjectManager`: The project manager to close.
 """
-function close_dataset(manager::DatasetManager)
+function close_project(manager::ProjectManager)
     # WARNING: RocksDB.jl currently leaks CF handles on close.
     # Documenting here as per design decisions.
     close(manager.db)
 end
 
 """
-    put_metadata!(manager::DatasetManager, record::MetadataRecord)
+    put_metadata!(manager::ProjectManager, record::MetadataRecord)
 
-Inserts or updates a MetadataRecord in the dataset.
+Inserts or updates a MetadataRecord in the project.
 
 # Arguments
-- `manager::DatasetManager`: The target dataset manager.
+- `manager::ProjectManager`: The target project manager.
 - `record::MetadataRecord`: The metadata record to insert or update.
 """
-function put_metadata!(manager::DatasetManager, record::MetadataRecord)
+function put_metadata!(manager::ProjectManager, record::MetadataRecord)
     # Serialize record to JSON bytes (or Avro if fully integrating Avro.jl here)
     # For now, using JSON bytes for the prototype
     data_dict = Dict(
@@ -132,8 +142,8 @@ function put_metadata!(manager::DatasetManager, record::MetadataRecord)
         # so `record.extra` stays intact for the caller after put_metadata! returns.
         "extra" => String(copy(record.extra))
     )
-    bytes = Vector{UInt8}(JSON.json(data_dict))
-    
+    bytes = Vector{UInt8}(JSON3.write(data_dict))
+
     # `collect` materializes a concrete Vector{UInt8} rather than a lazy reinterpret
     # view over a temporary array -- WriteBatch defers the actual write until write!(),
     # and a lazy view isn't reliably kept alive/rooted across that gap, causing
@@ -144,7 +154,7 @@ function put_metadata!(manager::DatasetManager, record::MetadataRecord)
 
     b = RocksDB.WriteBatch()
     RocksDB.put!(b, key_bytes, bytes, cf=manager.cf_meta)
-    
+
     for (k, v) in record.declared_fields
         if haskey(manager.cf_secondary_indices, k)
             cf = manager.cf_secondary_indices[k]
@@ -157,18 +167,18 @@ function put_metadata!(manager::DatasetManager, record::MetadataRecord)
 end
 
 """
-    get_metadata(manager::DatasetManager, doc_id::Int) -> Union{MetadataRecord, Nothing}
+    get_metadata(manager::ProjectManager, doc_id::Int) -> Union{MetadataRecord, Nothing}
 
-Retrieves a MetadataRecord from the dataset by its document ID.
+Retrieves a MetadataRecord from the project by its document ID.
 
 # Arguments
-- `manager::DatasetManager`: The dataset manager.
+- `manager::ProjectManager`: The project manager.
 - `doc_id::Int`: The integer document ID to retrieve.
 
 # Returns
 - `MetadataRecord`: The parsed record if found, or `nothing`.
 """
-function get_metadata(manager::DatasetManager, doc_id::Integer)
+function get_metadata(manager::ProjectManager, doc_id::Integer)
     key_bytes = collect(reinterpret(UInt8, [Int(doc_id)]))
     val_bytes = get(manager.db, key_bytes, cf=manager.cf_meta)
 
@@ -177,7 +187,7 @@ function get_metadata(manager::DatasetManager, doc_id::Integer)
 end
 
 function _decode_metadata(val_bytes::Vector{UInt8})
-    data_dict = JSON.parse(String(val_bytes))
+    data_dict = JSON3.read(String(val_bytes), Dict{String, Any})
     extra_bytes = Vector{UInt8}(data_dict["extra"])
 
     return MetadataRecord(
@@ -189,15 +199,15 @@ function _decode_metadata(val_bytes::Vector{UInt8})
 end
 
 """
-    find_by_original_id(manager::DatasetManager, id_str::String) -> Union{MetadataRecord, Nothing}
+    find_by_original_id(manager::ProjectManager, id_str::String) -> Union{MetadataRecord, Nothing}
 
 Linear scan over the `meta` column family looking for a record whose caller-supplied
 `"id"` field (declared or in `extra`) matches `id_str`. There is no secondary index from
 external id to `doc_id` in this pass, so this is the fallback path for `fetch` requests
 that use the original document id rather than the internal integer `doc_id` — acceptable
-for the dataset sizes this prototype targets, not meant as a hot-path lookup.
+for the project sizes this prototype targets, not meant as a hot-path lookup.
 """
-function find_by_original_id(manager::DatasetManager, id_str::String)
+function find_by_original_id(manager::ProjectManager, id_str::String)
     for (_, v) in RocksDB.DBIterator(manager.db; cf=manager.cf_meta)
         record = _decode_metadata(v)
         if Schema.get_field(record, "id") == id_str

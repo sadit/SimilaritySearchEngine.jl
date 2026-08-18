@@ -2,113 +2,270 @@
 # on the same machine against the same --workdir a similarity-search/similarity-search-serve
 # process already uses, with no HTTP, no CLI subprocess, no running server required. Every
 # function here mirrors an existing cli_handlers.jl/server.jl code path exactly (same
-# on-disk layout, same insertion/search/persistence semantics) so a dataset touched through
+# on-disk layout, same insertion/search/persistence semantics) so a project touched through
 # this API stays fully interoperable with the CLI and HTTP server -- this is a second way to
 # reach the same shared engine, not a separate one.
 #
-# Scope is deliberately bounded to dataset lifecycle + core CRUD + calibrate + one
+# Scope is deliberately bounded to project lifecycle + core CRUD + calibrate + one
 # representative heavy op (allknn). fft/neardup/hsp/rebuild!/dump_dataset/load_dataset are
 # not built here -- a documented follow-up (PLAN.md §8.5), not an oversight.
 
 """
-    EmbeddedHandle
+    EmbeddedEngine
 
-Bundles everything a script needs to keep working against one open dataset: its directory
-layout plus the live `Dataset.DatasetManager`/`IndexEngine.SearchEngineWrapper` pair
+Bundles everything a script needs to keep working against one open project: its directory
+layout plus the live `Project.ProjectManager`/`IndexEngine.AbstractSearchEngine` pair
 `cli_handlers.jl`'s `_load_dataset_and_engine` already threads through separately for a
-single CLI command -- worth bundling here since an embedded-API caller makes many calls
-against the same open dataset instead of running once and exiting.
+single CLI command, plus the `Persistence.EngineStore` (a RocksDB column family shared
+with `project.db`, see `Persistence.open_engine_store`) that engine mutations persist
+into field-by-field, and `pending_flush` -- a flag a `GenericEngine`'s
+`IndexEngine.CallbackLog` callback sets (see [`create_project`](@ref)) that this module
+checks and clears from *outside* the engine's own insertion call, once it's known safe to
+do so (see [`_maybe_flush_index!`](@ref); unused for `SearchGraphEngine`/`BM25Engine`/
+`InvertedFileEngine`, which each persist their index incrementally by themselves -- see
+[`_searchgraph_on_change`](@ref)/[`_invertedfile_on_change`](@ref)) -- worth bundling here
+since an embedded-API caller makes many calls against the same open project instead of
+running once and exiting.
 """
-mutable struct EmbeddedHandle
+mutable struct EmbeddedEngine
     workdir::String
-    id::String
+    dataset::String
     dir::String
-    ds::Dataset.DatasetManager
-    engine::IndexEngine.SearchEngineWrapper
-end
-
-_snapshot_path(dir::String, id::String) = joinpath(dir, "$(id).snapshot.jld2")
-
-function _save_snapshot!(handle::EmbeddedHandle)
-    engine = handle.engine
-    Persistence.save_snapshot(_snapshot_path(handle.dir, handle.id),
-        (index=engine.index, text_kind=engine.text_kind, voc=engine.voc, model=engine.model, deleted_ids=engine.deleted_ids))
+    project::Project.ProjectManager
+    engine::IndexEngine.AbstractSearchEngine
+    store::Persistence.EngineStore
+    pending_flush::Base.RefValue{Bool}
 end
 
 """
-    create_dataset(workdir, id; index_type="searchgraph", distance="L2", schema=MetaSchema()) -> EmbeddedHandle
+    _maybe_flush_index!(handle::EmbeddedEngine)
 
-Creates a brand-new dataset directly on disk at `<workdir>/<id>`, with no HTTP server or CLI
-subprocess involved -- the same on-disk layout `similarity-search build` already produces
-(`<workdir>/<id>/<id>.snapshot.jld2`), so a dataset created this way can later be inspected/
-rebuilt/dumped by the CLI, or reopened by [`open_dataset`](@ref).
+Persists `handle.engine.index` if (and only if) `handle.pending_flush[]` is set, then
+clears the flag. Callers must only call this from a point where the just-finished mutation
+is fully done -- in particular, *not* from inside an `IndexEngine.CallbackLog` callback
+itself. Right after an `IndexEngine.add_item!`/`ensure_trained!` call returns to this
+module is always safe. A no-op for `SearchGraphEngine`/`BM25Engine`/`InvertedFileEngine`:
+each has its own dedicated incremental `on_change` (see [`_searchgraph_on_change`](@ref)/
+[`_invertedfile_on_change`](@ref)) that never touches `pending_flush`; only `GenericEngine`
+(`ExhaustiveSearch`/`ParallelExhaustiveSearch`) still uses this whole-index path.
 """
-function create_dataset(workdir::String, id::String; index_type::String="searchgraph", distance::String="L2", schema::MetaSchema=MetaSchema())
-    dir = joinpath(workdir, id)
+function _maybe_flush_index!(handle::EmbeddedEngine)
+    if handle.pending_flush[]
+        handle.pending_flush[] = false
+        Persistence.save_field!(handle.store, :index, handle.engine.index)
+    end
+end
+
+"""
+    _searchgraph_on_change(store::Persistence.EngineStore, adj_store::Persistence.AdjacencyStore) -> Function
+
+The `on_change` callback for a `SearchGraphEngine`: on every `push_item!`/`append_items!`
+report for range `sp:ep`, saves *only* that range's raw vectors, as a new,
+never-again-rewritten block in `:index`'s sequence in `store`
+(`Persistence.append_block!`, `IndexEngine.searchgraph_vectors`), and separately saves
+each object `i` in `sp:ep`'s own direct-links-only neighbor list under its own key in
+`adj_store` (`Persistence.save_neighbors!`, `IndexEngine.direct_neighbors`) -- adjacency
+lives in its own column family, keyed by object id, apart from every other engine field
+(see `Persistence.AdjacencyStore`) -- never the whole (growing) graph as one value. This
+is safe to do synchronously, right inside the callback, unlike the whole-graph save every
+other engine kind uses (see [`_maybe_flush_index!`](@ref)): this is exactly the
+direct-links-only slice `IndexEngine.CallbackLog` hands over at that point, and
+reconstruction (`IndexEngine.build_searchgraph`, used by [`open_project`](@ref))
+reconnects every reverse link itself, once, after replaying every saved vectors block and
+looking up every object's saved adjacency.
+"""
+function _searchgraph_on_change(store::Persistence.EngineStore, adj_store::Persistence.AdjacencyStore)
+    return (index, sp, ep) -> begin
+        Persistence.append_block!(store, :index, IndexEngine.searchgraph_vectors(index, sp, ep))
+        for i in sp:ep
+            Persistence.save_neighbors!(adj_store, i, IndexEngine.direct_neighbors(index, i))
+        end
+    end
+end
+
+"""
+    _invertedfile_on_change(obj_store::Persistence.InvertedFileObjectStore) -> Function
+
+The `on_change` callback for a `BM25Engine`/`InvertedFileEngine`: on every
+`push_item!`/`append_items!` report for range `sp:ep`, saves *only* that range's raw
+indexed objects (bags-of-words or `SparseVector`s -- see `IndexEngine.invertedfile_objects`)
+as a new, never-again-rewritten block in `obj_store` (`Persistence.append_objects!`) --
+never the whole (growing) index as one value. Safe to do synchronously, right inside the
+callback (unlike the whole-index save `GenericEngine` uses, see
+[`_maybe_flush_index!`](@ref)): an inverted file's `LOG` only fires after a call's
+mutation is fully done, so there's no partial-state hazard here the way there is for a
+`SearchGraph` (see `IndexEngine.CallbackLog`'s docstring). Reconstruction
+(`IndexEngine.build_bm25invertedfile`/`build_invertedfile`, used by [`open_project`](@ref))
+rebuilds the whole index by replaying every saved object back through the library's own
+insertion -- see `Persistence.InvertedFileObjectStore`'s docstring for the scaling
+trade-off that implies (fine up to a few million documents; not a design for
+billion-document corpora needing disk-backed posting lists).
+"""
+_invertedfile_on_change(obj_store::Persistence.InvertedFileObjectStore) =
+    (index, sp, ep) -> Persistence.append_objects!(obj_store, IndexEngine.invertedfile_objects(index, sp, ep))
+
+"""
+    create_project(workdir, dataset; index_type=SearchGraph, distance=nothing, minrecall=0.9, schema=MetaSchema()) -> EmbeddedEngine
+
+Creates a brand-new project directly on disk at `<workdir>/<dataset>`, with no HTTP server or
+CLI subprocess involved -- the same on-disk layout `similarity-search build` already produces,
+so a project created this way can later be inspected/rebuilt/dumped by the CLI, or reopened by
+[`open_project`](@ref). `distance`, left at its default `nothing`, defers to whichever default
+`IndexEngine.create_engine` picks for `index_type` (e.g. `SqL2()` for a `SearchGraph`,
+`NormCosine()` for an `InvertedFile`) instead of this function imposing one blanket default
+across every index kind. `minrecall` is the target recall a `SearchGraphEngine` autotunes
+`BeamSearch` toward as it grows (see `IndexEngine.SearchGraphEngine`); it must be given here,
+at creation, since it's carried on the engine and restored verbatim by [`open_project`](@ref)
+rather than re-derived later -- `calibrate!` remains available afterwards as a separate,
+explicit re-optimization pass. Ignored for index types with no `BeamSearch` to autotune.
+
+The engine's index itself is persisted incrementally as it grows, not rewritten wholesale
+on every `append_items!` call: for a `SearchGraph`, every insertion report saves just its
+own direct-links-only block (see [`_searchgraph_on_change`](@ref)); for every other index
+kind, a full save happens right after the `add_item!` call that triggered it returns (see
+[`_maybe_flush_index!`](@ref)). [`close_project!`](@ref) forces one final flush of the
+latter so nothing recent is lost -- the former never has anything left to flush, since
+each block is already durable the instant it's saved.
+"""
+function create_project(workdir::String, dataset::String; index_type::Type=SearchGraph, distance=nothing, minrecall::Union{Nothing,Real}=0.9, schema::MetaSchema=MetaSchema())
+    dir = joinpath(workdir, dataset)
     mkpath(dir)
-    ds = Dataset.open_dataset(dir, id, schema)
-    engine = IndexEngine.create_engine(index_type, distance)
-    handle = EmbeddedHandle(workdir, id, dir, ds, engine)
-    _save_snapshot!(handle)
-    return handle
+    project = Project.open_project(dir, dataset, schema; extra_cf_names=[Persistence.ENGINE_CF, Persistence.ADJACENCY_CF, Persistence.INVFILE_DB_CF])
+    store = Persistence.open_engine_store(project.db)
+    pending_flush = Ref(false)
+    on_change = if index_type === SearchGraph
+        _searchgraph_on_change(store, Persistence.open_adjacency_store(project.db))
+    elseif index_type === BM25InvertedFile || index_type === InvertedFile
+        _invertedfile_on_change(Persistence.open_invertedfile_object_store(project.db))
+    else
+        (_, __, ___) -> (pending_flush[] = true)
+    end
+    engine = distance === nothing ?
+        IndexEngine.create_engine(index_type; minrecall, on_change) :
+        IndexEngine.create_engine(index_type; distance, minrecall, on_change)
+    Persistence.save_fields!(store, IndexEngine.snapshot_state(engine))
+    return EmbeddedEngine(workdir, dataset, dir, project, engine, store, pending_flush)
 end
 
 """
-    open_dataset(workdir, id; read_only=false) -> EmbeddedHandle
+    open_project(workdir, dataset; read_only=false) -> EmbeddedEngine
 
-Reopens a dataset previously created by [`create_dataset`](@ref) (or by
-`similarity-search build`, since both use the same
-`<workdir>/<id>/<id>.snapshot.jld2` layout), restoring its search engine from the JLD2
-snapshot. Falls back to a fresh, empty `searchgraph`/`L2` engine if no snapshot exists yet
-at this path, mirroring `Server._reload_one_dataset!`'s own "create if nothing persisted
-yet" fallback.
+Reopens a project previously created by [`create_project`](@ref), restoring its search
+engine -- including the `minrecall` target and any calibrated `opt_beamsearch` it was
+created/calibrated with -- field-by-field from its `Persistence.EngineStore` (a
+`SearchGraphEngine`'s index specifically via `IndexEngine.build_searchgraph` replaying its
+saved insertion blocks, see [`_searchgraph_on_change`](@ref)). Falls back to a fresh,
+empty `SearchGraph`/`SqL2`/`minrecall=0.9` engine if this project has never been saved
+yet, mirroring `Server._reload_one_dataset!`'s own "create if nothing persisted yet"
+fallback.
 
-Pass `read_only=true` to inspect a dataset a live `similarity-search-serve` process (or
-another script) still has open for writing (mirrors `Dataset.open_dataset`'s own
+Pass `read_only=true` to inspect a project a live `similarity-search-serve` process (or
+another script) still has open for writing (mirrors `Project.open_project`'s own
 `read_only` kwarg, used the same way by the CLI's `describe` command) -- a plain
 (non-`read_only`) open against a directory something else already has open for writing
 raises RocksDB's own real lock error, not a friendly one this function invents.
 """
-function open_dataset(workdir::String, id::String; read_only::Bool=false)
-    dir = joinpath(workdir, id)
-    snap_path = _snapshot_path(dir, id)
-    engine = if isfile(snap_path)
-        snap = Persistence.load_snapshot(snap_path)
-        IndexEngine.restore_engine(snap.index, snap.text_kind, snap.voc, snap.model, snap.deleted_ids)
+function open_project(workdir::String, dataset::String; read_only::Bool=false)
+    dir = joinpath(workdir, dataset)
+    project = Project.open_project(dir, dataset; read_only, extra_cf_names=[Persistence.ENGINE_CF, Persistence.ADJACENCY_CF, Persistence.INVFILE_DB_CF])
+    store = Persistence.open_engine_store(project.db)
+    pending_flush = Ref(false)
+
+    kind = Persistence.load_field(store, :kind)
+    engine = if kind === nothing
+        on_change = _searchgraph_on_change(store, Persistence.open_adjacency_store(project.db))
+        engine = IndexEngine.create_engine(SearchGraph; on_change)
+        Persistence.save_fields!(store, IndexEngine.snapshot_state(engine))
+        engine
+    elseif kind === IndexEngine.SearchGraphEngine
+        adj_store = Persistence.open_adjacency_store(project.db)
+        state = (
+            kind=kind,
+            distance=Persistence.load_field(store, :distance),
+            vector_blocks=Persistence.load_blocks(store, :index),
+            load_neighbors=(i -> Persistence.load_neighbors(adj_store, i)),
+            minrecall=Persistence.load_field(store, :minrecall),
+            opt_beamsearch=Persistence.load_field(store, :opt_beamsearch),
+            deleted_ids=Persistence.load_field(store, :deleted_ids),
+        )
+        IndexEngine.restore_engine(state; on_change=_searchgraph_on_change(store, adj_store))
+    elseif kind === IndexEngine.BM25Engine
+        obj_store = Persistence.open_invertedfile_object_store(project.db)
+        state = (
+            kind=kind,
+            voc=Persistence.load_field(store, :voc),
+            object_blocks=Persistence.load_object_blocks(obj_store),
+            deleted_ids=Persistence.load_field(store, :deleted_ids),
+        )
+        IndexEngine.restore_engine(state; on_change=_invertedfile_on_change(obj_store))
+    elseif kind === IndexEngine.InvertedFileEngine
+        obj_store = Persistence.open_invertedfile_object_store(project.db)
+        state = (
+            kind=kind,
+            voc=Persistence.load_field(store, :voc),
+            model=Persistence.load_field(store, :model),
+            distance=Persistence.load_field(store, :distance),
+            object_blocks=Persistence.load_object_blocks(obj_store),
+            deleted_ids=Persistence.load_field(store, :deleted_ids),
+        )
+        IndexEngine.restore_engine(state; on_change=_invertedfile_on_change(obj_store))
     else
-        IndexEngine.create_engine("searchgraph", "L2")
+        on_change = (_, __, ___) -> (pending_flush[] = true)
+        common = (index=Persistence.load_field(store, :index), deleted_ids=Persistence.load_field(store, :deleted_ids))
+        extra = NamedTuple{IndexEngine.extra_state_fields(kind)}(map(f -> Persistence.load_field(store, f), IndexEngine.extra_state_fields(kind)))
+        state = (kind=kind, common..., extra...)
+        IndexEngine.restore_engine(state; on_change)
     end
-    ds = Dataset.open_dataset(dir, id; read_only)
-    return EmbeddedHandle(workdir, id, dir, ds, engine)
+    return EmbeddedEngine(workdir, dataset, dir, project, engine, store, pending_flush)
 end
 
 """
-    close_dataset!(handle::EmbeddedHandle)
+    close_project!(handle::EmbeddedEngine)
 
-Closes the dataset's RocksDB connection. Does not persist anything -- `append_items!`/
-`delete_item!`/`calibrate!` already resave the JLD2 snapshot themselves after every
-mutation, so there is nothing left to flush here.
+Flushes the engine's index one final time and closes the project's RocksDB connection.
+For `SearchGraphEngine`/`BM25Engine`/`InvertedFileEngine` there is nothing left to flush
+-- every insertion block was already saved the instant it was reported (see
+[`_searchgraph_on_change`](@ref)/[`_invertedfile_on_change`](@ref)) -- so this only does
+the final `:index` save for `GenericEngine`. Every other field (`deleted_ids`,
+`opt_beamsearch`, ...) is, for every kind, already persisted immediately by whichever
+call changed it (`delete_item!`, `calibrate!`, ...).
 """
-function close_dataset!(handle::EmbeddedHandle)
-    Dataset.close_dataset(handle.ds)
+function close_project!(handle::EmbeddedEngine)
+    handle.pending_flush[] = false
+    if !(handle.engine isa Union{IndexEngine.SearchGraphEngine, IndexEngine.BM25Engine, IndexEngine.InvertedFileEngine})
+        Persistence.save_field!(handle.store, :index, handle.engine.index)
+    end
+    Project.close_project(handle.project)
     return nothing
 end
 
 """
-    append_items!(handle::EmbeddedHandle, items) -> Int
+    append_items!(handle::EmbeddedEngine, items) -> Int
 
-Appends a batch of items (each an `AbstractDict` with a `"vector"` key for a dense dataset
-or a `"text"` key for a text one, plus optional metadata fields) and resaves the JLD2
-snapshot -- mirrors `Server.handle_append`'s exact insertion + persistence sequence, so a
-dataset written to via this embedded API stays consistent with what a CLI `describe`/
-`rebuild`, or a `similarity-search-serve` process that later opens the same directory,
-would see. Returns the number of items actually inserted (an item missing its required key
-is skipped, not an error, matching `handle_append`'s behavior).
+Appends a batch of items (each an `AbstractDict` with a `"vector"` key for a dense project
+or a `"text"` key for a text one, plus optional metadata fields) -- mirrors
+`Server.handle_append`'s exact insertion sequence, so a project written to via this
+embedded API stays consistent with what a CLI `describe`/`rebuild`, or a
+`similarity-search-serve` process that later opens the same directory, would see. Returns
+the number of items actually inserted (an item missing its required key is skipped, not
+an error, matching `handle_append`'s behavior).
+
+Persistence: the *first* batch that trains a text engine's vocabulary persists
+`voc`/`model`/`distance` together immediately (a one-time, must-not-lose transition --
+`index` itself has nothing to save yet at that point, since training only constructs an
+empty index; its first indexed object comes from this same batch's own insertions just
+below, already covered by the engine's own incremental `on_change`). Every insertion,
+for every engine kind, reports through `IndexEngine.CallbackLog`: `SearchGraph`/
+`BM25Engine`/`InvertedFileEngine` each persist incrementally, synchronously, inside that
+callback (see [`_searchgraph_on_change`](@ref)/[`_invertedfile_on_change`](@ref));
+`GenericEngine` instead flags a pending whole-index save that happens right after each
+`add_item!` call returns (see [`_maybe_flush_index!`](@ref)).
 """
-function append_items!(handle::EmbeddedHandle, items)
+function append_items!(handle::EmbeddedEngine, items)
     engine = handle.engine
-    ds = handle.ds
+    project = handle.project
     is_text = IndexEngine.is_text_index(engine)
+    was_untrained = is_text && engine.voc === nothing
 
     if is_text
         texts = [item["text"] for item in items if haskey(item, "text")]
@@ -124,123 +281,161 @@ function append_items!(handle::EmbeddedHandle, items)
             haskey(item, "vector") || continue
             IndexEngine.add_item!(engine, convert(Vector{Float32}, item["vector"]))
         end
+        _maybe_flush_index!(handle)
 
         doc_id = length(engine.index)
         raw_dict = merge(Dict{String, Any}(item), Dict{String, Any}(get(item, "meta", Dict())))
-        put_metadata!(ds, MetadataRecord(doc_id, ds.schema, raw_dict))
+        put_metadata!(project, MetadataRecord(doc_id, project.schema, raw_dict))
         inserted += 1
     end
 
-    inserted > 0 && _save_snapshot!(handle)
+    if was_untrained && engine.voc !== nothing
+        # `snapshot_state` already knows exactly which fields this concrete engine kind
+        # has (BM25Engine has no `distance`, InvertedFileEngine does, etc.) -- reuse it
+        # rather than re-deriving the field set by hand here.
+        Persistence.save_fields!(handle.store, IndexEngine.snapshot_state(engine))
+        handle.pending_flush[] = false
+    end
     return inserted
 end
 
-function _search_with_filter(engine::IndexEngine.SearchEngineWrapper, ds::Dataset.DatasetManager, query, k::Int, filter_spec::AbstractDict)
+function _search_with_filter(engine::IndexEngine.AbstractSearchEngine, project::Project.ProjectManager, query, k::Int, predicate; minrecall=nothing)
     overfetch = max(k * 5, k + 20)
-    raw = IndexEngine.search_live(engine, query, overfetch)
+    raw = IndexEngine.search_live(engine, query, overfetch; minrecall)
 
     ids = Int32[]
     dists = Float32[]
-    for (id, dist) in zip(raw.id, raw.dist)
-        record = get_metadata(ds, id)
+    for (id, dist, deleted) in zip(raw.id, raw.dist, raw.deleted)
+        # A soft-deleted id has no metadata a caller is allowed to see, so it can never
+        # satisfy a metadata predicate -- skip it without even attempting the lookup.
+        deleted && continue
+        record = get_metadata(project, id)
         record === nothing && continue
-        matches_filter(record, filter_spec) || continue
+        predicate(record) || continue
         push!(ids, id)
         push!(dists, dist)
         length(ids) == k && break
     end
-    return (id=ids, dist=dists)
+    return (id=ids, dist=dists, deleted=falses(length(ids)))
 end
 
-function _hydrate_results(ds::Dataset.DatasetManager, res_knn)
+function _hydrate_results(project::Project.ProjectManager, res_knn)
     results = NamedTuple[]
-    for (doc_id, dist) in zip(res_knn.id, res_knn.dist)
-        record = get_metadata(ds, doc_id)
+    for (doc_id, dist, deleted) in zip(res_knn.id, res_knn.dist, res_knn.deleted)
+        if deleted
+            # Metadata for a soft-deleted doc_id is not accessible through search --
+            # report the deletion marker instead of the (hidden) original id.
+            push!(results, (id=string(doc_id), doc_id=doc_id, distance=dist, deleted=true))
+            continue
+        end
+        record = get_metadata(project, doc_id)
         orig_id = record === nothing ? string(doc_id) : something(get_field(record, "id"), string(doc_id))
-        push!(results, (id=orig_id, doc_id=doc_id, distance=dist))
+        push!(results, (id=orig_id, doc_id=doc_id, distance=dist, deleted=false))
     end
     return results
 end
 
 """
-    search(handle::EmbeddedHandle, vector; k=10, filter=nothing) -> Vector{<:NamedTuple}
+    search(handle::EmbeddedEngine, vector; k=10, filter=nothing) -> Vector{<:NamedTuple}
 
 Dense vector search, hydrated with each hit's original id (mirrors `Server.handle_search`
-minus the HTTP/telemetry/pagination machinery). `filter`, if given, is a `Dict` of declared
-metadata field => value, applied via `Schema.matches_filter` the same way the HTTP API's
-`filter` body field is (over-fetches candidates, drops non-matching ones, keeps up to `k`).
-Returns a `Vector` of `(id, doc_id, distance)` named tuples, possibly fewer than `k` if
-post-filtering (deletions or `filter`) leaves too few candidates.
+minus the HTTP/telemetry/pagination machinery). `filter`, if given, is a
+`record::Schema.MetadataRecord -> Bool` predicate function called on each overfetched
+candidate's metadata record (over-fetches candidates, drops the ones the predicate
+rejects, keeps up to `k`) -- e.g. `record -> Schema.get_field(record, "year") >= 2020`.
+A caller here already has real Julia functions to work with, not a JSON wire format to
+encode a filter into, so `filter` is just that function, not a name-keyed spec for some
+interpreter to replay.
+
+Without `filter`, this is a plain top-`k` search: soft-deleted candidates are not hidden
+or backfilled -- they're returned with `deleted=true` and no hydrated metadata (see
+[`IndexEngine.search_live`](@ref)), so `id` falls back to `string(doc_id)` for them.
+Getting `k` *live* results back is a paging concern for a layer above this one (e.g. a
+server walking successive windows via a cursor), not something this function does itself.
+
+`minrecall`, for a `SearchGraphEngine`, searches at (approximately) that target recall
+using a calibrated `BeamSearch` from `engine.opt_beamsearch` instead of its current
+default (see [`IndexEngine.search_live`](@ref)) -- if that table is still empty, this
+triggers a one-off `calibrate!` over `IndexEngine.DEFAULT_MINRECALL_LEVELS` and persists
+the resulting `opt_beamsearch` so that calibration isn't silently repeated on every future
+search. Ignored for any other engine kind.
+
+Returns a `Vector` of `(id, doc_id, distance, deleted)` named tuples.
 """
-function search(handle::EmbeddedHandle, vector; k::Int=10, filter=nothing)
+function search(handle::EmbeddedEngine, vector; k::Int=10, filter=nothing, minrecall=nothing)
     query = convert(Vector{Float32}, vector)
+    needs_save = minrecall !== nothing && handle.engine isa IndexEngine.SearchGraphEngine && isempty(handle.engine.opt_beamsearch)
     res_knn = filter === nothing ?
-        IndexEngine.search_live(handle.engine, query, k) :
-        _search_with_filter(handle.engine, handle.ds, query, k, filter)
-    return _hydrate_results(handle.ds, res_knn)
+        IndexEngine.search_live(handle.engine, query, k; minrecall) :
+        _search_with_filter(handle.engine, handle.project, query, k, filter; minrecall)
+    needs_save && Persistence.save_field!(handle.store, :opt_beamsearch, handle.engine.opt_beamsearch)
+    return _hydrate_results(handle.project, res_knn)
 end
 
 """
-    ftsearch(handle::EmbeddedHandle, text; k=10) -> Vector{<:NamedTuple}
+    ftsearch(handle::EmbeddedEngine, text; k=10) -> Vector{<:NamedTuple}
 
-Text search against a bm25/weighted-inverted-file dataset (mirrors `Server.handle_ftsearch`).
+Text search against a bm25/weighted-inverted-file project (mirrors `Server.handle_ftsearch`).
+Same soft-delete marker behavior as [`search`](@ref); `minrecall` is accepted only for
+parity with `search` and is a no-op here since no text engine has a `BeamSearch` to
+calibrate.
 """
-function ftsearch(handle::EmbeddedHandle, text::AbstractString; k::Int=10)
-    res_knn = IndexEngine.search_live(handle.engine, text, k)
-    return _hydrate_results(handle.ds, res_knn)
+function ftsearch(handle::EmbeddedEngine, text::AbstractString; k::Int=10, minrecall=nothing)
+    res_knn = IndexEngine.search_live(handle.engine, text, k; minrecall)
+    return _hydrate_results(handle.project, res_knn)
 end
 
 """
-    delete_item!(handle::EmbeddedHandle, doc_id::Integer)
+    delete_item!(handle::EmbeddedEngine, doc_id::Integer)
 
 Soft-deletes `doc_id` (future searches exclude it, the underlying index is untouched) and
-resaves the JLD2 snapshot -- mirrors `Server.handle_delete_item`.
+immediately persists just the `deleted_ids` field -- mirrors `Server.handle_delete_item`.
 """
-function delete_item!(handle::EmbeddedHandle, doc_id::Integer)
-    IndexEngine.mark_deleted!(handle.engine, Int(doc_id))
-    _save_snapshot!(handle)
+function delete_item!(handle::EmbeddedEngine, doc_id::Integer)
+    IndexEngine.mark_deleted!(handle.engine, doc_id)
+    Persistence.save_field!(handle.store, :deleted_ids, handle.engine.deleted_ids)
     return nothing
 end
 
 """
-    fetch_items(handle::EmbeddedHandle, ids) -> Vector{Dict{String,Any}}
+    fetch_items(handle::EmbeddedEngine, ids) -> Vector{Dict{String,Any}}
 
 Batch metadata retrieval by id -- each element of `ids` may be the internal integer
-`doc_id` or the caller-supplied original `id` (resolved via `Dataset.find_by_original_id`).
+`doc_id` or the caller-supplied original `id` (resolved via `Project.find_by_original_id`).
 Mirrors `Server.handle_fetch`; an id that resolves to nothing is silently skipped.
 """
-function fetch_items(handle::EmbeddedHandle, ids)
-    ds = handle.ds
+function fetch_items(handle::EmbeddedEngine, ids)
+    project = handle.project
     results = Dict{String, Any}[]
     for raw_id in ids
         record = nothing
         maybe_int = tryparse(Int, string(raw_id))
-        maybe_int !== nothing && (record = get_metadata(ds, maybe_int))
-        record === nothing && (record = find_by_original_id(ds, string(raw_id)))
+        maybe_int !== nothing && (record = get_metadata(project, maybe_int))
+        record === nothing && (record = find_by_original_id(project, string(raw_id)))
         record === nothing && continue
 
-        extra = isempty(record.extra) ? Dict{String, Any}() : JSON.parse(String(copy(record.extra)))
+        extra = isempty(record.extra) ? Dict{String, Any}() : JSON3.read(String(copy(record.extra)), Dict{String, Any})
         push!(results, merge(Dict{String, Any}("doc_id" => record.doc_id), record.declared_fields, extra))
     end
     return results
 end
 
 """
-    exists(handle::EmbeddedHandle, ids) -> Vector{<:NamedTuple}
+    exists(handle::EmbeddedEngine, ids) -> Vector{<:NamedTuple}
 
 For each id in `ids` (internal `doc_id` or original id), reports whether a record exists
 and, if so, whether it's been soft-deleted. Mirrors `Server.handle_exists`.
 """
-function exists(handle::EmbeddedHandle, ids)
-    ds = handle.ds
+function exists(handle::EmbeddedEngine, ids)
+    project = handle.project
     engine = handle.engine
     results = NamedTuple[]
     for raw_id in ids
         id_str = string(raw_id)
         record = nothing
         maybe_int = tryparse(Int, id_str)
-        maybe_int !== nothing && (record = get_metadata(ds, maybe_int))
-        record === nothing && (record = find_by_original_id(ds, id_str))
+        maybe_int !== nothing && (record = get_metadata(project, maybe_int))
+        record === nothing && (record = find_by_original_id(project, id_str))
         found = record !== nothing
         deleted = found && (record.doc_id in engine.deleted_ids)
         push!(results, (id=id_str, exists=found, deleted=deleted))
@@ -249,34 +444,35 @@ function exists(handle::EmbeddedHandle, ids)
 end
 
 """
-    calibrate!(handle::EmbeddedHandle; minrecall=0.9, numqueries=64, ksearch=10, queries=nothing) -> BeamSearch
+    calibrate!(handle::EmbeddedEngine; levels=IndexEngine.DEFAULT_MINRECALL_LEVELS, numqueries=64, ksearch=10, queries=nothing) -> IndexEngine.OptBeamSearch
 
-Runs `IndexEngine.calibrate!`'s real hyperparameter sweep and resaves the JLD2 snapshot so
-the calibrated `BeamSearch` (stored inside `engine.index.algo[]`, itself part of the saved
-`index`) survives a later `close_dataset!` + `open_dataset` round-trip -- there is no
-`descriptor.json` in this embedded API for `Server.handle_calibrate`'s separate persistence
-path to write to, so the JLD2 snapshot is this API's sole persistence mechanism.
+Runs `IndexEngine.calibrate!`'s real hyperparameter sweep for each recall level in
+`levels` and immediately persists just the resulting `opt_beamsearch` table (consulted by
+`search`'s own `minrecall` keyword) so it survives a later `close_project!` +
+`open_project` round-trip -- there is no `descriptor.json` in this embedded API for
+`Server.handle_calibrate`'s separate persistence path to write to, so this `EngineStore`
+field is this API's sole persistence mechanism for it.
 """
-function calibrate!(handle::EmbeddedHandle; minrecall::Real=0.9, numqueries::Int=64, ksearch::Int=10, queries=nothing)
-    bs = IndexEngine.calibrate!(handle.engine; minrecall, numqueries, ksearch, queries)
-    _save_snapshot!(handle)
-    return bs
+function calibrate!(handle::EmbeddedEngine; levels=IndexEngine.DEFAULT_MINRECALL_LEVELS, numqueries::Int=64, ksearch::Int=10, queries=nothing)
+    opt_bs = IndexEngine.calibrate!(handle.engine; levels, numqueries, ksearch, queries)
+    Persistence.save_field!(handle.store, :opt_beamsearch, opt_bs)
+    return opt_bs
 end
 
 """
-    allknn(handle::EmbeddedHandle; k=10) -> Vector{<:NamedTuple}
+    allknn(handle::EmbeddedEngine; k=10) -> Vector{<:NamedTuple}
 
-Runs `SimilaritySearch.allknn` synchronously against the dataset's dense index -- no
+Runs `SimilaritySearch.allknn` synchronously against the project's dense index -- no
 Job/spool machinery at all, unlike the HTTP API's `POST /api/v1/jobs/allknn` (PLAN.md
-§8.5's "runs in-process" framing for the embedded surface). Errors if the dataset is a text
+§8.5's "runs in-process" framing for the embedded surface). Errors if the project is a text
 index or empty (mirrors `cli_handlers.jl`'s `_require_dense`). Returns one
 `(id, neighbors, dists)` named tuple per item, `id` being the item's 1-based position in
 insertion order (matching `execute_allknn`'s own output convention), not its `doc_id`.
 """
-function allknn(handle::EmbeddedHandle; k::Int=10)
+function allknn(handle::EmbeddedEngine; k::Int=10)
     engine = handle.engine
-    IndexEngine.is_text_index(engine) && error("allknn requires a dense (vector) index, but this dataset is a text index")
-    (engine.index === nothing || length(engine.index) == 0) && error("allknn requires a non-empty dense index")
+    IndexEngine.is_text_index(engine) && error("allknn requires a dense (vector) index, but this project is a text index")
+    length(engine.index) == 0 && error("allknn requires a non-empty dense index")
 
     ids, dists = SimilaritySearch.allknn(engine.index, engine.ctx, k)
     n = size(ids, 2)

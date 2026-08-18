@@ -1,0 +1,7 @@
+---
+title: "Tutorial"
+lang: en-US
+---
+
+- [Getting started](getting-started.qmd) — create a dense project and a text project,
+  insert items, search, soft-delete, calibrate for a target recall, and close/reopen.

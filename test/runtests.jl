@@ -3,7 +3,7 @@ using SimilaritySearchEngine
 using JSON
 using RocksDB
 
-const FRANKENSTEIN_PATH = joinpath(@__DIR__, "..", "..", "SimilaritySearchServer", "test", "data", "frankenstein.jsonl")
+const FRANKENSTEIN_PATH = joinpath(@__DIR__, "data", "frankenstein.jsonl")
 
 function mktempworkdir(f)
     dir = mktempdir()

@@ -1,0 +1,165 @@
+---
+title: "Getting started"
+lang: en-US
+toc: true
+---
+
+by: Eric S. Téllez
+
+This tutorial walks through the embedded API end to end: creating a dense (vector)
+project and a text project, inserting items, searching, soft-deleting, calibrating for a
+target recall, and closing/reopening a project in a later session.
+
+## Installation
+
+`SimilaritySearchEngine.jl` isn't registered yet — develop it from a local checkout (or a
+git URL) alongside its own dependencies:
+
+```julia
+using Pkg
+Pkg.develop(path="path/to/SimilaritySearchEngine.jl")
+```
+
+## A dense (vector) project
+
+`create_project` makes a brand-new project directly on disk, at `<workdir>/<dataset>`. By
+default it builds a `SearchGraph` (an approximate, self-tuning index) autotuning toward
+`minrecall=0.9`:
+
+```julia
+using SimilaritySearchEngine
+using SimilaritySearch: SearchGraph
+
+workdir = mktempdir()
+h = create_project(workdir, "images"; index_type=SearchGraph, minrecall=0.9)
+```
+
+Items are appended as a `Vector` of dicts, each carrying a `"vector"` key plus any
+metadata fields you want to keep alongside it:
+
+```julia
+for i in 1:1000
+    append_items!(h, [Dict("vector" => rand(Float32, 32), "label" => "item-$i")])
+end
+```
+
+(`append_items!` accepts a batch — passing many items in one call amortizes better than
+one `append_items!` call per item, though both work.)
+
+Searching returns a `Vector` of `(id, doc_id, distance, deleted)` named tuples, hydrated
+with each hit's original metadata id:
+
+```julia
+query = rand(Float32, 32)
+results = search(h, query; k=5)
+for r in results
+    println(r.id, " => distance ", r.distance)
+end
+```
+
+Pass a `filter` predicate — a plain `record -> Bool` function over each candidate's
+`Schema.MetadataRecord` — to restrict results without building a separate query language:
+
+```julia
+using SimilaritySearchEngine: Schema
+
+recent = search(h, query; k=5, filter = record -> Schema.get_field(record, "label") !== nothing)
+```
+
+### Soft deletes
+
+`delete_item!` marks a document as logically deleted; the index itself is untouched:
+
+```julia
+delete_item!(h, 1)  # doc_id, not the "label" metadata value
+
+results = search(h, query; k=5)
+first(results).deleted  # true if doc_id 1 made the top-5 candidates
+```
+
+A soft-deleted candidate is *reported*, not hidden and backfilled — if you need `k` live
+results after filtering out deletions, overfetch and page yourself, or let
+`SimilaritySearchServer`'s cursor layer do it for you.
+
+### Calibrating for a target recall
+
+`calibrate!` runs a real hyperparameter search and persists the result, so a later
+`search(...; minrecall=0.95)` call can serve that target recall from a tuned `BeamSearch`
+instead of the constructor's default:
+
+```julia
+calibrate!(h; levels=[0.8, 0.9, 0.95, 0.97])
+precise = search(h, query; k=5, minrecall=0.95)
+```
+
+### Closing and reopening
+
+```julia
+close_project!(h)
+
+h2 = open_project(workdir, "images")
+same_query_results = search(h2, query; k=5)
+close_project!(h2)
+```
+
+Every insertion was already persisted incrementally as it happened (see
+[Architecture](../architecture.qmd)), so `close_project!` only needs to flush anything
+still pending for index kinds that don't persist incrementally on their own.
+
+## A text project
+
+Text projects work the same way, just with a `"text"` key instead of `"vector"`, and
+`ftsearch` instead of `search`. `BM25InvertedFile` scores via BM25 over raw
+bags-of-words; `InvertedFile` (a weighted, cosine-by-default inverted index) is the other
+option:
+
+```julia
+using TextSearch: BM25InvertedFile
+
+ht = create_project(workdir, "articles"; index_type=BM25InvertedFile)
+
+append_items!(ht, [
+    Dict("text" => "similarity search over dense vectors"),
+    Dict("text" => "full text search with an inverted index"),
+    Dict("text" => "approximate nearest neighbors in high dimensions"),
+])
+
+hits = ftsearch(ht, "nearest neighbor search"; k=3)
+for r in hits
+    println(r.id, " => distance ", r.distance)
+end
+
+close_project!(ht)
+```
+
+The vocabulary is trained once, from the *first* batch of text a project receives — tokens
+never seen at training time are out-of-vocabulary on every later append (a
+`TextSearch.jl` limitation, not a bug in this package), so make sure that first batch is
+representative.
+
+## Metadata lookups
+
+`fetch_items` and `exists` accept either the internal integer `doc_id` or the original
+`"id"` you supplied when appending:
+
+```julia
+fetch_items(h2, [1, 2, 3])
+exists(h2, [1, "some-external-id"])
+```
+
+## All-pairs nearest neighbors
+
+For a dense project, `allknn` runs `SimilaritySearch.jl`'s batch all-nearest-neighbors
+synchronously, in-process (no job queue) — useful for small-to-medium projects where you
+want every item's own top-`k` neighbors at once:
+
+```julia
+neighbors = allknn(h2; k=10)
+first(neighbors)  # (id=1, neighbors=[...], dists=[...])
+```
+
+## Next steps
+
+See [Architecture](../architecture.qmd) for how all of this is persisted incrementally
+under the hood, and this package's `docs/` (built with Documenter.jl) for the full
+function/type reference.

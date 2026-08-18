@@ -1,0 +1,26 @@
+project:
+  type: website
+  output-dir: docs
+
+execute:
+  enabled: false
+
+website:
+  title: "SimilaritySearchEngine.jl"
+  navbar:
+    left:
+      - href: index.qmd
+        text: "Home"
+      - href: architecture.qmd
+        text: "Architecture"
+      - href: tutorials/index.qmd
+        text: "Tutorial"
+
+format:
+  html:
+    theme:
+      - cosmo
+    css: styles.css
+    toc: true
+    mermaid:
+      theme: neutral

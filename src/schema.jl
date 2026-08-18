@@ -1,11 +1,11 @@
 module Schema
 
 using Avro
-using JSON
+using JSON3
 
 export DataType, StringType, Int64Type, Float64Type, BoolType, TimestampType
 export MetaSchemaField, MetaSchema, MetadataRecord
-export get_field, matches_filter
+export get_field
 
 @enum DataType begin
     StringType
@@ -34,7 +34,7 @@ end
 """
     MetaSchema
 
-Dataset-level schema declaring strongly typed and optionally indexed fields.
+Project-level schema declaring strongly typed and optionally indexed fields.
 
 # Fields
 - `version::Int`: The schema version.
@@ -98,7 +98,7 @@ function MetadataRecord(doc_id::Int, schema::MetaSchema, raw_dict::AbstractDict)
         end
     end
     
-    extra_bytes = Vector{UInt8}(JSON.json(extra_dict))
+    extra_bytes = Vector{UInt8}(JSON3.write(extra_dict))
 
     return MetadataRecord(doc_id, schema.version, declared, extra_bytes)
 end
@@ -116,33 +116,8 @@ function get_field(record::MetadataRecord, name::String)
     # String(::Vector{UInt8}) takes ownership of its argument and empties it as a side
     # effect -- copy first so `record.extra` stays readable for any later call on the
     # same record (e.g. a second get_field, or the caller decoding `extra` itself).
-    extra = JSON.parse(String(copy(record.extra)))
+    extra = JSON3.read(String(copy(record.extra)), Dict{String, Any})
     return get(extra, name, nothing)
-end
-
-"""
-    matches_filter(record::MetadataRecord, filter::Dict) -> Bool
-
-Post-filter predicate for `/search`-family endpoints (PLAN.md §5.4). `filter` maps field
-names to either a bare value (equality) or a spec dict supporting `gte`/`lte`/`gt`/`lt`
-(range) and `in` (set membership). A field missing from the record fails the filter.
-"""
-function matches_filter(record::MetadataRecord, filter::AbstractDict)
-    for (field, spec) in filter
-        value = get_field(record, field)
-        value === nothing && return false
-
-        if spec isa AbstractDict
-            haskey(spec, "gte") && !(value >= spec["gte"]) && return false
-            haskey(spec, "lte") && !(value <= spec["lte"]) && return false
-            haskey(spec, "gt") && !(value > spec["gt"]) && return false
-            haskey(spec, "lt") && !(value < spec["lt"]) && return false
-            haskey(spec, "in") && !(value in spec["in"]) && return false
-        elseif value != spec
-            return false
-        end
-    end
-    return true
 end
 
 end # module

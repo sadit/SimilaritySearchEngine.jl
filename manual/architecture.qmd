@@ -1,0 +1,341 @@
+---
+title: "Architecture"
+lang: en-US
+toc: true
+---
+
+This page describes how `SimilaritySearchEngine.jl` is put together: its module map, the
+engine type hierarchy that replaces name/enum-based dispatch with real Julia types, the
+concurrency model that lets searches run in parallel while staying safe from concurrent
+inserts, and the RocksDB column-family layout that makes persistence incremental instead
+of a single ever-growing blob.
+
+## Module map
+
+The package is five source files, four of them real submodules (`Schema`, `Project`,
+`IndexEngine`, `Persistence`) plus `embedded.jl`, which defines `EmbeddedEngine` and the
+top-level functions (`create_project`, `append_items!`, `search`, ...) directly in the
+`SimilaritySearchEngine` module itself — the friendly surface a script actually calls.
+
+```{mermaid}
+flowchart LR
+    Schema["Schema<br/><small>MetaSchema, MetadataRecord</small>"]
+    Project["Project<br/><small>ProjectManager, metadata CRUD</small>"]
+    IndexEngine["IndexEngine<br/><small>AbstractSearchEngine hierarchy</small>"]
+    Persistence["Persistence<br/><small>EngineStore, AdjacencyStore, ...</small>"]
+    Embedded["embedded.jl<br/><small>EmbeddedEngine + top-level API</small>"]
+    Caller(["Julia script, or<br/>SimilaritySearchServer"])
+
+    Schema --> Project
+    Schema --> Embedded
+    Project --> Embedded
+    IndexEngine --> Embedded
+    Persistence --> Embedded
+    Embedded --> Caller
+```
+
+`IndexEngine` and `Persistence` are deliberately independent of `Project`/`Schema` and of
+each other: `IndexEngine` knows nothing about RocksDB (its persistence hook is a plain
+`(index, sp, ep) -> nothing` callback), and `Persistence` knows nothing about metadata
+schemas or search engines (it stores plain Julia values under string keys). `embedded.jl`
+is the one place that wires all four together — every other module could, in principle,
+be reused on its own.
+
+## Engine type hierarchy
+
+Every index kind (`SearchGraph`, `ExhaustiveSearch`/`ParallelExhaustiveSearch`,
+`BM25InvertedFile`, `InvertedFile`) gets its own concrete engine struct, each carrying only
+the state that kind actually needs. There is no enum tag or string name anywhere in this
+hierarchy — the concrete Julia type itself is what `add_item!`, `search_live`,
+`restore_engine`, and every other generic function dispatch on.
+
+```{mermaid}
+classDiagram
+    class AbstractSearchEngine {
+        <<abstract>>
+    }
+    class SearchGraphEngine {
+        index: SearchGraph
+        ctx: SearchGraphContext
+        minrecall: Union~Nothing, Float32~
+        opt_beamsearch: OptBeamSearch
+        search_ctx_pool: ContextPool
+        deleted_ids: Set~UInt32~
+        lock: ReadWriteLock
+    }
+    class GenericEngine~IndexType~ {
+        index: IndexType
+        ctx: Any
+        search_ctx_pool: ContextPool
+        deleted_ids: Set~UInt32~
+        lock: ReadWriteLock
+    }
+    class BM25Engine {
+        index: Union~Nothing, BM25InvertedFile~
+        voc: Union~Nothing, Vocabulary~
+        model: Nothing
+        ctx: InvertedFileContext
+        search_ctx_pool: ContextPool
+        deleted_ids: Set~UInt32~
+        lock: ReadWriteLock
+    }
+    class InvertedFileEngine {
+        index: Union~Nothing, InvertedFile~
+        voc: Union~Nothing, Vocabulary~
+        model: Union~Nothing, VectorModel~
+        distance: PreMetric
+        ctx: InvertedFileContext
+        search_ctx_pool: ContextPool
+        deleted_ids: Set~UInt32~
+        lock: ReadWriteLock
+    }
+    AbstractSearchEngine <|-- SearchGraphEngine
+    AbstractSearchEngine <|-- GenericEngine
+    AbstractSearchEngine <|-- BM25Engine
+    AbstractSearchEngine <|-- InvertedFileEngine
+```
+
+A few design choices worth calling out:
+
+- `GenericEngine{IndexType}` covers `ExhaustiveSearch`/`ParallelExhaustiveSearch` (and any
+  future dense index with no engine-specific state) with a single struct parameterized by
+  the wrapped index type, instead of one struct per index kind.
+- `minrecall`/`opt_beamsearch` only exist on `SearchGraphEngine` — only a `SearchGraph`
+  autotunes a `BeamSearch` toward a target recall.
+- `BM25Engine` and `InvertedFileEngine` are both left untrained (`index === nothing`,
+  `voc === nothing`) until `ensure_trained!` is called with a real corpus, since both
+  index kinds need a `Vocabulary` before they can be constructed at all — `BM25Engine`
+  never needs a `model` (it scores from raw bags-of-words), so that field is always
+  `nothing` there, kept only so every text engine shares the same shape.
+- Every kind shares three fields regardless of what else it carries: `deleted_ids::Set{UInt32}`
+  (logically deleted document ids — `UInt32` uniformly, matching the id type search
+  results actually come back as), `lock::ReadWriteLock`, and `search_ctx_pool::ContextPool`
+  (see below).
+
+## Concurrency model
+
+None of the four underlying index kinds tolerates a search running concurrently with an
+insertion into the *same* index — a search reading `index.adj`/`index.db` while
+`add_item!` resizes/appends to those same arrays is exactly the kind of concurrent
+read-during-mutation none of them are built for. But all four *do* safely support running
+multiple searches concurrently against the same index, since that is exactly what their
+own `searchbatch`/`allknn` parallel paths already rely on internally.
+
+### `ReadWriteLock`
+
+Each engine's `lock` is a custom reader/writer lock (built from a `Threads.Condition` plus
+a reader count), not a plain `ReentrantLock`: `search_live`/`current_beamsearch` take it as
+a *read* lock (any number of readers concurrently), while `add_item!`/`ensure_trained!`/
+`mark_deleted!`/`calibrate!` take it as a *write* lock (exclusive of every reader and every
+other writer).
+
+```{mermaid}
+sequenceDiagram
+    participant S1 as search_live (thread 1)
+    participant S2 as search_live (thread 2)
+    participant W as add_item! (thread 3)
+    participant L as engine.lock
+
+    S1->>L: read_lock (readers 0 to 1)
+    S2->>L: read_lock (readers 1 to 2)
+    Note over S1,S2: both searches run concurrently
+    W->>L: write_lock (blocks: readers > 0)
+    S1->>L: release (readers 2 to 1)
+    S2->>L: release (readers 1 to 0)
+    L->>W: write lock granted
+    Note over W: insert_dense! / push_item! using engine.ctx
+    W->>L: release
+```
+
+A read-to-write "upgrade" on the same logical operation would deadlock (the write lock
+waits for the reader count to hit zero, including the reader this same call is itself
+holding) — so a `SearchGraphEngine`'s `minrecall`-driven auto-`calibrate!` inside
+`search_live` is always resolved *before* the read lock is acquired, never nested inside
+it.
+
+### `ContextPool`
+
+Guarding the index data isn't enough by itself: `SearchGraphContext`/`GenericContext`/
+`InvertedFileContext` are all *mutable, reused* scratch spaces (beam buffers,
+visited-vertices state, per-batch cost counters, ...), and two concurrent searches sharing
+the same context object corrupt each other's scratch state — confirmed directly by a
+segfault inside `SearchGraph`'s own beam search when two threads raced on a shared
+context.
+
+`ContextPool` avoids both bad alternatives — sharing one context (unsafe) and allocating a
+fresh one on every single call (wasteful, since these contexts are non-trivial to
+allocate) — by handing each concurrent `search_live` call its own checked-out context,
+returned to the pool when done:
+
+```{mermaid}
+flowchart LR
+    A["search_live call"] --> B{"pool.available<br/>non-empty?"}
+    B -- yes --> C["pop! an idle context"]
+    B -- no --> D["deepcopy(pool.template)"]
+    C --> E["run the search with this context"]
+    D --> E
+    E --> F["checkin!: push! back onto pool.available"]
+```
+
+The pool grows lazily to (and then stays at) however many concurrent searches an engine
+has actually seen at once — never pre-allocated speculatively, never shrunk either. `ctx`
+itself (the engine's own field) is never touched by `search_live`; it stays reserved for
+insertion, which already runs under an exclusive `write_lock`, so sharing it there is
+safe.
+
+## Persistence: one RocksDB column family per concern
+
+Earlier iterations of this design re-serialized the *entire* engine state — including the
+whole index — on every mutation. The current design instead gives each kind of state its
+own RocksDB column family, so a mutation only ever rewrites the key(s) it actually
+touched.
+
+```{mermaid}
+flowchart TB
+    subgraph db["one RocksDB directory per project"]
+        meta[("meta<br/><small>doc_id → MetadataRecord</small>")]
+        secidx[("meta_idx_&lt;field&gt;<br/><small>one CF per indexed schema field</small>")]
+        oplog[("op_log")]
+        engine[("engine <small>(ENGINE_CF)</small><br/><small>one key per engine struct field</small>")]
+        adj[("searchgraph_adj <small>(ADJACENCY_CF)</small><br/><small>object_id → direct neighbors</small>")]
+        invdb[("invfile_db <small>(INVFILE_DB_CF)</small><br/><small>append-only raw object blocks</small>")]
+    end
+
+    ProjectManager -- "put_metadata! / get_metadata" --> meta
+    ProjectManager -- "secondary lookups" --> secidx
+    EngineStore -- "save_field! / load_field" --> engine
+    AdjacencyStore -- "save_neighbors! / load_neighbors" --> adj
+    InvertedFileObjectStore -- "append_objects! / load_object_blocks" --> invdb
+```
+
+All of these column families live in the *same* RocksDB directory/connection as the
+project's metadata store (`Project.ProjectManager.db`) — `Project.open_project`'s
+`extra_cf_names` keyword is how `IndexEngine`'s persistence layer gets its own column
+families listed alongside `Project`'s, since every column family that exists on disk must
+be named at `opendb` time on *every* open, not only the first.
+
+### `EngineStore`: per-field keys, not one blob
+
+`EngineStore` is a `field_name::Symbol => value` map, one RocksDB key per struct field.
+`save_field!`/`load_field` touch exactly one key; `save_fields!` is only used for rare,
+one-shot multi-field transitions (right after `create_engine`, or the moment a text
+engine's vocabulary is first trained). A soft delete only ever rewrites `:deleted_ids`; a
+`calibrate!` call only ever rewrites `:opt_beamsearch`.
+
+### Incremental index persistence: two different shapes, by necessity
+
+The index itself is the expensive, ever-growing part, so it is never saved as a single
+value. Its incremental format is driven by `IndexEngine.CallbackLog`, an `AbstractLog`
+backend that fires a `flush(index, sp, ep)` callback on every `push_item!`/
+`append_items!`/`add!` report — but the *shape* of what gets saved differs by index kind,
+because of when `LOG` actually fires relative to when the mutation is fully done.
+
+```{mermaid}
+sequenceDiagram
+    participant Caller as append_items!
+    participant Idx as SearchGraph
+    participant CB as CallbackLog
+    participant ES as EngineStore
+    participant AS as AdjacencyStore
+
+    Caller->>Idx: push_item!/append_items!(range sp:ep)
+    Idx->>Idx: insert direct links only
+    Idx->>CB: LOG(event, index, ctx, sp, ep)
+    Note right of Idx: fires BEFORE connect_reverse_links!<br/>index.adj[sp:ep] holds only direct links
+    CB->>ES: append_block!(:index, searchgraph_vectors(sp:ep))
+    CB->>AS: save_neighbors!(i, direct_neighbors(i)) for i in sp:ep
+    Idx->>Idx: connect_reverse_links! (in memory only)
+```
+
+For a `SearchGraph`, `LOG` fires *before* `connect_reverse_links!` runs for that range —
+so what's captured at that instant is exactly the direct-links-only slice. This is by
+design, not a bug to route around: `connect_reverse_links!` isn't idempotent (re-running
+it on an already-complete graph would duplicate reverse edges), so the on-disk format
+never saves reverse links at all. Reloading (`build_searchgraph`) replays every saved
+vectors block, looks up every object's saved direct neighbors, and reconnects every
+reverse link exactly once, only after everything else has been loaded.
+
+`BM25InvertedFile`/`InvertedFile` have no such hazard: their own `LOG` only fires after a
+call's mutation is fully done, so `InvertedFileObjectStore` simply appends the raw objects
+just inserted (`invertedfile_objects`) as a new block. Reloading rebuilds the whole index
+by replaying every saved object back through the library's own `push_item!` — a
+rebuild-by-reinsertion design, not a real on-disk posting-list format. This is a
+deliberate scaling limit, not an oversight: it's fine up to a few million documents, since
+the whole corpus and the whole rebuilt index have to fit in memory and reloading costs the
+full original indexing time again. It is *not* a design for billion-document corpora,
+which need genuinely disk-backed, paged-on-demand posting lists.
+
+`GenericEngine` (`ExhaustiveSearch`/`ParallelExhaustiveSearch`) has no incremental format
+of its own — its `on_change` just flags `pending_flush[]`, and `embedded.jl` saves the
+*whole* index as a single `:index` value right after the triggering `add_item!` call
+returns. This is acceptable for these exact, in-memory-only index kinds, which have no
+adjacency or posting-list structure to split apart in the first place.
+
+### Reopening a project
+
+```{mermaid}
+sequenceDiagram
+    participant Caller as open_project
+    participant ES as EngineStore
+    participant AS as AdjacencyStore
+    participant IE as IndexEngine
+
+    Caller->>ES: load_field(:kind)
+    Caller->>ES: load_blocks(:index) → vector_blocks
+    Caller->>AS: load_neighbors(i) for every object id
+    Caller->>IE: build_searchgraph(distance, vector_blocks, load_neighbors)
+    IE->>IE: replay vector blocks into index.db
+    IE->>IE: add! each object's saved direct neighbors
+    IE->>IE: connect_reverse_links! once, over the whole graph
+    IE-->>Caller: fully reconstructed SearchGraph
+    Caller->>IE: restore_engine(state; on_change) → SearchGraphEngine
+```
+
+`restore_engine` dispatches on `state.kind` exactly the way `create_engine` dispatches on
+an index type — `IndexEngine.extra_state_fields(kind)` gives the static, per-kind list of
+which extra `EngineStore` keys to read back (`:minrecall`/`:opt_beamsearch` for a
+`SearchGraphEngine`, `:voc` for a `BM25Engine`, `:voc`/`:model`/`:distance` for an
+`InvertedFileEngine`) before an engine instance exists to ask `snapshot_state` directly.
+
+## Logging: informative output and persistence are independent
+
+Every engine's context installs a logger (`ctx.logger`), fanned out via `LogList` when
+more than one backend is active:
+
+- **`InformativeLog`** (from `SimilaritySearch.jl` itself) — always on, prints a throttled
+  status line to `stderr`. Purely informative.
+- **`FileLog`** — the same throttled status line, but to any caller-given `IO` (an open
+  file handle, or `stdout`/`stderr`) instead of a hardcoded `stderr`. Also purely
+  informative: adding one changes nothing about what gets persisted.
+- **`CallbackLog`** — the mechanism described above: forwards every report, untouched by
+  its own throttling, to whatever `on_change` closure `embedded.jl` installed (the actual
+  persistence trigger).
+
+```{mermaid}
+flowchart LR
+    Event["LOG event<br/>(push_item!/append_items!/add!)"] --> LogList
+    LogList --> InformativeLog["InformativeLog<br/>→ stderr, throttled"]
+    LogList --> FileLog["FileLog<br/>→ any IO, throttled<br/>(optional)"]
+    LogList --> CallbackLog["CallbackLog<br/>→ on_change(index, sp, ep)<br/>(persistence trigger)"]
+```
+
+`FileLog`/`InformativeLog` and `CallbackLog` are independent by construction: removing
+either informative logger changes nothing about persistence, and vice versa.
+
+## Soft deletes
+
+`mark_deleted!` adds a document's id to `deleted_ids` and nothing else — the underlying
+index is never touched, so no rebuild or backfill is needed. `search_live` reports a
+`deleted` flag per candidate instead of silently dropping deleted candidates and
+backfilling with the next-best live one: compensating for deletions by overfetching would
+have to grow with the total number of deletions, and it would hide from the caller which
+ids were even considered. A caller that wants `k` *live* results after filtering is
+expected to page for more (e.g. via a cursor over successive top-`k'` windows) at a layer
+above this one — `SimilaritySearchServer`, not this package.
+
+## Where this leaves `SimilaritySearchServer`
+
+This package intentionally stops at project lifecycle, core CRUD, calibration, and
+`allknn`. Pagination policy over soft-deleted results, HTTP/CLI surfaces, job queues, and
+telemetry all live one layer up, in the sibling `SimilaritySearchServer` package, which
+depends on this one and is kept in sync with it as this package's design settles.
