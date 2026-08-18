@@ -288,7 +288,7 @@ sequenceDiagram
     IE->>IE: add! each object's saved direct neighbors
     IE->>IE: connect_reverse_links! once, over the whole graph
     IE-->>Caller: fully reconstructed SearchGraph
-    Caller->>IE: restore_engine(state; on_change) → SearchGraphEngine
+    Caller->>IE: restore_engine(state, on_change) → SearchGraphEngine
 ```
 
 `restore_engine` dispatches on `state.kind` exactly the way `create_engine` dispatches on
