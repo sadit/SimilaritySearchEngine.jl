@@ -18,7 +18,9 @@ directory, the same as any other embedded database.
   project's on-disk RocksDB directory and the live search engine backing it.
 - **Dense vector search** over a `SearchGraph` (an approximate, self-tuning graph index),
   or an exact `ExhaustiveSearch`/`ParallelExhaustiveSearch`, all sharing the same
-  `append_items!`/`search` surface.
+  `append_items!`/`search` surface — for a `SearchGraph`, `append_items!` only stages raw
+  vectors, and the (expensive) graph-connection step happens in a separate, explicit
+  `index!` call, so a caller controls when that cost is paid.
 - **Full-text search** over a `BM25InvertedFile` or a weighted `InvertedFile`, sharing the
   same `append_items!`/`ftsearch` surface as the dense case.
 - **Soft deletes**: `delete_item!` marks a document as logically deleted without touching
@@ -27,25 +29,29 @@ directory, the same as any other embedded database.
 - **Recall calibration**: `calibrate!` runs `SimilaritySearch.jl`'s real hyperparameter
   search so later queries can ask for `minrecall=0.95` (or any other target) and get back
   a `BeamSearch` tuned for it.
-- **Incremental, per-field persistence**: every mutation writes only the RocksDB key(s)
-  it actually touched — a soft delete never rewrites the index, and routine inserts never
-  rewrite the whole engine state. See [Architecture](architecture.qmd) for the on-disk
-  layout.
+- **Whole-dataset operations**: `allknn`, `fft` (diverse sampling), `closestpairs`
+  (near-duplicate detection), and `bichromatic_kclosestpairs` (closest pairs across two
+  collections) all run synchronously, in-process, against a dense project's index.
+- **Incremental, per-field persistence**: every mutation writes only the storage it
+  actually touched — a `SearchGraph`'s raw vectors go straight into a memory-mapped file,
+  a soft delete never rewrites the index, and routine inserts never rewrite the whole
+  engine state. See [Architecture](architecture.qmd) for the on-disk layout.
 
 ## Where this fits
 
-This package is deliberately scoped to project lifecycle, core CRUD, calibration, and one
-representative heavy operation (`allknn`) — every function here mirrors an existing code
-path in the sibling `SimilaritySearchServer` package (same on-disk layout, same
-insertion/search/persistence semantics), so a project touched through this embedded API
-stays fully interoperable with `SimilaritySearchServer`'s CLI and HTTP server. Development
-happens here first, at the engine level, and is ported to `SimilaritySearchServer`
-afterwards.
+This package is deliberately scoped to project lifecycle, core CRUD, calibration, and the
+whole-dataset operations (`allknn`, `fft`, `closestpairs`, `bichromatic_kclosestpairs`) —
+every function here mirrors an existing code path in the sibling `SimilaritySearchServer`
+package (same on-disk layout, same insertion/search/persistence semantics), so a project
+touched through this embedded API stays fully interoperable with
+`SimilaritySearchServer`'s CLI and HTTP server. Development happens here first, at the
+engine level, and is ported to `SimilaritySearchServer` afterwards.
 
 ## Where to go next
 
 - [Architecture](architecture.qmd) — the module map, the engine type hierarchy, the
-  concurrency model, and the RocksDB persistence layout, each with a diagram.
+  staging-vs-indexing split, the concurrency model, and the RocksDB-plus-mmap-file
+  persistence layout, each with a diagram.
 - [Tutorial](tutorials/index.qmd) — a hands-on walkthrough: create a dense project and a
   text project, insert, search, soft-delete, calibrate, and reopen.
 - **API reference** — generated from the source docstrings with
