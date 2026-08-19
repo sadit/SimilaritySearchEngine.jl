@@ -12,7 +12,7 @@ using Dates: Dates
 export AbstractSearchEngine, SearchGraphEngine, GenericEngine, BM25Engine, InvertedFileEngine
 export ReadWriteLock, read_lock, write_lock
 export ContextPool, checkout!, checkin!
-export create_engine, restore_engine, snapshot_state, extra_state_fields, add_item!, ensure_trained!, search_live, mark_deleted!, is_text_index
+export create_engine, restore_engine, snapshot_state, extra_state_fields, add_item!, index!, search_live, mark_deleted!, is_text_index
 export calibrate!, current_beamsearch, OptBeamSearch, DEFAULT_MINRECALL_LEVELS, CallbackLog, FileLog
 export searchgraph_vectors, direct_neighbors, apply_searchgraph_vectors!, build_searchgraph
 export invertedfile_objects, build_bm25invertedfile, build_invertedfile
@@ -51,7 +51,7 @@ concurrently with an insertion or deletion into the same index (a search reading
 `index.adj`/`index.db` while `add_item!` resizes/appends to those same arrays is exactly
 the kind of concurrent read-during-mutation none of them are built for). So
 [`search_live`](@ref)/[`current_beamsearch`](@ref) take a *read* lock (concurrent with
-each other, exclusive of any write), while `add_item!`/`ensure_trained!`/
+each other, exclusive of any write), while `add_item!`/`index!`/
 `mark_deleted!`/`calibrate!` take a *write* lock (exclusive of everything).
 
 Implemented with a `Threads.Condition` guarding a plain reader count: [`read_lock`](@ref)
@@ -241,7 +241,7 @@ end
 
 Text engine backed by a `BM25InvertedFile`, scored via raw bags-of-words
 (`bagofwords`/`bm25score`), so it never needs a vectorizing `model`. Left untrained
-(`index === nothing`, `voc === nothing`) until [`ensure_trained!`](@ref) is called with a
+(`index === nothing`, `voc === nothing`) until [`index!`](@ref) is called with a
 real corpus, since a `BM25InvertedFile` needs a `Vocabulary` to be constructed at all.
 
 # Fields
@@ -252,7 +252,7 @@ real corpus, since a `BM25InvertedFile` needs a `Vocabulary` to be constructed a
   shares the same shape.
 - `ctx::InvertedFileContext`: built eagerly at `create_engine` time -- `InvertedFileContext`
   needs no vocabulary/index to exist, so there's no reason to leave this `nothing` until
-  [`ensure_trained!`](@ref) the way `index`/`voc` must be. Reserved for insertion; never
+  [`index!`](@ref) the way `index`/`voc` must be. Reserved for insertion; never
   shared with a concurrent [`search_live`](@ref) call, which gets its own from
   `search_ctx_pool` instead.
 - `search_ctx_pool::ContextPool`: one private context per concurrent
@@ -279,7 +279,7 @@ index `TextSearch.jl`'s `WeightedInvertedFile` convenience constructor itself ju
 with `Dist.NormCosine()`) -- vectorizing text into `SparseVector`s via a trained `model`
 before indexing/querying, so it can be built against any `PreMetric` `distance`, not just
 the cosine default. Left untrained (`index === nothing`, `voc === nothing`) until
-[`ensure_trained!`](@ref) is called with a real corpus.
+[`index!`](@ref) is called with a real corpus.
 
 # Fields
 - `index::Union{Nothing, InvertedFile}`
@@ -288,10 +288,10 @@ the cosine default. Left untrained (`index === nothing`, `voc === nothing`) unti
   to turn text into the `SparseVector`s `index` needs.
 - `distance::SimilaritySearch.PreMetric`: the distance chosen at `create_engine` time --
   remembered here since the real `InvertedFile` can't be built until
-  [`ensure_trained!`](@ref) knows the vocabulary size.
+  [`index!`](@ref) knows the vocabulary size.
 - `ctx::InvertedFileContext`: built eagerly at `create_engine` time -- `InvertedFileContext`
   needs no vocabulary/index to exist, so there's no reason to leave this `nothing` until
-  [`ensure_trained!`](@ref) the way `index`/`voc` must be. Reserved for insertion; never
+  [`index!`](@ref) the way `index`/`voc` must be. Reserved for insertion; never
   shared with a concurrent [`search_live`](@ref) call, which gets its own from
   `search_ctx_pool` instead.
 - `search_ctx_pool::ContextPool`: one private context per concurrent
@@ -318,13 +318,21 @@ end
 
 An `AbstractLog` backend (see `SimilaritySearch.jl`'s `log.jl`) that calls
 `flush(index, sp, ep)` -- instead of printing, the way `InformativeLog` does -- on every
-single `push_item!`/`append_items!`/`add!` report, forwarding exactly the range `sp:ep`
-the library itself reports, with no batching/throttling of its own. Knows nothing about
-RocksDB or any other storage backend; `flush` is supplied by the caller.
+`:add!` event a `push_item!`/`append_items!` call reports, forwarding exactly the range
+`sp:ep` the library itself reports, with no batching/throttling of its own. Knows nothing
+about RocksDB or any other storage backend; `flush` is supplied by the caller.
+
+`SimilaritySearch.jl`'s `log.jl` standardized every index kind's `LOG` calls onto two
+canonical events regardless of which entry point (`push_item!`, `append_items!`, `index!`,
+...) triggered them: `:add!` for a real, `sp:ep`-scoped structural mutation, and `:info`
+for a no-op (only `ExhaustiveSearch`/`ParallelExhaustiveSearch`'s `index!` fires this,
+since their database already *is* the index -- and this package never calls `index!`
+directly, always `push_item!`/`append_items!`, so `CallbackLog` never has to branch on
+`event` at all: every call it receives here is a real mutation).
 
 !!! warning "what `index` looks like inside `flush`, for a `SearchGraph`"
-    `LOG` for a `SearchGraph` fires *before* `connect_reverse_links!` runs for `sp:ep`
-    (`searchgraph/insertions.jl`) -- so `index.adj` for that exact range holds only the
+    `LOG`'s `:add!` event for a `SearchGraph` fires *before* `connect_reverse_links!` runs
+    for `sp:ep` (`searchgraph/insertions.jl`) -- so `index.adj` for that exact range holds only the
     *direct* links just computed, none of the reverse links other nodes will later add
     into it. This is by design, not a bug to route around: [`searchgraph_vectors`](@ref)/
     [`direct_neighbors`](@ref) capture exactly that direct-links-only slice, and
@@ -420,29 +428,36 @@ function apply_searchgraph_vectors!(index::SearchGraph, block)
 end
 
 """
-    build_searchgraph(distance, vector_blocks, load_neighbors::Function) -> SearchGraph
+    build_searchgraph(distance, vector_blocks, load_neighbors::Function, graph_len::Integer) -> SearchGraph
 
 Rebuilds a `SearchGraph` against `distance`: replays each of `vector_blocks` (as produced
 incrementally during insertion via [`searchgraph_vectors`](@ref) and read back via
 `Persistence.load_blocks`) in order via [`apply_searchgraph_vectors!`](@ref) to
-reconstruct `index.db` and the object count `n`, then, for every object id `1:n`, calls
-`load_neighbors(i)` (typically `i -> Persistence.load_neighbors(adjacency_store, i)`) to
-get back its saved direct neighbor list and `add!`s it -- and only then connects every
-reverse link exactly once over the whole result, safe (unlike calling it a second time on
-an already-connected graph) precisely because a freshly rebuilt graph has none yet.
+reconstruct `index.db` in full -- *every* vector ever staged, whether or not it was ever
+actually graph-indexed (see [`index!`](@ref index!(::SearchGraphEngine))'s stage-then-index
+split: `append_items!`/`add_item!` only ever stage into `.db`, never graph-connect by
+themselves anymore).
+
+`graph_len` (persisted separately, see `Persistence`'s `:graph_len` engine field) is the
+count that actually matters for the *graph* structure: it can be `<= length(index.db)` if
+the process closed (or crashed) after staging some vectors but before an explicit
+[`index!`](@ref index!(::SearchGraphEngine)) call caught them up. Only object ids `1:graph_len`
+get their saved direct neighbor list restored (`load_neighbors(i)`, typically
+`i -> Persistence.load_neighbors(adjacency_store, i)`) and reverse-connected -- restoring
+`index.len[]` to `graph_len`, not to the full staged count, so a later explicit `index!`
+call picks up exactly where indexing left off, over the *same* `.db` (already fully
+restored here) it would have seen pre-restart.
 """
-function build_searchgraph(distance, vector_blocks, load_neighbors::Function)
+function build_searchgraph(distance, vector_blocks, load_neighbors::Function, graph_len::Integer)
     index = SearchGraph(distance, VectorDatabase())
-    n = 0
     for block in vector_blocks
         apply_searchgraph_vectors!(index, block)
-        n = block.ep
     end
-    for i in 1:n
+    for i in 1:graph_len
         add!(index.adj, i, load_neighbors(i))
     end
-    index.len[] = n
-    n > 0 && SimilaritySearch.connect_reverse_links!(index.adj, 1, n)
+    index.len[] = graph_len
+    graph_len > 0 && SimilaritySearch.connect_reverse_links!(index.adj, 1, graph_len)
     return index
 end
 
@@ -547,8 +562,8 @@ against `distance`. `minrecall` only means anything for a `SearchGraph`; it's ac
 (and ignored) on the other two so a caller can pass the same keyword set uniformly
 regardless of index type. `on_change::Union{Nothing,Function}`, if given, is installed
 (via [`CallbackLog`](@ref)) as an `(index, sp, ep) -> nothing` callback fired on every
-`push_item!`/`append_items!`/`add!` report -- e.g. to persist the range `sp:ep` that was
-just inserted. `log_io::Union{Nothing,IO}`, if given, additionally prints the same
+`:add!` event a `push_item!`/`append_items!` call reports -- e.g. to persist the range
+`sp:ep` that was just inserted. `log_io::Union{Nothing,IO}`, if given, additionally prints the same
 throttled informative status line [`InformativeLog`](@ref) already prints to `stderr`
 to this `IO` too (via [`FileLog`](@ref)) -- an open file handle or `stdout`/`stderr`
 both work; purely informative, changes nothing about what gets persisted.
@@ -567,7 +582,7 @@ create_engine(::Type{ParallelExhaustiveSearch}; distance=SimilaritySearch.Dist.S
     create_engine(::Type{InvertedFile}; distance=SimilaritySearch.Dist.NormCosine(), minrecall=nothing, on_change=nothing, log_io=nothing) -> InvertedFileEngine
 
 Creates a new, untrained text search engine of the given index type (`index === nothing`
-until [`ensure_trained!`](@ref) is called with a real corpus, since both need a
+until [`index!`](@ref) is called with a real corpus, since both need a
 `Vocabulary` to be constructed at all). `minrecall` is accepted and ignored on both, and
 `distance` is accepted and ignored on `BM25InvertedFile` (BM25 always scores via its own
 `bm25score`), so a caller can pass the same keyword set uniformly regardless of index type.
@@ -638,7 +653,10 @@ other default. `on_change`/`log_io` are as in [`create_engine`](@ref).
 None of `SearchGraphEngine`/`BM25Engine`/`InvertedFileEngine`'s `state` carries a plain
 `index` -- each carries what its own `build_*` function needs instead:
 - `SearchGraphEngine`: `distance`, `vector_blocks` (`Persistence.load_blocks(store, :index)`),
-  `load_neighbors` (typically `i -> Persistence.load_neighbors(adjacency_store, i)`) -- see
+  `load_neighbors` (typically `i -> Persistence.load_neighbors(adjacency_store, i)`),
+  `graph_len` (`Persistence.load_field(store, :graph_len, 0)` -- may be `< length` of the
+  restored `.db` if some staged vectors were never caught up by an explicit
+  [`index!`](@ref index!(::SearchGraphEngine)) call before the project last closed) -- see
   [`build_searchgraph`](@ref).
 - `BM25Engine`: `voc`, `object_blocks` (`Persistence.load_object_blocks(obj_store)`, or
   `nothing`/empty if `voc === nothing`, i.e. never trained) -- see
@@ -649,7 +667,7 @@ None of `SearchGraphEngine`/`BM25Engine`/`InvertedFileEngine`'s `state` carries 
 restore_engine(state; on_change::Union{Nothing,Function}=nothing, log_io::Union{Nothing,IO}=nothing) = restore_engine(state.kind, state; on_change, log_io)
 
 function restore_engine(::Type{SearchGraphEngine}, state; on_change::Union{Nothing,Function}=nothing, log_io::Union{Nothing,IO}=nothing)
-    index = build_searchgraph(state.distance, state.vector_blocks, state.load_neighbors)
+    index = build_searchgraph(state.distance, state.vector_blocks, state.load_neighbors, state.graph_len)
     return SearchGraphEngine(index, _searchgraph_context(state.minrecall, _engine_logger(on_change, log_io)), state.minrecall, state.opt_beamsearch, ContextPool(SearchGraphContext()), state.deleted_ids, ReadWriteLock())
 end
 
@@ -671,42 +689,52 @@ is_text_index(::AbstractSearchEngine) = false
 is_text_index(::Union{BM25Engine, InvertedFileEngine}) = true
 
 """
-    ensure_trained!(engine::AbstractSearchEngine, corpus::AbstractVector{<:AbstractString})
+    index!(engine::BM25Engine, corpus::AbstractVector{<:AbstractString})
+    index!(engine::InvertedFileEngine, corpus::AbstractVector{<:AbstractString})
 
 Trains a text engine's `Vocabulary` (and builds its real `BM25InvertedFile`/`InvertedFile`)
-from `corpus` if it hasn't been trained yet. No-op for dense engines (`SearchGraphEngine`/
-`GenericEngine`), for an already-trained text engine, and for an empty `corpus`.
+from `corpus` -- extends `SimilaritySearch.index!` (the same generic function a
+`SearchGraph` uses to bulk-build itself from an already-populated `.db`) with this text-
+engine-specific meaning: "make this engine ready to accept items."
 
-Must be called once with the *first* batch of text a text-index project receives (e.g. the
-first `append`/`build` batch) — `TextSearch.jl`'s `Vocabulary` is trained once from a
-corpus; tokens not seen at training time are treated as out-of-vocabulary and silently
-dropped on every later append (a library limitation, not a bug).
+Must be called explicitly, exactly once, before any [`add_item!`](@ref) on this engine --
+there is no implicit auto-training on a project's first `append` batch anymore, and
+[`add_item!`](@ref) on an untrained engine errors rather than silently dropping the item.
+`corpus` should be a representative sample of the text you're about to index (it does not
+have to be the exact same batch you insert afterwards): `TextSearch.jl`'s `Vocabulary` is
+trained once from a corpus, and tokens never seen at training time are treated as
+out-of-vocabulary and silently dropped on every later append (a `TextSearch.jl`
+limitation, not a bug in this package).
+
+Errors if `engine` is already trained (retraining isn't supported by `TextSearch.jl`
+itself -- a second call would silently do nothing useful with its `corpus` while leaving
+the existing vocabulary in place, exactly the kind of implicit, easy-to-miss behavior this
+function is deliberately *not* built to have) or if `corpus` is empty (nothing to build a
+vocabulary from).
 """
-ensure_trained!(::Union{SearchGraphEngine, GenericEngine}, corpus::AbstractVector) = nothing
-
-function ensure_trained!(engine::BM25Engine, corpus::AbstractVector)
-    engine.voc !== nothing && return
-    isempty(corpus) && return
+function index!(engine::BM25Engine, corpus::AbstractVector)
+    engine.voc !== nothing && error("BM25Engine is already trained -- index! must only be called once")
+    isempty(corpus) && error("index!: cannot train from an empty corpus")
 
     write_lock(engine.lock) do
-        engine.voc !== nothing && return
         voc = Vocabulary(TextConfig(), String.(corpus))
         engine.voc = voc
         engine.index = BM25InvertedFile(voc)
     end
+    return engine
 end
 
-function ensure_trained!(engine::InvertedFileEngine, corpus::AbstractVector)
-    engine.voc !== nothing && return
-    isempty(corpus) && return
+function index!(engine::InvertedFileEngine, corpus::AbstractVector)
+    engine.voc !== nothing && error("InvertedFileEngine is already trained -- index! must only be called once")
+    isempty(corpus) && error("index!: cannot train from an empty corpus")
 
     write_lock(engine.lock) do
-        engine.voc !== nothing && return
         voc = Vocabulary(TextConfig(), String.(corpus))
         engine.voc = voc
         engine.index = InvertedFile(max(vocsize(voc), 1), engine.distance)
         engine.model = VectorModel(IdfWeighting(), TfWeighting(), voc)
     end
+    return engine
 end
 
 """
@@ -791,16 +819,65 @@ function mark_deleted!(engine::AbstractSearchEngine, doc_id::Integer)
 end
 
 # Insertion helpers for dense indices
-insert_dense!(index::SearchGraph, ctx, item) = append_items!(index, ctx, VectorDatabase([item]))
+#
+# A SearchGraph deliberately only *stages* here -- pushing straight to `index.db`, never
+# calling `SimilaritySearch.index!` (the real, expensive graph-linking step) inline. That
+# used to happen on every single `add_item!` (via `append_items!(index, ctx, ...)`, which
+# internally does exactly `append_items!(index.db, items); index!(index, ctx)`), forcing
+# every insertion to pay graph-construction cost immediately and synchronously. Now
+# staging and indexing are two separate, explicit steps -- see [`index!`](@ref
+# index!(::SearchGraphEngine)) -- so a caller controls when the expensive step runs (a
+# batch job, a cron, before the next round of searches) instead of paying it per item.
+# `ExhaustiveSearch`/`ParallelExhaustiveSearch` (exact search, no graph to build) have no
+# such split to make -- `push_item!` already *is* the whole insertion, cheap either way.
+insert_dense!(index::SearchGraph, ctx, item) = push_item!(index.db, item)
 insert_dense!(index::Union{ExhaustiveSearch,ParallelExhaustiveSearch}, ctx, item) = push_item!(index, ctx, item)
 insert_dense!(index, ctx, item) = push_item!(index, ctx, item)
+
+"""
+    index!(engine::SearchGraphEngine)
+
+Catches up the graph structure over whatever's been staged into `engine.index.db` since
+the last call (or since creation) -- extends `SimilaritySearch.index!` with the same
+meaning the text engines' [`index!`](@ref index!(::BM25Engine, ::AbstractVector)) methods
+give it: "do the expensive part explicitly, now." Unlike those, this is *idempotent* and
+can be called any number of times: `SimilaritySearch.index!(idx, ctx)` itself already
+starts from `length(idx) + 1` (the current graph-indexed count) up through
+`length(database(idx))` (everything staged so far, see [`insert_dense!`](@ref)), so
+calling this repeatedly as more vectors accumulate only ever processes the backlog, never
+redoing already-indexed work, and calling it with nothing new staged is a cheap no-op.
+
+`add_item!`/`append_items!` on a `SearchGraphEngine` only ever stage raw vectors into
+`engine.index.db` -- they do *not* make new items searchable by themselves anymore (unlike
+`GenericEngine`/`BM25Engine`/`InvertedFileEngine`, which still index synchronously on every
+`add_item!`). Call this explicitly -- interactively, on a schedule, whatever fits the
+caller -- to actually build graph connections for the backlog; [`search_live`](@ref) only
+ever sees items this has processed. This is also what unlocks batch-shaped insertion:
+staging is cheap and safe to do many times in a row without paying graph-construction cost
+until the caller actually wants it.
+
+Errors if `engine.index.db` is completely empty (nothing has ever been staged) -- mirrors
+`SimilaritySearch.index!`'s own `@assert n > 0`.
+"""
+function index!(engine::SearchGraphEngine)
+    write_lock(engine.lock) do
+        n = length(database(engine.index))
+        n == 0 && error("SearchGraphEngine has nothing staged yet -- add_item!/append_items! at least one vector before calling index!")
+        SimilaritySearch.index!(engine.index, engine.ctx)
+    end
+    return engine
+end
 
 """
     add_item!(engine::AbstractSearchEngine, item)
 
 Adds a single item to the index. Thread-safe wrapper.
-For text engines, `item` is raw text and `ensure_trained!` must already have been called
-(with the batch `item` belongs to) or the item is silently dropped (untrained engine has no index yet).
+For a `SearchGraphEngine`, this only *stages* `item` (see [`insert_dense!`](@ref)) -- it
+does not become searchable until an explicit [`index!`](@ref index!(::SearchGraphEngine))
+call. For text engines, `item` is raw text and errors outright if [`index!`](@ref) hasn't
+already been called on this engine (with a representative corpus) -- there is no silent
+no-op path for an untrained text engine anymore: either it's ready and the item is
+indexed, or the caller gets a clear error telling them to train it first.
 """
 function add_item!(engine::Union{SearchGraphEngine, GenericEngine}, item)
     write_lock(engine.lock) do
@@ -810,14 +887,14 @@ end
 
 function add_item!(engine::BM25Engine, item)
     write_lock(engine.lock) do
-        engine.voc === nothing && return # untrained text engine: nothing to index into yet
+        engine.voc === nothing && error("BM25Engine is not trained yet -- call index!(engine, corpus) first")
         push_item!(engine.index, engine.ctx, bagofwords(engine.voc, item))
     end
 end
 
 function add_item!(engine::InvertedFileEngine, item)
     write_lock(engine.lock) do
-        engine.voc === nothing && return # untrained text engine: nothing to index into yet
+        engine.voc === nothing && error("InvertedFileEngine is not trained yet -- call index!(engine, corpus) first")
         # TextSearch.jl dropped Dict-based dot/norm/evaluate, so a raw BOW no longer
         # scores correctly against a NormCosine (or other) InvertedFile -- it needs a
         # real weighted SparseVector, hence `vectorize` via the trained `model`.
@@ -861,7 +938,7 @@ above this one, which is also where such a policy belongs.
     that's exactly what their own `searchbatch`/`allknn`/`@BATCHES`-driven parallel search
     paths already rely on internally. So `search_live` takes `engine.lock` as a
     [`read_lock`](@ref): concurrent with any other number of searches, exclusive of
-    `add_item!`/`ensure_trained!`/`mark_deleted!`/`calibrate!` (each a [`write_lock`](@ref))
+    `add_item!`/`index!`/`mark_deleted!`/`calibrate!` (each a [`write_lock`](@ref))
     and of each other. See [`ReadWriteLock`](@ref) for the full contract, including why a
     `SearchGraphEngine`'s own `minrecall`-driven auto-`calibrate!` below has to be resolved
     *before* the read lock is acquired, not nested inside it.
@@ -893,7 +970,7 @@ function search_live(engine::SearchGraphEngine, query, k::Int; bs_override=nothi
             else
                 search(engine.index, ctx, query, res)
             end
-            return _collect_live(engine, IdView(res), DistView(res))
+            return _collect_live(engine, res)
         finally
             checkin!(engine.search_ctx_pool, ctx)
         end
@@ -906,7 +983,7 @@ function search_live(engine::GenericEngine, query, k::Int; bs_override=nothing, 
         try
             res = knnqueue(KnnSorted, max(k, 1))
             search(engine.index, ctx, query, res)
-            return _collect_live(engine, IdView(res), DistView(res))
+            return _collect_live(engine, res)
         finally
             checkin!(engine.search_ctx_pool, ctx)
         end
@@ -920,7 +997,7 @@ function search_live(engine::BM25Engine, query, k::Int; bs_override=nothing, min
         try
             res = knnqueue(KnnSorted, max(k, 1))
             search(engine.index, ctx, bagofwords(engine.voc, query), res)
-            return _collect_live(engine, IdView(res), DistView(res))
+            return _collect_live(engine, res)
         finally
             checkin!(engine.search_ctx_pool, ctx)
         end
@@ -934,26 +1011,18 @@ function search_live(engine::InvertedFileEngine, query, k::Int; bs_override=noth
         try
             res = knnqueue(KnnSorted, max(k, 1))
             search(engine.index, ctx, vectorize(engine.model, query), res)
-            return _collect_live(engine, IdView(res), DistView(res))
+            return _collect_live(engine, res)
         finally
             checkin!(engine.search_ctx_pool, ctx)
         end
     end
 end
 
-function _collect_live(engine::AbstractSearchEngine, cand_ids, cand_dists)
-    final_ids = Int32[]
-    final_dists = Float32[]
-    final_deleted = Bool[]
-
-    for (cand_id, cand_dist) in zip(cand_ids, cand_dists)
-        cand_id == 0 && continue # 0 means empty slot
-        push!(final_ids, cand_id)
-        push!(final_dists, cand_dist)
-        push!(final_deleted, cand_id in engine.deleted_ids)
-    end
-
-    return (id=final_ids, dist=final_dists, deleted=final_deleted)
+function _collect_live(engine::AbstractSearchEngine, res)
+    ids = view(res.ids, res.sp:res.ep)
+    dists = view(res.dists, res.sp:res.ep)
+    deleted = [id in engine.deleted_ids for id in ids]
+    return (id=ids, dist=dists, deleted=deleted)
 end
 
 end # module

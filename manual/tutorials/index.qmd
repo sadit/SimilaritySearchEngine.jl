@@ -3,5 +3,7 @@ title: "Tutorial"
 lang: en-US
 ---
 
-- [Getting started](getting-started.qmd) — create a dense project and a text project,
-  insert items, search, soft-delete, calibrate for a target recall, and close/reopen.
+- [Getting started](getting-started.qmd) — using paragraphs from *Frankenstein*: dense
+  vector search with LSI-derived embeddings, full-text search with BM25 and TF-IDF, plus
+  soft-delete, filtering, calibrating for a target recall, close/reopen, and the
+  whole-dataset operations (`allknn`, `fft`, `closestpairs`, `bichromatic_kclosestpairs`).

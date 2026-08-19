@@ -6,9 +6,12 @@ toc: true
 
 by: Eric S. Téllez
 
-This tutorial walks through the embedded API end to end: creating a dense (vector)
-project and a text project, inserting items, searching, soft-deleting, calibrating for a
-target recall, and closing/reopening a project in a later session.
+This tutorial walks through the embedded API end to end, using paragraphs from *Frankenstein*
+(bundled in this package's own test data) as a single running example: dense vector search
+with LSI-derived embeddings, full-text search with BM25 and TF-IDF, soft deletes, filtering,
+calibrating for a target recall, closing/reopening a project, and the "expensive", whole-dataset
+operations (`allknn`, `fft`, `closestpairs`, `bichromatic_kclosestpairs`) that only make sense
+once you actually have a project's worth of data to run them against.
 
 ## Installation
 
@@ -20,7 +23,38 @@ using Pkg
 Pkg.develop(path="path/to/SimilaritySearchEngine.jl")
 ```
 
-## A dense (vector) project
+## The Frankenstein dataset
+
+This package's own test suite ships `test/data/frankenstein.jsonl` — one JSON object per
+paragraph of the novel, already split, cleaned, and annotated by
+`test/generate_datasets.jl`. Loading it gives you a `Vector` of plain `Dict`s, each already
+shaped to match [`Schema.MetadataRecord`](../architecture.qmd)'s record/data/metadata
+contract:
+
+```julia
+using JSON
+
+items = [JSON.parse(l) for l in readlines("test/data/frankenstein.jsonl")]
+length(items)  # 724 paragraphs
+first(keys(items[1]))
+```
+
+Each item has:
+
+- `"text"`: the paragraph itself (raw data — never duplicated into metadata).
+- `"doc_id"`: an external id like `"frankenstein_1"` (the record's fixed external-id field).
+- `"keywords"`: character names detected in that paragraph, e.g. `["Elizabeth", "Victor"]`
+  (the record's fixed, indexed tag field).
+- `"ref"`: the *previous* paragraph's `doc_id` (the record's fixed, unvalidated reference
+  field — a forward/backward link, here used to keep narrative order available even
+  though nothing enforces `ref`s point at something that exists).
+- `"word_count"`/`"verb_count"`: free-form metadata (`meta`) — anything not a reserved key
+  (`vector`/`text`/`doc_id`/`keywords`/`ref`) falls through here as-is, flat, with no
+  wrapper key of its own.
+
+There's no `"vector"` key yet — that's the dense section's job, below.
+
+## Dense vectors with LSI (SearchGraph)
 
 `create_project` makes a brand-new project directly on disk, at `<workdir>/<dataset>`. By
 default it builds a `SearchGraph` (an approximate, self-tuning index) autotuning toward
@@ -31,50 +65,102 @@ using SimilaritySearchEngine
 using SimilaritySearch: SearchGraph
 
 workdir = mktempdir()
-h = create_project(workdir, "images"; index_type=SearchGraph, minrecall=0.9)
+h = create_project(workdir, "frankenstein_dense"; index_type=SearchGraph, minrecall=0.9)
 ```
 
-Items are appended as a `Vector` of dicts, each carrying a `"vector"` key plus any
-metadata fields you want to keep alongside it:
+### Getting real dense vectors quickly, with LSI
+
+A `SearchGraph` project needs `Vector{Float32}`s to index — if you don't already have an
+embedding model at hand, `TextSearch.jl`'s Latent Semantic Indexing (LSI) gives you real,
+meaningful dense vectors straight from a text corpus, in-process, with no external model
+or API call: fit once on your corpus, then project any text (an indexed paragraph, or a
+brand-new query) into that same dense space.
 
 ```julia
-for i in 1:1000
-    append_items!(h, [Dict("vector" => rand(Float32, 32), "label" => "item-$i")])
-end
+using TextSearch: LatentSemanticIndexing, outdim
+using TextSearch.LSI: vectorize
+
+corpus = [it["text"] for it in items]
+lsi = LatentSemanticIndexing(corpus; maxoutdim=128, verbose=false)
+outdim(lsi)  # 128 -- the full corpus easily supports it
+```
+
+(`maxoutdim` is a cap, not a guarantee: `outdim(lsi)` is `min(maxoutdim, vocabulary size,
+corpus size)` — a tiny placeholder corpus of just a handful of documents would yield far
+fewer dimensions than requested; 724 real paragraphs comfortably reach 128.)
+
+Items are appended as a `Vector` of dicts, each carrying a `"vector"` key plus the record
+fields loaded above. We'll only insert the *first half* of the book here, and hold the
+second half back in reserve, unindexed, for the bichromatic example further down:
+
+```julia
+half = length(items) ÷ 2
+
+batch = [
+    Dict("vector" => vectorize(lsi, it["text"]), "doc_id" => it["doc_id"],
+         "keywords" => it["keywords"], "ref" => it["ref"],
+         "word_count" => it["word_count"], "verb_count" => it["verb_count"])
+    for it in items[1:half]
+]
+append_items!(h, batch)  # inserted == 362
 ```
 
 (`append_items!` accepts a batch — passing many items in one call amortizes better than
-one `append_items!` call per item, though both work.)
+one `append_items!` call per item, though both work; see
+[Architecture](../architecture.qmd) for why batch size matters even more for a dense
+project specifically.)
 
-Searching returns a `Vector` of `(id, doc_id, distance, deleted)` named tuples, hydrated
-with each hit's original metadata id:
+### Indexing the staged vectors
+
+For a `SearchGraph` project, `append_items!` only *stages* raw vectors — cheaply, and
+durably, but without doing any of the (expensive) graph-connection work. Nothing is
+searchable yet:
 
 ```julia
-query = rand(Float32, 32)
+search(h, vectorize(lsi, "the monster and its creator"); k=5)  # Vector{...}[] -- empty, nothing indexed yet
+```
+
+`index!` explicitly builds the graph over whatever's been staged since the last call (or
+since creation) — call it once you're ready for staged items to become searchable,
+whether that's right after every `append_items!` call, on your own periodic schedule, or
+just once before a batch of queries:
+
+```julia
+index!(h)
+```
+
+It's cheap to call again later with nothing new staged (a no-op), and only ever processes
+the backlog — call it as often as fits your workflow. Searching now finds the 362 staged
+paragraphs:
+
+```julia
+query = vectorize(lsi, "the monster and its creator")
 results = search(h, query; k=5)
 for r in results
     println(r.id, " => distance ", r.distance)
 end
 ```
 
-Pass a `filter` predicate — a plain `record -> Bool` function over each candidate's
-`Schema.MetadataRecord` — to restrict results without building a separate query language:
+Pass a `filter` predicate — a plain `(record, meta) -> Bool` function over each
+candidate's fixed `Schema.MetadataRecord` (`doc_id`, `keywords`, `refs`, ...) and its
+free-form `meta` (whatever else you appended it with) — to restrict results without
+building a separate query language:
 
 ```julia
-using SimilaritySearchEngine: Schema
-
-recent = search(h, query; k=5, filter = record -> Schema.get_field(record, "label") !== nothing)
+mentions_someone = search(h, query; k=5, filter = (record, meta) -> !isempty(record.keywords))
 ```
 
 ### Soft deletes
 
-`delete_item!` marks a document as logically deleted; the index itself is untouched:
+`delete_item!` marks a document as logically deleted; the index itself is untouched. It
+takes the internal `_id` (the position `add_item!` assigned it, e.g. as returned in a
+search result's `doc_id` field), not the `"doc_id"` you supplied when appending:
 
 ```julia
-delete_item!(h, 1)  # doc_id, not the "label" metadata value
+delete_item!(h, 1)  # internal _id 1, not any "doc_id"/metadata value
 
 results = search(h, query; k=5)
-first(results).deleted  # true if doc_id 1 made the top-5 candidates
+first(results).deleted  # true if internal _id 1 made the top-5 candidates
 ```
 
 A soft-deleted candidate is *reported*, not hidden and backfilled — if you need `k` live
@@ -92,39 +178,95 @@ calibrate!(h; levels=[0.8, 0.9, 0.95, 0.97])
 precise = search(h, query; k=5, minrecall=0.95)
 ```
 
+It needs a reasonably sized project to have anything meaningful to search against and
+tune over — this 724-paragraph corpus is plenty; a toy corpus of just a handful of items
+would print a wall of "ignoring configuration"/"too few queries" warnings instead (harmless,
+just noisy), since there wouldn't be enough distinct items for its own internal sample
+queries.
+
 ### Closing and reopening
 
 ```julia
 close_project!(h)
 
-h2 = open_project(workdir, "images")
+h2 = open_project(workdir, "frankenstein_dense")
 same_query_results = search(h2, query; k=5)
 close_project!(h2)
 ```
 
 Every insertion was already persisted incrementally as it happened (see
 [Architecture](../architecture.qmd)), so `close_project!` only needs to flush anything
-still pending for index kinds that don't persist incrementally on their own.
+still pending for index kinds that don't persist incrementally on their own. Staging and
+indexing are tracked separately, too: reopening restores exactly how far `index!` actually
+got, not just how much was staged -- had we appended more items after the last `index!`
+call above and closed without indexing them, they'd still be there (staged, with their
+metadata already fetchable) after reopening, just not yet searchable, waiting on a future
+`index!` call to catch them up.
 
-## A text project
+`same_query_results` will be *close to*, but isn't guaranteed to be byte-identical to, the
+`results` from before closing: `SearchGraph` is an approximate index, and rebuilding it
+from persisted vectors (`open_project` replays every insertion in the same order) doesn't
+guarantee an identical internal graph topology to the one built live, so its beam search
+can explore a slightly different candidate set — expect the same ballpark of hits (often
+exactly the same), not a bitwise-reproducible top-`k`, unless you calibrate and search
+with an explicit `minrecall` on both sides.
 
-Text projects work the same way, just with a `"text"` key instead of `"vector"`, and
-`ftsearch` instead of `search`. `BM25InvertedFile` scores via BM25 over raw
-bags-of-words; `InvertedFile` (a weighted, cosine-by-default inverted index) is the other
-option:
+## Full-text search with BM25
+
+Text projects work the same way as dense ones, just with a `"text"` key instead of
+`"vector"`, and `ftsearch` instead of `search`. `BM25InvertedFile` scores via BM25 over raw
+bags-of-words:
+
+A text project needs an explicit, one-time [`index!`](#dense-vectors-with-lsi-searchgraph)
+call of its own first — the *training* kind, not the graph-catch-up kind: it builds the
+`Vocabulary` (and the real `BM25InvertedFile`) from a representative sample of your text.
+`append_items!` errors if you skip this:
 
 ```julia
 using TextSearch: BM25InvertedFile
 
-ht = create_project(workdir, "articles"; index_type=BM25InvertedFile)
+hb = create_project(workdir, "frankenstein_bm25"; index_type=BM25InvertedFile)
+index!(hb, [it["text"] for it in items[1:200]])  # trains the vocabulary -- once, explicitly
 
-append_items!(ht, [
-    Dict("text" => "similarity search over dense vectors"),
-    Dict("text" => "full text search with an inverted index"),
-    Dict("text" => "approximate nearest neighbors in high dimensions"),
+append_items!(hb, [
+    Dict("text" => it["text"], "doc_id" => it["doc_id"], "keywords" => it["keywords"])
+    for it in items[1:200]
 ])
 
-hits = ftsearch(ht, "nearest neighbor search"; k=3)
+hits = ftsearch(hb, "monster creature fear"; k=5)
+for r in hits
+    println(r.id, " => distance ", r.distance)
+end
+
+close_project!(hb)
+```
+
+Unlike the dense case above, a text engine's `append_items!` still indexes synchronously,
+right away — there's no staged-but-not-yet-searchable state for text projects, only the
+training step is a separate, explicit gate. Tokens never seen at training time are
+out-of-vocabulary on every later append (a `TextSearch.jl` limitation, not a bug in this
+package), so make sure your training corpus is representative — it doesn't have to be the
+exact same batch you go on to insert, just similar enough to cover the vocabulary you'll
+need.
+
+## Full-text search with TF-IDF
+
+`InvertedFile` is the other text index kind: a classic TF-IDF-weighted (`IdfWeighting` +
+`TfWeighting`) inverted index, cosine distance by default — a good baseline to compare
+against BM25's ranking on the same corpus:
+
+```julia
+using TextSearch: InvertedFile
+
+ht = create_project(workdir, "frankenstein_tfidf"; index_type=InvertedFile)
+index!(ht, [it["text"] for it in items[1:200]])  # same explicit training step as BM25
+
+append_items!(ht, [
+    Dict("text" => it["text"], "doc_id" => it["doc_id"], "keywords" => it["keywords"])
+    for it in items[1:200]
+])
+
+hits = ftsearch(ht, "monster creature fear"; k=5)
 for r in hits
     println(r.id, " => distance ", r.distance)
 end
@@ -132,31 +274,115 @@ end
 close_project!(ht)
 ```
 
-The vocabulary is trained once, from the *first* batch of text a project receives — tokens
-never seen at training time are out-of-vocabulary on every later append (a
-`TextSearch.jl` limitation, not a bug in this package), so make sure that first batch is
-representative.
+Same insertion/search shape as BM25 — only `index_type` changes — so switching between the
+two to compare rankings on your own corpus is a one-line change.
+
+## Expensive, whole-dataset operations
+
+`allknn`, `fft`, `closestpairs`, and `bichromatic_kclosestpairs` all run synchronously,
+in-process — no job queue, unlike the HTTP API's `POST /api/v1/jobs/allknn` — which is
+exactly why they're grouped here as their own section: each one does real work
+proportional to the *whole* dataset (or two datasets, for the bichromatic case), so run
+them against a project you actually want an answer for, not casually inside a hot loop.
+All four need a dense (`SearchGraph`) project; reopen the one from the LSI section above
+if you closed it:
+
+```julia
+h2 = open_project(workdir, "frankenstein_dense")
+```
+
+### All-pairs nearest neighbors
+
+`allknn` runs `SimilaritySearch.jl`'s batch all-nearest-neighbors — every item's own
+top-`k` neighbors, all at once:
+
+```julia
+neighbors = allknn(h2; k=5)
+first(neighbors)  # (id=1, neighbors=[...], dists=[...])
+```
+
+`id`/`neighbors` are internal `_id`s (1-based insertion position), not `doc_id`s — see
+[Metadata lookups](#metadata-lookups) to resolve them back to paragraph text.
+
+### Farthest-first traversal (diverse sampling)
+
+`fft` picks `k` items that are as far from each other as possible — useful for a diverse,
+representative sample of the corpus (e.g. candidate cluster centers), rather than the
+"closest to a query" shape every other search here has:
+
+```julia
+R = fft(h2, 8; verbose=false)
+R.centers  # 8 well-separated internal _ids
+R.ε        # the separation radius achieved
+```
+
+### `k` closest pairs (near-duplicates and echoes within one corpus)
+
+`closestpairs` finds the `k` globally closest pairs of items *within* a single project —
+useful for spotting near-duplicate or strongly echoing passages:
+
+```julia
+pairs = closestpairs(h2; k=5)
+for (i, j, d) in pairs
+    ri = get_metadata(h2.project, i)
+    rj = get_metadata(h2.project, j)
+    println(ri.doc_id, " <-> ", rj.doc_id, "  dist=", d)
+    println("  A: ", first(items[i]["text"], 90))
+    println("  B: ", first(items[j]["text"], 90))
+end
+```
+
+Running this against the first half of the novel (`h2` as built above) turns up passages
+like Elizabeth's account of Justine's trial echoed a few paragraphs later almost verbatim,
+at a distance well below typical unrelated pairs — exactly the kind of near-duplicate/
+strong echo this function is for.
+
+### Bichromatic `k` closest pairs (across two collections)
+
+`bichromatic_kclosestpairs` finds the `k` closest pairs *between* a project's own index and
+a second, separate collection of vectors that isn't indexed by anything — here, the first
+half of the novel (already indexed as `h2`, see above) against the second half's vectors
+(computed with the same LSI model, but never inserted anywhere):
+
+```julia
+using SimilaritySearch: MatrixDatabase
+
+second_half_vectors = [vectorize(lsi, it["text"]) for it in items[(half + 1):end]]
+B = MatrixDatabase(hcat(second_half_vectors...))
+
+pairs = bichromatic_kclosestpairs(h2, B; k=5)
+for (i, j, d) in pairs
+    ri = get_metadata(h2.project, i)             # i is h2's own internal _id
+    other = items[half + j]                       # j is B's own 1-based position
+    println(ri.doc_id, " <-> ", other["doc_id"], "  dist=", d)
+    println("  A: ", first(items[i]["text"], 100))
+    println("  B: ", first(other["text"], 100))
+end
+```
+
+On the real novel, this surfaces thematically matched passages across the two halves —
+e.g. Walton's opening framing letters about a "strange accident" pairing with an equally
+breathless first-person account much later in the book, well below the distance of an
+unrelated cross-half pair.
 
 ## Metadata lookups
 
-`fetch_items` and `exists` accept either the internal integer `doc_id` or the original
-`"id"` you supplied when appending:
+`fetch_items` and `exists` accept either the internal `_id` (an integer, or a string of
+one, e.g. `"1"`) or the `"doc_id"` you supplied when appending. `fetch_items` returns each
+record's fixed fields (`_id`, `doc_id`, `schema_version`, `keywords`, `ref`) merged with
+its free-form `meta`:
 
 ```julia
-fetch_items(h2, [1, 2, 3])
-exists(h2, [1, "some-external-id"])
+fetch_items(h2, [1, "frankenstein_2"])
+# [Dict("_id"=>1, "doc_id"=>"frankenstein_1", "schema_version"=>1, "keywords"=>[...],
+#       "ref"=>[...], "word_count"=>..., "verb_count"=>...), ...]
+
+exists(h2, [1, "some-doc-id"])
 ```
 
-## All-pairs nearest neighbors
-
-For a dense project, `allknn` runs `SimilaritySearch.jl`'s batch all-nearest-neighbors
-synchronously, in-process (no job queue) — useful for small-to-medium projects where you
-want every item's own top-`k` neighbors at once:
-
-```julia
-neighbors = allknn(h2; k=10)
-first(neighbors)  # (id=1, neighbors=[...], dists=[...])
-```
+`get_metadata(h2.project, _id)` (used in the closest-pairs examples above) is the lower-level
+single-record accessor `fetch_items` itself is built on — it returns just the
+`Schema.MetadataRecord` (no `meta` merged in), which is all those examples needed.
 
 ## Next steps
 

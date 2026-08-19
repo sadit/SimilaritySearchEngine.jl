@@ -28,7 +28,7 @@ using .Persistence
 # cli_handlers.jl/server.jl) actually depends on, since Julia methods are owned by the
 # generic function they extend, not by the module doing the extending. embedded.jl
 # references `Project.open_project`/`Project.close_project` qualified instead.
-using .Project: ProjectManager, put_metadata!, get_metadata, find_by_original_id, generate_id
+using .Project: ProjectManager, put_metadata!, get_metadata, get_meta, get_raw_meta, find_by_doc_id, generate_id
 using .IndexEngine
 
 # The friendly, no-HTTP-required embedded API (PLAN.md §8.5) built on top of the four
@@ -37,7 +37,9 @@ using .IndexEngine
 # workdir, same as the CLI).
 include("embedded.jl")
 
-export EmbeddedEngine, create_project, open_project, close_project!, append_items!,
-       search, ftsearch, delete_item!, fetch_items, exists, calibrate!, allknn
+export EmbeddedEngine, create_project, open_project, close_project!, append_items!, index!,
+       search, ftsearch, delete_item!, fetch_items, exists, calibrate!, allknn,
+       fft, closestpairs, bichromatic_kclosestpairs,
+       get_metadata, get_meta, get_raw_meta
 
 end # module

@@ -634,7 +634,7 @@ version = "1.10.0"
 
 [[deps.TextSearch]]
 deps = ["Accessors", "LinearAlgebra", "ProgressMeter", "Random", "SimilaritySearch", "SparseArrays", "StatsBase", "Unicode"]
-path = "/home/sadit/Research/SimilaritySearchServer/test/../../TextSearch.jl"
+path = "/home/sadit/Research/TextSearch.jl"
 uuid = "7f6f6c8a-3b03-11e9-223d-e7d88259bd6c"
 version = "1.0.0"
 

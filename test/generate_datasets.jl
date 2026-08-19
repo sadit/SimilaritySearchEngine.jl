@@ -133,22 +133,31 @@ function process_book(name::String, url::String, outdir::String)
         end
 
         push!(cleaned, p_clean)
-        push!(metas, Dict("word_count" => word_count, "verb_count" => verb_count, "characters_mentioned" => chars_mentioned))
+        push!(metas, Dict("word_count" => word_count, "verb_count" => verb_count, "keywords" => chars_mentioned))
     end
 
     println("  Fitting LSI ($LSI_DIM dims) on $(length(cleaned)) paragraphs...")
     lsi = fit_lsi(cleaned)
 
+    # Record/data/metadata contract (SimilaritySearchEngine.jl's Schema.MetadataRecord +
+    # Schema.split_item): "vector"/"text" are the raw data (never duplicated into meta);
+    # "doc_id"/"keywords"/"ref" are the record's fixed fields (doc_id is *our* external id,
+    # keywords the character names detected in this paragraph); everything else
+    # (word_count, verb_count) falls through to the free-form meta blob as-is, flat, no
+    # extra "meta" wrapper key of its own.
     out_jsonl = joinpath(outdir, "$name.jsonl")
     open(out_jsonl, "w") do io
         for (doc_id, (p_clean, meta)) in enumerate(zip(cleaned, metas))
             vec = vectorize(lsi, p_clean)
 
             record = Dict(
-                "id" => "$(name)_$doc_id",
+                "doc_id" => "$(name)_$doc_id",
                 "text" => p_clean,
                 "vector" => vec,
-                "meta" => meta
+                "keywords" => meta["keywords"],
+                "ref" => doc_id > 1 ? ["$(name)_$(doc_id - 1)"] : String[],  # previous paragraph, unvalidated
+                "word_count" => meta["word_count"],
+                "verb_count" => meta["verb_count"],
             )
 
             println(io, JSON3.write(record))
