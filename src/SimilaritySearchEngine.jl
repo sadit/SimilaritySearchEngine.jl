@@ -38,8 +38,25 @@ using .IndexEngine
 include("embedded.jl")
 
 export EmbeddedEngine, create_project, open_project, close_project!, append_items!, index!,
-       search, ftsearch, delete_item!, fetch_items, exists, calibrate!, allknn,
+       search, ftsearch, ftexplain, delete_item!, fetch_items, exists, calibrate!, allknn,
        fft, closestpairs, bichromatic_kclosestpairs,
        get_metadata, get_meta, get_raw_meta
+
+# Re-exported from TextSearch.jl, not defined here: they are the vocabulary a caller needs to
+# say anything to a *text* project -- `textmodel=FitFromCorpus(TextConfig(language=:es))`,
+# `textmodel=BaseProfile(load_profile("wiki20231101-es.zip"))`,
+# `ftsearch(h, q; policy=QueryPolicy(correction=:off))`. Re-exporting them keeps a script that
+# only ever does `using SimilaritySearchEngine` from needing a second `using` line to reach the
+# arguments this package's own API asks for.
+export TextConfig, TextProfile, QueryPolicy, load_profile, save_profile
+
+# Defined in the IndexEngine submodule and re-exported here (embedded.jl adds the
+# `EmbeddedEngine` method to `text_profile` by extension, so both names below are one generic
+# function each, not a package-level copy of a submodule one).
+export text_profile, fit_profile
+
+# The text-model decision a text project is created with: `create_project` refuses to guess,
+# so these two are part of the minimum vocabulary for creating one at all.
+export AbstractTextModelSpec, BaseProfile, FitFromCorpus
 
 end # module

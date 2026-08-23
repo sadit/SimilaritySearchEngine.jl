@@ -106,7 +106,7 @@ callback (unlike the whole-index save `GenericEngine` uses, see
 [`_maybe_flush_index!`](@ref)): an inverted file's `LOG` only fires after a call's
 mutation is fully done, so there's no partial-state hazard here the way there is for a
 `SearchGraph` (see `IndexEngine.CallbackLog`'s docstring). Reconstruction
-(`IndexEngine.build_bm25invertedfile`/`build_invertedfile`, used by [`open_project`](@ref))
+(`IndexEngine.build_bm25invertedfile`/`build_textinvertedfile`, used by [`open_project`](@ref))
 rebuilds the whole index by replaying every saved object back through the library's own
 insertion -- see `Persistence.InvertedFileObjectStore`'s docstring for the scaling
 trade-off that implies (fine up to a few million documents; not a design for
@@ -116,7 +116,7 @@ _invertedfile_on_change(obj_store::Persistence.InvertedFileObjectStore) =
     (index, sp, ep) -> Persistence.append_objects!(obj_store, sp, IndexEngine.invertedfile_objects(index, sp, ep))
 
 """
-    create_project(workdir, dataset; index_type=SearchGraph, distance=nothing, minrecall=0.9, schema_version=1) -> EmbeddedEngine
+    create_project(workdir, dataset; index_type=SearchGraph, textmodel=nothing, distance=nothing, minrecall=0.9, schema_version=1) -> EmbeddedEngine
 
 Creates a brand-new project directly on disk at `<workdir>/<dataset>`, with no HTTP server or
 CLI subprocess involved -- the same on-disk layout `similarity-search build` already produces,
@@ -129,6 +129,24 @@ across every index kind. `minrecall` is the target recall a `SearchGraphEngine` 
 at creation, since it's carried on the engine and restored verbatim by [`open_project`](@ref)
 rather than re-derived later -- `calibrate!` remains available afterwards as a separate,
 explicit re-optimization pass. Ignored for index types with no `BeamSearch` to autotune.
+`textmodel` says where a *text* project's vocabulary comes from, and a text project cannot be
+created without it (see `IndexEngine.AbstractTextModelSpec` for why it has no default):
+
+- `textmodel=BaseProfile(load_profile("wiki20231101-es.zip"))` — index against a model fitted
+  elsewhere. The project is trained before its first item is staged, so its vocabulary covers
+  the language rather than whichever batch arrived first, and it gains whatever stopword set,
+  lemma map and query-expansion network that profile carries.
+- `textmodel=FitFromCorpus(TextConfig(language=:es); min_ndocs=3)` — deliberately no base
+  profile: fit one from this project's own corpus at the first [`index!`](@ref
+  index!(::EmbeddedEngine)) call, under the given policy and fit options (weighting scheme,
+  vocabulary pruning, stopword detection — see `IndexEngine.FitFromCorpus`). That call freezes
+  the vocabulary, so every term a later batch introduces is dropped from then on.
+
+Passing a `textmodel` to a *dense* project is an error rather than an ignored keyword: there is
+no reading under which it does anything, and swallowing it silently is how a project ends up
+not being the kind its author thought it was. The spec is persisted with the project and
+restored verbatim by [`open_project`](@ref).
+
 `schema_version` is stamped onto every `Schema.MetadataRecord` [`append_items!`](@ref)
 writes for this project's lifetime (not persisted/restored itself -- like `minrecall`
 before it was carried on the engine, a caller reopening this same project later must pass
@@ -137,30 +155,40 @@ it's never validated against `meta`'s actual shape, purely a version tag for the
 own interpretation of it.
 
 The engine's index itself is persisted incrementally as it grows, not rewritten wholesale
-on every `append_items!` call: for a `SearchGraph`, every insertion report saves just its
-own direct-links-only block (see [`_searchgraph_on_change`](@ref)); for every other index
-kind, a full save happens right after the `add_item!` call that triggered it returns (see
-[`_maybe_flush_index!`](@ref)). [`close_project!`](@ref) forces one final flush of the
-latter so nothing recent is lost -- the former never has anything left to flush, since
-each block is already durable the instant it's saved.
+on every `append_items!` call: for a `SearchGraph`, every [`index!`](@ref index!(::EmbeddedEngine))
+call saves just the direct-links-only block it just built (see
+[`_searchgraph_on_change`](@ref)); for a `BM25InvertedFile`/`InvertedFile` project, every
+`index!` call likewise saves just the newly-encoded objects it just indexed (see
+[`_invertedfile_on_change`](@ref)) -- both engine kinds have a staging split
+([`append_items!`](@ref) itself durably stages raw vectors/text right away, see that
+function's docstring). Only `GenericEngine` (`ExhaustiveSearch`/`ParallelExhaustiveSearch`,
+no staging split at all) instead flags a pending whole-index save that happens right after
+each `add_item!` call returns (see [`_maybe_flush_index!`](@ref)); [`close_project!`](@ref)
+forces one final flush of that so nothing recent is lost -- the other two kinds never have
+anything left to flush there, since each block is already durable the instant it's saved.
 """
-function create_project(workdir::String, dataset::String; index_type::Type=SearchGraph, distance=nothing, minrecall::Union{Nothing,Real}=0.9, schema_version::Int=1)
+function create_project(workdir::String, dataset::String; index_type::Type=SearchGraph, distance=nothing, minrecall::Union{Nothing,Real}=0.9,
+                        textmodel::Union{Nothing,IndexEngine.AbstractTextModelSpec}=nothing, schema_version::Int=1)
+    # Before anything is created on disk: `create_engine` checks this too, but only after the
+    # project's directory exists and RocksDB's write lock is held, so a call that fails here
+    # would otherwise leave both behind.
+    IndexEngine.validate_textmodel(index_type, textmodel)
     dir = joinpath(workdir, dataset)
     mkpath(dir)
-    project = Project.open_project(dir, dataset; extra_cf_names=[Persistence.ENGINE_CF, Persistence.ADJACENCY_CF, Persistence.INVFILE_DB_CF])
+    project = Project.open_project(dir, dataset; extra_cf_names=[Persistence.ENGINE_CF, Persistence.ADJACENCY_CF, Persistence.INVFILE_DB_CF, Persistence.STAGED_TEXT_CF])
     store = Persistence.open_engine_store(project.db)
     pending_flush = Ref(false)
     dense_vectors = Ref{Union{Nothing,MMapMatrixDatabase}}(nothing)
     on_change = if index_type === SearchGraph
         _searchgraph_on_change(store, Persistence.open_adjacency_store(project.db))
-    elseif index_type === BM25InvertedFile || index_type === InvertedFile
+    elseif IndexEngine.is_text_index_type(index_type)
         _invertedfile_on_change(Persistence.open_invertedfile_object_store(project.db))
     else
         (_, __, ___) -> (pending_flush[] = true)
     end
     engine = distance === nothing ?
-        IndexEngine.create_engine(index_type; minrecall, on_change) :
-        IndexEngine.create_engine(index_type; distance, minrecall, on_change)
+        IndexEngine.create_engine(index_type; minrecall, textmodel, on_change) :
+        IndexEngine.create_engine(index_type; distance, minrecall, textmodel, on_change)
     Persistence.save_fields!(store, IndexEngine.snapshot_state(engine))
     return EmbeddedEngine(workdir, dataset, dir, project, engine, store, pending_flush, schema_version, dense_vectors)
 end
@@ -185,7 +213,7 @@ raises RocksDB's own real lock error, not a friendly one this function invents.
 """
 function open_project(workdir::String, dataset::String; read_only::Bool=false, schema_version::Int=1)
     dir = joinpath(workdir, dataset)
-    project = Project.open_project(dir, dataset; read_only, extra_cf_names=[Persistence.ENGINE_CF, Persistence.ADJACENCY_CF, Persistence.INVFILE_DB_CF])
+    project = Project.open_project(dir, dataset; read_only, extra_cf_names=[Persistence.ENGINE_CF, Persistence.ADJACENCY_CF, Persistence.INVFILE_DB_CF, Persistence.STAGED_TEXT_CF])
     store = Persistence.open_engine_store(project.db)
     pending_flush = Ref(false)
     dense_vectors = Ref{Union{Nothing,MMapMatrixDatabase}}(nothing)
@@ -212,21 +240,26 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
         IndexEngine.restore_engine(state; on_change=_searchgraph_on_change(store, adj_store))
     elseif kind === IndexEngine.BM25Engine
         obj_store = Persistence.open_invertedfile_object_store(project.db)
+        staged_store = Persistence.open_staged_text_store(project.db)
         state = (
             kind=kind,
-            voc=Persistence.load_field(store, :voc),
+            profile=Persistence.load_field(store, :profile),
+            fitspec=Persistence.load_field(store, :fitspec),
             object_blocks=Persistence.load_object_blocks(obj_store),
+            staged=vcat(String[], Persistence.load_staged_text_blocks(staged_store)...),
             deleted_ids=Persistence.load_field(store, :deleted_ids),
         )
         IndexEngine.restore_engine(state; on_change=_invertedfile_on_change(obj_store))
     elseif kind === IndexEngine.InvertedFileEngine
         obj_store = Persistence.open_invertedfile_object_store(project.db)
+        staged_store = Persistence.open_staged_text_store(project.db)
         state = (
             kind=kind,
-            voc=Persistence.load_field(store, :voc),
-            model=Persistence.load_field(store, :model),
+            profile=Persistence.load_field(store, :profile),
+            fitspec=Persistence.load_field(store, :fitspec),
             distance=Persistence.load_field(store, :distance),
             object_blocks=Persistence.load_object_blocks(obj_store),
+            staged=vcat(String[], Persistence.load_staged_text_blocks(staged_store)...),
             deleted_ids=Persistence.load_field(store, :deleted_ids),
         )
         IndexEngine.restore_engine(state; on_change=_invertedfile_on_change(obj_store))
@@ -263,55 +296,48 @@ function close_project!(handle::EmbeddedEngine)
 end
 
 """
-    index!(handle::EmbeddedEngine, corpus)
-
-Explicitly trains a text project's `Vocabulary` (and builds its real
-`BM25InvertedFile`/`InvertedFile`) from `corpus` -- extends `SimilaritySearch.index!`, the
-same generic function [`fft`](@ref)/[`closestpairs`](@ref)'s underlying calls rely on for
-a dense project, given its own meaning here: "make this text project ready to accept
-items." Must be called exactly once, before any [`append_items!`](@ref), for a
-`BM25InvertedFile`/`InvertedFile` project -- errors for a dense `SearchGraph` project
-(which has no training step at all), for an already-trained engine, or for an empty
-`corpus`. See `IndexEngine.index!`'s own docstring for why `corpus` doesn't have to be the
-exact batch you go on to insert afterwards.
-
-Persists `voc`/`model`/`distance` together immediately once training succeeds (a one-time,
-must-not-lose transition -- `index` itself has nothing to save yet at that point, since
-training only constructs an empty index; its first indexed object comes from a later
-[`append_items!`](@ref) call instead, already covered by the engine's own incremental
-`on_change`).
-"""
-function index!(handle::EmbeddedEngine, corpus)
-    engine = handle.engine
-    IndexEngine.is_text_index(engine) || error("index!(handle, corpus) only applies to a text (BM25InvertedFile/InvertedFile) project -- see index!(handle) for a dense SearchGraph project")
-    IndexEngine.index!(engine, corpus)
-    # `snapshot_state` already knows exactly which fields this concrete engine kind has
-    # (BM25Engine has no `distance`, InvertedFileEngine does, etc.) -- reuse it rather
-    # than re-deriving the field set by hand here.
-    Persistence.save_fields!(handle.store, IndexEngine.snapshot_state(engine))
-    return handle
-end
-
-"""
     index!(handle::EmbeddedEngine)
 
-For a dense (`SearchGraph`) project: builds graph connections for every vector staged via
-[`append_items!`](@ref) since the last call (or since creation) -- see
-`IndexEngine.index!(engine::IndexEngine.SearchGraphEngine)`'s own docstring for why this is
-idempotent and safe to call repeatedly (it only ever processes the backlog). Nothing
-becomes visible to [`search`](@ref)/[`allknn`](@ref)/[`fft`](@ref)/[`closestpairs`](@ref)/
-[`bichromatic_kclosestpairs`](@ref) until this runs at least once -- staging
-(`append_items!`) alone is not enough.
+Catches up encoding/indexing over whatever's been staged via [`append_items!`](@ref)
+since the last call (or since creation) -- one uniform entry point for every index kind
+with a staging split (`SearchGraph`, `BM25InvertedFile`, `InvertedFile`): idempotent, safe
+to call repeatedly, only ever processes the backlog (see
+`IndexEngine.index!(engine::IndexEngine.SearchGraphEngine)`'s docstring for the exact
+contract, shared verbatim by the text engines). Nothing staged via `append_items!` becomes
+visible to [`search`](@ref)/[`ftsearch`](@ref)/[`allknn`](@ref)/[`fft`](@ref)/
+[`closestpairs`](@ref)/[`bichromatic_kclosestpairs`](@ref) until this runs at least once.
 
-Errors for a text project (train it via [`index!`](@ref index!(::EmbeddedEngine, ::Any))
-instead) or for any other index kind, which has no staged-vs-indexed split to catch up
-(`GenericEngine`/`BM25Engine`/`InvertedFileEngine` already index synchronously on every
-`add_item!`, so there's never a backlog for this to process).
+For a text project created with a `FitFromCorpus`, the first call additionally runs that fit
+(producing a `TextSearch.TextProfile`: vocabulary, weights and lineage) over every item staged
+so far and builds the real index against it -- there is no separate training entry point;
+whatever you've `append_items!`-ed before the first `index!` call *is* the training corpus,
+and tokens absent from it are out-of-vocabulary forever after. That one-time transition
+(`:profile`) is persisted immediately after it happens; every later call only ever touches
+the encoded posting-list blocks already covered by the engine's own incremental `on_change`,
+so this does not re-save `:deleted_ids` or anything else on every catch-up call.
+
+A project created with a `BaseProfile` (see [`create_project`](@ref)) was already trained
+before its first item was staged, so there is no such transition and every call here is a
+pure catch-up.
+
+Errors for a `GenericEngine` (`ExhaustiveSearch`/`ParallelExhaustiveSearch`) project --
+the one index kind with no staging split at all, since it always evaluates directly
+against `db`; there is never a backlog for this to catch up.
 """
 function index!(handle::EmbeddedEngine)
     engine = handle.engine
-    engine isa IndexEngine.SearchGraphEngine || error("index!(handle) with no corpus only applies to a dense SearchGraph project -- see index!(handle, corpus) for a text project")
-    IndexEngine.index!(engine)
+    if engine isa IndexEngine.SearchGraphEngine
+        IndexEngine.index!(engine)
+    elseif IndexEngine.is_text_index(engine)
+        # `:fitspec`/`:distance` were already written by create_project's full snapshot_state
+        # save, and neither ever changes afterwards -- only `:profile` can go from nothing to a
+        # fitted model, and only once, so that is the only field this has to write back.
+        just_fitted = IndexEngine.text_profile(engine) === nothing
+        IndexEngine.index!(engine)
+        just_fitted && Persistence.save_field!(handle.store, :profile, IndexEngine.text_profile(engine))
+    else
+        error("index!(handle) is not supported for this project's index kind -- ExhaustiveSearch/ParallelExhaustiveSearch have no staging split, items are searchable immediately on append_items!")
+    end
     return handle
 end
 
@@ -326,27 +352,26 @@ embedded API stays consistent with what a CLI `describe`/`rebuild`, or a
 the number of items actually inserted (an item missing its required key is skipped, not
 an error, matching `handle_append`'s behavior).
 
-For a text (`BM25InvertedFile`/`InvertedFile`) project, [`index!`](@ref index!(::EmbeddedEngine, ::Any))
-must already have been called on `handle` -- there is no implicit auto-training on the
-first batch here anymore; an untrained text engine errors on the very first item instead
-of silently dropping every item forever (see `IndexEngine.add_item!`'s docstring).
-
-For a dense (`SearchGraph`) project, this only *stages* raw vectors -- durably (see
-"Performance" below) but without any graph-linking work -- so freshly appended items are
-*not* yet visible to [`search`](@ref)/[`allknn`](@ref)/etc. until an explicit
-[`index!`](@ref index!(::EmbeddedEngine)) call catches up the backlog. Every other engine
-kind (`GenericEngine`/`BM25Engine`/`InvertedFileEngine`) still indexes synchronously, on
-every `add_item!`, exactly as before -- only `SearchGraph` has this stage-then-index
-split, since it's the only one `SimilaritySearch.jl` itself supports it for (see
-`IndexEngine.index!(engine::IndexEngine.SearchGraphEngine)`'s docstring).
+For a dense (`SearchGraph`) project or a text (`BM25InvertedFile`/`InvertedFile`) project
+alike, this only *stages* items -- durably (see "Performance" below) but without any
+graph-linking/encoding work -- so freshly appended items are *not* yet visible to
+[`search`](@ref)/[`ftsearch`](@ref)/[`allknn`](@ref)/etc. until an explicit
+[`index!`](@ref index!(::EmbeddedEngine)) call catches up the backlog (for a text
+project's very first `index!` call, that also trains its `Vocabulary` -- there's no
+separate training entry point or "must be trained first" error here anymore).
+`GenericEngine` (`ExhaustiveSearch`/`ParallelExhaustiveSearch`) is the one engine kind that
+still indexes synchronously, on every `add_item!`, since it has no staging split at all
+(see `IndexEngine.index!(engine::IndexEngine.SearchGraphEngine)`'s docstring for why
+`SimilaritySearch.jl`/`TextSearch.jl` support the split for the other three).
 
 Persistence: for a dense project, every batch's raw vectors are appended directly to the
 project's `MMapMatrixDatabase` (see [`index!`](@ref index!(::EmbeddedEngine))'s docstring
-and the "Performance" note below) right here, at stage time -- not via `on_change`, unlike
-adjacency, since a vector is already durable-worthy the moment it's staged, long before any
-graph-linking happens. Every other engine kind reports its own insertions through
-`IndexEngine.CallbackLog`: `BM25Engine`/`InvertedFileEngine` persist incrementally,
-synchronously, inside that callback (see [`_invertedfile_on_change`](@ref));
+and the "Performance" note below); for a text project, every batch's raw text is appended
+directly to its own `Persistence.StagedTextStore` -- both happen right here, at stage
+time, not via `on_change`, since an item is already durable-worthy the moment it's staged,
+long before any graph-linking/encoding happens. Once an [`index!`](@ref index!(::EmbeddedEngine))
+call actually encodes/indexes a text project's backlog, `IndexEngine.CallbackLog` persists
+each newly-encoded object incrementally (see [`_invertedfile_on_change`](@ref)).
 `GenericEngine` instead flags a pending whole-index save that happens right after each
 `add_item!` call returns (see [`_maybe_flush_index!`](@ref)).
 
@@ -371,12 +396,16 @@ function append_items!(handle::EmbeddedEngine, items)
     is_text = IndexEngine.is_text_index(engine)
     is_dense_graph = engine isa IndexEngine.SearchGraphEngine
     staged_vectors = Vector{Float32}[]
+    staged_texts = String[]
+    text_sp = is_text ? _current_size(engine) + 1 : 0
 
     inserted = 0
     for item in items
         if is_text
             haskey(item, "text") || continue
-            IndexEngine.add_item!(engine, item["text"])
+            text = String(item["text"])
+            IndexEngine.add_item!(engine, text)
+            push!(staged_texts, text)
         else
             haskey(item, "vector") || continue
             v = convert(Vector{Float32}, item["vector"])
@@ -398,6 +427,10 @@ function append_items!(handle::EmbeddedEngine, items)
         SimilaritySearch.append_items!(handle.dense_vectors[], staged_vectors)
     end
 
+    if is_text && !isempty(staged_texts)
+        Persistence.append_staged_texts!(Persistence.open_staged_text_store(project.db), text_sp, staged_texts)
+    end
+
     return inserted
 end
 
@@ -405,13 +438,16 @@ end
     _current_size(engine::IndexEngine.AbstractSearchEngine) -> Int
 
 The count that determines the next item's `_id`: for a `SearchGraphEngine`, the number of
-*staged* vectors (`length(database(engine.index))`, i.e. `engine.index.db`'s own count) --
-since [`append_items!`](@ref) only stages, `length(engine.index)` itself (the
-graph-indexed count) would lag behind and hand out the wrong, already-taken `_id`s. Every
-other engine kind still indexes synchronously on `add_item!`, so `length(engine.index)`
-already reflects the item just added, same as before.
+*staged* vectors (`length(database(engine.index))`, i.e. `engine.index.db`'s own count),
+and for a `BM25Engine`/`InvertedFileEngine`, the number of *staged* texts
+(`length(engine.staged)`) -- since [`append_items!`](@ref) only stages for any of these
+three, `length(engine.index)` itself (the encoded/indexed count) would lag behind and hand
+out the wrong, already-taken `_id`s. `GenericEngine` (`ExhaustiveSearch`/
+`ParallelExhaustiveSearch`) is the one engine kind that still indexes synchronously on
+`add_item!`, so `length(engine.index)` already reflects the item just added there.
 """
 _current_size(engine::IndexEngine.SearchGraphEngine) = length(SimilaritySearch.database(engine.index))
+_current_size(engine::Union{IndexEngine.BM25Engine, IndexEngine.InvertedFileEngine}) = length(engine.staged)
 _current_size(engine::IndexEngine.AbstractSearchEngine) = length(engine.index)
 
 function _search_with_filter(engine::IndexEngine.AbstractSearchEngine, project::Project.ProjectManager, query, k::Int, predicate; minrecall=nothing)
@@ -452,7 +488,7 @@ function _hydrate_results(project::Project.ProjectManager, res_knn)
 end
 
 """
-    search(handle::EmbeddedEngine, vector; k=10, filter=nothing) -> Vector{<:NamedTuple}
+    search(handle::EmbeddedEngine, vector, k::Int=10; filter=nothing) -> Vector{<:NamedTuple}
 
 Dense vector search, hydrated with each hit's original id (mirrors `Server.handle_search`
 minus the HTTP/telemetry/pagination machinery). `filter`, if given, is a
@@ -481,7 +517,7 @@ search. Ignored for any other engine kind.
 
 Returns a `Vector` of `(id, doc_id, distance, deleted)` named tuples.
 """
-function search(handle::EmbeddedEngine, vector; k::Int=10, filter=nothing, minrecall=nothing)
+function search(handle::EmbeddedEngine, vector, k::Int=10; filter=nothing, minrecall=nothing)
     query = convert(Vector{Float32}, vector)
     needs_save = minrecall !== nothing && handle.engine isa IndexEngine.SearchGraphEngine && isempty(handle.engine.opt_beamsearch)
     res_knn = filter === nothing ?
@@ -492,16 +528,71 @@ function search(handle::EmbeddedEngine, vector; k::Int=10, filter=nothing, minre
 end
 
 """
-    ftsearch(handle::EmbeddedEngine, text; k=10) -> Vector{<:NamedTuple}
+    ftsearch(handle::EmbeddedEngine, text, k::Int=10; policy=QueryPolicy()) -> Vector{<:NamedTuple}
 
 Text search against a bm25/weighted-inverted-file project (mirrors `Server.handle_ftsearch`).
 Same soft-delete marker behavior as [`search`](@ref); `minrecall` is accepted only for
 parity with `search` and is a no-op here since no text engine has a `BeamSearch` to
 calibrate.
+
+`policy::TextSearch.QueryPolicy` says how to treat the query: whether to correct its
+spelling against the project's vocabulary (`correction=:auto` by default, `:off` to search
+exactly what was typed, `:always` to bridge every token) and whether to widen it with the
+profile's query-expansion network (`expansion`, `expansion_k`). Both are guesses about
+intent rather than properties of the index, which is why they travel with the query instead
+of being fixed at project creation. The default is inert for a project fitted under the
+default `TextConfig()`, whose policy already folds case and diacritics; it starts mattering
+for one built on a profile that preserves them. Use [`ftexplain`](@ref) to see what a query
+was actually searched as.
 """
-function ftsearch(handle::EmbeddedEngine, text::AbstractString; k::Int=10, minrecall=nothing)
-    res_knn = IndexEngine.search_live(handle.engine, text, k; minrecall)
+function ftsearch(handle::EmbeddedEngine, text::AbstractString, k::Int=10; minrecall=nothing, policy::QueryPolicy=QueryPolicy())
+    res_knn = IndexEngine.search_live(handle.engine, text, k; minrecall, policy)
     return _hydrate_results(handle.project, res_knn)
+end
+
+"""
+    text_profile(handle::EmbeddedEngine) -> Union{Nothing, TextSearch.TextProfile}
+
+The text model this project searches with: the one handed to [`create_project`](@ref), or the
+one its first [`index!`](@ref index!(::EmbeddedEngine)) call fitted from the staged corpus.
+`nothing` for a dense project, and for a text project that has not been indexed yet.
+
+Worth reaching for after a `FitFromCorpus`: `save_profile(dir, text_profile(h))` writes the
+fitted vocabulary and weights out as a portable profile, so a sibling project can be created
+against the same model (`textmodel=BaseProfile(load_profile(dir))`) instead of fitting its own
+and ending up with a different vocabulary over the same language.
+
+Written as an explicit extension of `IndexEngine.text_profile` rather than as a bare
+`text_profile(handle::EmbeddedEngine) = ...`. The bare form compiles -- `using .IndexEngine`
+makes the name available but not yet resolved in this scope, so Julia quietly creates a
+*second*, unrelated function shadowing the first -- and that is the hazard, not a convenience:
+the two would then be one name with two disjoint method tables, and which one a call site got
+would depend on whether it had already touched the imported binding. Extending keeps a single
+generic function whose methods cover an engine and a handle alike (the same reasoning as the
+`open_project` note in `SimilaritySearchEngine.jl`).
+"""
+IndexEngine.text_profile(handle::EmbeddedEngine) = IndexEngine.text_profile(handle.engine)
+
+"""
+    ftexplain(handle::EmbeddedEngine, text; policy=QueryPolicy()) -> Vector{String}
+
+One human-readable line per query token that [`ftsearch`](@ref) would search as something
+other than what was typed -- `"musica appears in only 9 documents, searched as música
+instead"` -- and an empty vector when the query is searched verbatim.
+
+A search that silently substitutes what was asked for owes the person a way to see it: this
+is the "showing results for ..." half, and `QueryPolicy(correction=:off)` is the "search
+instead for ..." half. Resolves the query the same way `ftsearch` does under the same
+`policy`, so the two never disagree; it does not run the search itself.
+
+Errors for a project whose text engine has not been trained yet, and for a dense project
+(which has no query text to resolve).
+"""
+function ftexplain(handle::EmbeddedEngine, text::AbstractString; policy::QueryPolicy=QueryPolicy())
+    engine = handle.engine
+    IndexEngine.is_text_index(engine) ||
+        error("ftexplain is only meaningful for a text project (BM25InvertedFile/InvertedFile); this one is $(typeof(engine))")
+    return TextSearch.explain(IndexEngine.resolve_query(engine, text, policy))
 end
 
 """

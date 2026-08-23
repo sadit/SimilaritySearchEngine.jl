@@ -14,7 +14,15 @@ SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 TextSearch = "7f6f6c8a-3b03-11e9-223d-e7d88259bd6c"
 
 [compat]
+Avro = "1.1"
+Dates = "1"
+JSON = "1.7"
 JSON3 = "1.14.3"
+RocksDB = "1"
+SimilaritySearch = "1.2"
+SparseArrays = "1"
+TextSearch = "1.1"
+julia = "1.10"
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"

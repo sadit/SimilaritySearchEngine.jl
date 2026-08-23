@@ -7,48 +7,43 @@ using TextSearch
 using ..Schema
 
 export EngineStore, ENGINE_CF, open_engine_store, save_field!, load_field, has_field, save_fields!
-export append_block!, load_blocks
 export AdjacencyStore, ADJACENCY_CF, open_adjacency_store, save_neighbors!, load_neighbors
 export DENSE_VECTORS_FILENAME, dense_vectors_path, open_dense_vectors, load_dense_vector_blocks
 export InvertedFileObjectStore, INVFILE_DB_CF, open_invertedfile_object_store, append_objects!, load_object_blocks
+export StagedTextStore, STAGED_TEXT_CF, open_staged_text_store, append_staged_texts!, load_staged_text_blocks
 export DumpRecord, write_dump_records, read_dump_records
 
 # ---------------------------------------------------------
 # Shared low-level primitives, operating directly on a RocksDBDict -- every named store
 # below (EngineStore, AdjacencyStore, InvertedFileObjectStore) is a thin wrapper around
-# one of these, scoped to its own column family, so this is the one place the actual
-# key layout (plain keys, or a `"<prefix>:block:<0-padded index>"` append-only sequence
-# plus a small `"<prefix>:block_count"` counter) is defined.
+# one of these, scoped to its own column family.
 # ---------------------------------------------------------
 
 _save_key!(dict, key::String, value) = (dict[key] = value; nothing)
 _load_key(dict, key::String, default=nothing) = get(dict, key, default)
 
-function _append_block!(dict, prefix::String, value)
-    count = _load_key(dict, "$(prefix):block_count", 0) + 1
-    _save_key!(dict, "$(prefix):block:$(lpad(count, 12, '0'))", value)
-    _save_key!(dict, "$(prefix):block_count", count)
-    return count
-end
-
 """
     _be_key(id::Integer) -> Vector{UInt8}
 
 Big-endian (`hton`) bytes of `UInt32(id)`, for a `RocksDBDict{Vector{UInt8},Any}` keyed
-directly by a batch's/object's own numeric id (see [`DenseVectorStore`](@ref)/
-[`InvertedFileObjectStore`](@ref)) instead of a zero-padded decimal string. Big-endian
-specifically (*not* `reinterpret(UInt8, [UInt32(id)])`, which is native/little-endian on
-every platform this runs on) so that RocksDB's own byte-lexicographic key ordering
-already matches ascending numeric order -- iterating the column family directly (see
-`RocksDBDict`'s own "iteration order is sorted key order") yields entries in the right
-sequence with no separate block-count key and no re-sorting after the fact.
+directly by a batch's/object's own numeric id (see [`InvertedFileObjectStore`](@ref))
+instead of a composite `"<prefix>:block:<0-padded index>"` string plus a separate
+`"<prefix>:block_count"` counter key. Neither piece of that older scheme is needed once a
+store has its *own* dedicated column family and keys each block by its own numeric
+position: there is no `prefix` to disambiguate (nothing else shares this column family)
+and no counter to maintain, since `getindex`/iteration already needs the block's
+position, not a count -- big-endian specifically (*not*
+`reinterpret(UInt8, [UInt32(id)])`, which is native/little-endian on every platform this
+runs on) so that RocksDB's own byte-lexicographic key ordering already matches ascending
+numeric order -- iterating the column family directly (see `RocksDBDict`'s own "iteration
+order is sorted key order") yields entries in the right sequence with no re-sorting after
+the fact. `EngineStore` still can't use this scheme for its own per-field keys, since it
+*does* share one column family across every engine struct field -- but nothing in this
+package currently needs an appending/growing field there (a `SearchGraphEngine`'s vectors
+now live in their own `MMapMatrixDatabase` file, see below, not RocksDB blocks), so that
+generic composite-key scheme has been removed rather than kept around unused.
 """
 _be_key(id::Integer) = collect(reinterpret(UInt8, [hton(UInt32(id))]))
-
-function _load_blocks(dict, prefix::String)
-    count = _load_key(dict, "$(prefix):block_count", 0)
-    return [_load_key(dict, "$(prefix):block:$(lpad(i, 12, '0'))") for i in 1:count]
-end
 
 # ---------------------------------------------------------
 # Per-field engine persistence (RocksDB column family)
@@ -89,62 +84,23 @@ see `Project.open_project`'s `extra_cf_names`) as an [`EngineStore`](@ref).
 open_engine_store(db::RocksDB.DB) = EngineStore(RocksDB.RocksDBDict{String, Any}(db, ENGINE_CF))
 
 """
-    save_key!(store::EngineStore, key::String, value)
-
-Writes just `value` under the literal RocksDB key `key`. Low-level counterpart of
-[`save_field!`](@ref) (which just does `save_key!(store, String(field), value)`) for
-callers that need a dynamically-built key -- see [`append_block!`](@ref).
-"""
-save_key!(store::EngineStore, key::String, value) = _save_key!(store.dict, key, value)
-
-"""
-    load_key(store::EngineStore, key::String, default=nothing)
-
-Reads back the value last saved under the literal RocksDB key `key`, or `default` if it
-was never saved. Low-level counterpart of [`load_field`](@ref).
-"""
-load_key(store::EngineStore, key::String, default=nothing) = _load_key(store.dict, key, default)
-
-"""
     save_field!(store::EngineStore, field::Symbol, value)
 
 Writes just `value` under `field`'s key, leaving every other field's key untouched.
 """
-save_field!(store::EngineStore, field::Symbol, value) = save_key!(store, String(field), value)
+save_field!(store::EngineStore, field::Symbol, value) = _save_key!(store.dict, String(field), value)
 
 """
     load_field(store::EngineStore, field::Symbol, default=nothing)
 
 Reads back the value last saved under `field`'s key, or `default` if it was never saved.
 """
-load_field(store::EngineStore, field::Symbol, default=nothing) = load_key(store, String(field), default)
+load_field(store::EngineStore, field::Symbol, default=nothing) = _load_key(store.dict, String(field), default)
 
 """
     has_field(store::EngineStore, field::Symbol) -> Bool
 """
 has_field(store::EngineStore, field::Symbol) = haskey(store.dict, String(field))
-
-"""
-    append_block!(store::EngineStore, field::Symbol, value) -> Int
-
-Appends `value` as a new, never-again-rewritten block in `field`'s sequence (key
-`"<field>:block:<0-padded index>"`), bumping the small `"<field>:block_count"` counter
-alongside it, and returns the assigned (1-based) block index. Unlike [`save_field!`](@ref)
-(one key, always overwritten) this is for state that grows by *appending* -- e.g. a
-`SearchGraph`'s insertion-range vectors blocks (see `IndexEngine.searchgraph_vectors`;
-its per-object adjacency is a separate, dedicated [`AdjacencyStore`](@ref) instead) --
-where writing the new block must never require rewriting any earlier one. See
-[`load_blocks`](@ref) to read the whole sequence back in order.
-"""
-append_block!(store::EngineStore, field::Symbol, value) = _append_block!(store.dict, String(field), value)
-
-"""
-    load_blocks(store::EngineStore, field::Symbol) -> Vector
-
-Every block [`append_block!`](@ref) has written for `field`, in the order they were
-appended.
-"""
-load_blocks(store::EngineStore, field::Symbol) = _load_blocks(store.dict, String(field))
 
 """
     save_fields!(store::EngineStore, fields::NamedTuple)
@@ -318,7 +274,7 @@ split to worry about -- `push_item!` fully finalizes each object's contribution 
 `LOG` even fires (see `IndexEngine.CallbackLog`'s docstring), so what's saved here is
 simply every object ever indexed, in insertion order; reloading rebuilds the whole index
 by replaying them through the library's own `push_item!` again (see
-`IndexEngine.build_bm25invertedfile`/`build_invertedfile`) rather than trying to persist
+`IndexEngine.build_bm25invertedfile`/`build_textinvertedfile`) rather than trying to persist
 posting lists directly.
 
 !!! warning "Scaling: a rebuild-by-reinsertion design, not an on-disk index format"
@@ -331,9 +287,9 @@ posting lists directly.
     different architecture this project does not attempt.
 
 Keyed directly by each block's own starting id (`sp`, see [`_be_key`](@ref)) rather than a
-generic block-count-and-prefix scheme -- same reasoning as [`DenseVectorStore`](@ref):
-its own dedicated CF has no need for that extra indirection, the id *is* the key. Unlike
-`DenseVectorStore`'s block (a `(sp, ep, vectors)` NamedTuple that carries its own `sp`),
+generic block-count-and-prefix scheme: its own dedicated column family has no need for
+that extra indirection, the id *is* the key, and iterating the column family already
+yields blocks back in ascending `sp` order for free (see [`_be_key`](@ref)'s docstring).
 `IndexEngine.invertedfile_objects(index, sp, ep)` returns a plain `Vector` with no `sp` of
 its own, so [`append_objects!`](@ref) takes `sp` as a separate argument instead.
 
@@ -373,6 +329,82 @@ plain iteration over `store.dict` already comes back in ascending `sp` order (se
 [`_be_key`](@ref)'s docstring), so this needs no separate counter key or re-sorting.
 """
 load_object_blocks(store::InvertedFileObjectStore) = [objects for (_, objects) in store.dict]
+
+# ---------------------------------------------------------
+# Staged (raw, not-yet-encoded) text persistence for BM25Engine/InvertedFileEngine -- their
+# own RocksDB column family, holding what append_items! stages before any Vocabulary
+# exists to encode it against. Structurally identical to InvertedFileObjectStore (same
+# block-keyed-by-sp scheme, see _be_key) but a different concern: InvertedFileObjectStore
+# holds already-encoded objects (bags-of-words/SparseVectors), written from inside
+# CallbackLog once push_item! has fully indexed them; StagedTextStore holds plain raw
+# strings, written directly by embedded.jl's append_items! at stage time -- durable the
+# instant they're staged, before any Vocabulary/encoding work happens, the same treatment
+# append_items! already gives a SearchGraphEngine's raw vectors (see DENSE_VECTORS_FILENAME
+# above), just via RocksDB instead of an mmap file since text isn't fixed-size Float32 data.
+# ---------------------------------------------------------
+
+"""
+    STAGED_TEXT_CF
+
+Name of the RocksDB column family a [`StagedTextStore`](@ref) is backed by. Pass this in
+`Project.open_project`'s `extra_cf_names` alongside `ENGINE_CF`/`ADJACENCY_CF`/
+`INVFILE_DB_CF`, for the same reason (every column family that exists on disk must be
+listed on every open, not just the first).
+"""
+const STAGED_TEXT_CF = "staged_text"
+
+"""
+    StagedTextStore
+
+An append-only sequence of raw, not-yet-encoded text blocks for one `BM25Engine`/
+`InvertedFileEngine`, backed by its own RocksDB column family ([`STAGED_TEXT_CF`](@ref)) --
+the text-engine counterpart of a `SearchGraphEngine`'s `dense_vectors.mmapdb`: every item
+`add_item!`/`append_items!` has ever staged (see `IndexEngine.BM25Engine`/
+`IndexEngine.InvertedFileEngine`'s `staged` field), whether or not
+`IndexEngine.index!(engine::IndexEngine.BM25Engine)` has caught it up into the real
+`BM25InvertedFile`/`InvertedFile` yet.
+
+Keyed by each block's own starting position (`sp`, see [`_be_key`](@ref)) exactly like
+[`InvertedFileObjectStore`](@ref) -- same reasoning: no prefix/counter needed, and
+iteration already comes back in ascending order.
+
+Shares its underlying `RocksDB.DB` connection, same as [`EngineStore`](@ref); no separate
+`close` of its own to call.
+"""
+struct StagedTextStore
+    dict::RocksDB.RocksDBDict{Vector{UInt8}, Any}
+end
+
+"""
+    open_staged_text_store(db::RocksDB.DB) -> StagedTextStore
+
+Wraps `db`'s [`STAGED_TEXT_CF`](@ref) column family (which must already be open on `db` --
+see `Project.open_project`'s `extra_cf_names`) as a [`StagedTextStore`](@ref).
+"""
+open_staged_text_store(db::RocksDB.DB) = StagedTextStore(RocksDB.RocksDBDict{Vector{UInt8}, Any}(db, STAGED_TEXT_CF))
+
+"""
+    append_staged_texts!(store::StagedTextStore, sp::Integer, texts::Vector{String})
+
+Saves `texts` (one `append_items!` batch's worth of freshly staged raw text) under `sp`
+as key (see [`_be_key`](@ref)) -- never rewriting any earlier block. See
+[`load_staged_text_blocks`](@ref) to read the whole sequence back in order.
+"""
+function append_staged_texts!(store::StagedTextStore, sp::Integer, texts::Vector{String})
+    store.dict[_be_key(sp)] = texts
+    return nothing
+end
+
+"""
+    load_staged_text_blocks(store::StagedTextStore) -> Vector{Vector{String}}
+
+Every block [`append_staged_texts!`](@ref) has written, in the order they were appended --
+a plain iteration over `store.dict` already comes back in ascending `sp` order (see
+[`_be_key`](@ref)'s docstring), so this needs no separate counter key or re-sorting. A
+caller wants `vcat(load_staged_text_blocks(store)...)` for the flat, restore-ready
+`Vector{String}` `IndexEngine.restore_engine` expects as `state.staged`.
+"""
+load_staged_text_blocks(store::StagedTextStore) = [texts for (_, texts) in store.dict]
 
 # ---------------------------------------------------------
 # Avro Serialization for Projects (Dump / Load, PLAN.md §4.4)

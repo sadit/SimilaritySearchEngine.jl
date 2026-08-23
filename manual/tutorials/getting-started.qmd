@@ -11,7 +11,8 @@ This tutorial walks through the embedded API end to end, using paragraphs from *
 with LSI-derived embeddings, full-text search with BM25 and TF-IDF, soft deletes, filtering,
 calibrating for a target recall, closing/reopening a project, and the "expensive", whole-dataset
 operations (`allknn`, `fft`, `closestpairs`, `bichromatic_kclosestpairs`) that only make sense
-once you actually have a project's worth of data to run them against.
+once you actually have a project's worth of data to run them against. For a shorter,
+bare-minimum first look, see the repository's [README](../../README.md).
 
 ## Installation
 
@@ -117,7 +118,7 @@ durably, but without doing any of the (expensive) graph-connection work. Nothing
 searchable yet:
 
 ```julia
-search(h, vectorize(lsi, "the monster and its creator"); k=5)  # Vector{...}[] -- empty, nothing indexed yet
+search(h, vectorize(lsi, "the monster and its creator"), 5)  # Vector{...}[] -- empty, nothing indexed yet
 ```
 
 `index!` explicitly builds the graph over whatever's been staged since the last call (or
@@ -135,7 +136,7 @@ paragraphs:
 
 ```julia
 query = vectorize(lsi, "the monster and its creator")
-results = search(h, query; k=5)
+results = search(h, query, 5)
 for r in results
     println(r.id, " => distance ", r.distance)
 end
@@ -147,7 +148,7 @@ free-form `meta` (whatever else you appended it with) — to restrict results wi
 building a separate query language:
 
 ```julia
-mentions_someone = search(h, query; k=5, filter = (record, meta) -> !isempty(record.keywords))
+mentions_someone = search(h, query, 5; filter = (record, meta) -> !isempty(record.keywords))
 ```
 
 ### Soft deletes
@@ -159,7 +160,7 @@ search result's `doc_id` field), not the `"doc_id"` you supplied when appending:
 ```julia
 delete_item!(h, 1)  # internal _id 1, not any "doc_id"/metadata value
 
-results = search(h, query; k=5)
+results = search(h, query, 5)
 first(results).deleted  # true if internal _id 1 made the top-5 candidates
 ```
 
@@ -175,7 +176,7 @@ instead of the constructor's default:
 
 ```julia
 calibrate!(h; levels=[0.8, 0.9, 0.95, 0.97])
-precise = search(h, query; k=5, minrecall=0.95)
+precise = search(h, query, 5; minrecall=0.95)
 ```
 
 It needs a reasonably sized project to have anything meaningful to search against and
@@ -190,7 +191,7 @@ queries.
 close_project!(h)
 
 h2 = open_project(workdir, "frankenstein_dense")
-same_query_results = search(h2, query; k=5)
+same_query_results = search(h2, query, 5)
 close_project!(h2)
 ```
 
@@ -214,26 +215,27 @@ with an explicit `minrecall` on both sides.
 ## Full-text search with BM25
 
 Text projects work the same way as dense ones, just with a `"text"` key instead of
-`"vector"`, and `ftsearch` instead of `search`. `BM25InvertedFile` scores via BM25 over raw
+`"vector"`, and `ftsearch` instead of `search` — and, since the redesign that decoupled
+staging from indexing, the *exact same* `append_items!`(stage)/`index!`(build) shape as a
+dense project, not a separate training step. `BM25InvertedFile` scores via BM25 over raw
 bags-of-words:
-
-A text project needs an explicit, one-time [`index!`](#dense-vectors-with-lsi-searchgraph)
-call of its own first — the *training* kind, not the graph-catch-up kind: it builds the
-`Vocabulary` (and the real `BM25InvertedFile`) from a representative sample of your text.
-`append_items!` errors if you skip this:
 
 ```julia
 using TextSearch: BM25InvertedFile
 
-hb = create_project(workdir, "frankenstein_bm25"; index_type=BM25InvertedFile)
-index!(hb, [it["text"] for it in items[1:200]])  # trains the vocabulary -- once, explicitly
+# `textmodel` is required for a text project -- see the next section for what the
+# alternative is and why neither is a default
+hb = create_project(workdir, "frankenstein_bm25"; index_type=BM25InvertedFile,
+                    textmodel=FitFromCorpus())
 
 append_items!(hb, [
     Dict("text" => it["text"], "doc_id" => it["doc_id"], "keywords" => it["keywords"])
     for it in items[1:200]
-])
+])  # only stages raw text -- nothing searchable yet
 
-hits = ftsearch(hb, "monster creature fear"; k=5)
+index!(hb)  # first call: fits the TextProfile from everything staged so far, then indexes it
+
+hits = ftsearch(hb, "monster creature fear", 5)
 for r in hits
     println(r.id, " => distance ", r.distance)
 end
@@ -241,32 +243,141 @@ end
 close_project!(hb)
 ```
 
-Unlike the dense case above, a text engine's `append_items!` still indexes synchronously,
-right away — there's no staged-but-not-yet-searchable state for text projects, only the
-training step is a separate, explicit gate. Tokens never seen at training time are
-out-of-vocabulary on every later append (a `TextSearch.jl` limitation, not a bug in this
-package), so make sure your training corpus is representative — it doesn't have to be the
-exact same batch you go on to insert, just similar enough to cover the vocabulary you'll
-need.
+`index!`'s *first* call on a text project doubles as training: it fits a `TextProfile`
+(vocabulary, tf-idf weights, lineage) and builds the real `BM25InvertedFile` from every item
+staged so far, then encodes/indexes that same backlog — there's no separate training entry
+point or "must be trained first" error. Every later `index!` call just catches up whatever's
+been staged since, exactly like the dense case: idempotent, safe to call repeatedly, a cheap
+no-op when nothing new is staged.
+
+Tokens never seen at that first `index!` call are out-of-vocabulary on every later append
+and silently dropped, so what you've staged before it has to be representative of the text
+you'll keep appending. `text_profile(hb)` hands you the fitted model, and `save_profile` writes
+it out for reuse — but the real fix for a project that keeps growing is the next section.
+
+## Choosing the text model: `FitFromCorpus` and `BaseProfile`
+
+`textmodel` above was not decoration. Creating a text project requires it, and there is no
+default:
+
+```julia
+create_project(workdir, "oops"; index_type=BM25InvertedFile)
+# ERROR: a text project (BM25InvertedFile) needs an explicit `textmodel`, because the two
+#        ways to get a vocabulary are not interchangeable and one of them cannot be undone
+#        later: ...
+```
+
+The two forms are opposite answers to *where the vocabulary comes from*, not variations on
+one setting.
+
+### `FitFromCorpus` — deliberately no base profile
+
+Fit the model from this project's own staged corpus, at the first `index!` call. This is the
+explicit way to say "I have nothing pre-fitted", and it accepts the consequence above: the
+vocabulary is frozen at that call.
+
+Its argument is the corpus-independent policy — normalization, tokenization, and the
+`language` the corpus is in. The default `TextConfig()` lowercases and strips diacritics,
+which is usually right for English and throws away a distinction that matters in Spanish:
+
+```julia
+using TextSearch: NormalizationConfig
+
+hes = create_project(workdir, "noticias"; index_type=BM25InvertedFile,
+    textmodel=FitFromCorpus(TextConfig(normalization=NormalizationConfig(lc=false, del_diac=false),
+                                       language=:es);
+                            min_ndocs=3, stopwords=0.9))
+```
+
+The fit options ride on the spec itself, so they cannot be handed to the other form by
+mistake:
+
+| option | what it does |
+|---|---|
+| `local_weighting`, `global_weighting` | the `VectorModel` weighting scheme; defaults to `TfWeighting()`/`IdfWeighting()` |
+| `min_ndocs`, `min_occs` | drop a token seen in fewer than this many documents, or this many times overall. The hapax tail is most of a vocabulary's size and almost none of its retrieval value |
+| `stopwords` | a document-frequency threshold in `(0, 1]`; tokens above it are dropped and the vocabulary recounted without them. Costs a **second pass** over the corpus, since the counts change |
+
+### `BaseProfile` — a model fitted elsewhere
+
+```julia
+hp = create_project(workdir, "noticias_wiki"; index_type=BM25InvertedFile,
+                    textmodel=BaseProfile(load_profile("wiki20231101-es.zip")))
+```
+
+This trains the project before its first item is ever staged, which is the answer to the
+out-of-vocabulary limitation: the vocabulary covers the language rather than whichever batch
+happened to arrive first, so a term the tenth batch introduces is searchable like any other.
+It is also the only way to get a lemma map or a query-expansion network into a project —
+neither can be estimated from an indexing corpus without word embeddings or an LSI, which is
+what `TextSearch.jl`'s own `textsearch fit` pipeline exists to do. To load a profile but
+decline one of its artifacts, change the profile rather than the project:
+`BaseProfile(with_applied(p; lemmas=false))`.
+
+Either way the spec is persisted with the project and restored verbatim by `open_project`. And
+a project that fitted its own model can export it for the next one to index against:
+
+```julia
+save_profile("mi-perfil", text_profile(hes))
+create_project(workdir, "hermano"; index_type=BM25InvertedFile,
+               textmodel=BaseProfile(load_profile("mi-perfil")))
+```
+
+Passing a `textmodel` to a *dense* project is an error rather than an ignored keyword — there
+is no reading under which it does anything.
+
+## Correcting and widening a query
+
+A query travels with a `QueryPolicy`, because whether to correct a misspelling or widen a
+search is a guess about what the person meant — a property of the query, not of the index:
+
+```julia
+ftsearch(hes, "musica clasica", 5)                                   # :auto (the default)
+ftsearch(hes, "musica clasica", 5; policy=QueryPolicy(correction=:off))   # exactly as typed
+```
+
+Under `:auto`, a typed token is bridged to another spelling of the same word only where the
+evidence says the typed one is wrong — it is absent from the vocabulary, or far rarer than
+another spelling of it. On a corpus indexed with `del_diac=false`, `musica` reaches `música`
+and `clasica` reaches `clásica`; a correctly typed query is left alone. Under the default
+`TextConfig()` this is inert, since folding case and diacritics already collapsed those
+spellings into one.
+
+A search that silently substitutes what was asked for owes the caller a way to see it, which
+is `ftexplain`:
+
+```julia
+julia> ftexplain(hes, "musica clasica")
+2-element Vector{String}:
+ "musica is in 1 document against música's 60, so it reads as a misspelling; searched as música (variant) instead"
+ "clasica is in 1 document against clásica's 60, so it reads as a misspelling; searched as clásica (variant) instead"
+```
+
+`QueryPolicy` also carries `expansion`/`expansion_k`, which widen the query with the
+profile's query-expansion network — inert unless the project was created from a profile that
+carries one.
 
 ## Full-text search with TF-IDF
 
-`InvertedFile` is the other text index kind: a classic TF-IDF-weighted (`IdfWeighting` +
+`TextInvertedFile` is the other text index kind: a classic TF-IDF-weighted (`IdfWeighting` +
 `TfWeighting`) inverted index, cosine distance by default — a good baseline to compare
-against BM25's ranking on the same corpus:
+against BM25's ranking on the same corpus. (`InvertedFile` selects the same engine and is
+accepted interchangeably; `TextInvertedFile` is the name of what actually gets built.)
 
 ```julia
-using TextSearch: InvertedFile
+using TextSearch: TextInvertedFile
 
-ht = create_project(workdir, "frankenstein_tfidf"; index_type=InvertedFile)
-index!(ht, [it["text"] for it in items[1:200]])  # same explicit training step as BM25
+ht = create_project(workdir, "frankenstein_tfidf"; index_type=TextInvertedFile,
+                    textmodel=FitFromCorpus())
 
 append_items!(ht, [
     Dict("text" => it["text"], "doc_id" => it["doc_id"], "keywords" => it["keywords"])
     for it in items[1:200]
 ])
 
-hits = ftsearch(ht, "monster creature fear"; k=5)
+index!(ht)  # same stage-then-index shape as BM25 above
+
+hits = ftsearch(ht, "monster creature fear", 5)
 for r in hits
     println(r.id, " => distance ", r.distance)
 end
