@@ -1,0 +1,6 @@
+# Everything this directory produces is reproducible from prepare.jl, and none of it is
+# small: the corpora run to hundreds of megabytes, a fitted profile to hundreds more, and a
+# built project to a gigabyte. The recipe is versioned; the output is not.
+data/
+profiles/
+projects/
