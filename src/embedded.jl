@@ -11,6 +11,71 @@
 # not built here -- a documented follow-up (PLAN.md §8.5), not an oversight.
 
 """
+    SearchResult
+
+One hit: the internal `_id` the engine ranked, the caller's own `doc_id` for it (`nothing`
+when the item was appended without one, and when the hit is soft-deleted), the `distance`, and
+whether the item is soft-deleted.
+
+The field names match [`Schema.MetadataRecord`](@ref) on purpose. The named tuple this
+replaced called the caller's external id `id` and the internal one `doc_id` -- exactly
+backwards from the record, so `result.doc_id` and `record.doc_id` were different things and one
+of them was always the wrong guess.
+
+A soft-deleted hit is reported, not hidden (see [`IndexEngine.search_live`](@ref)), and carries
+no `doc_id`: its metadata is not accessible through search.
+"""
+struct SearchResult
+    _id::Int32
+    doc_id::Union{String,Nothing}
+    distance::Float32
+    deleted::Bool
+end
+
+"""
+    ExistsResult
+
+What [`exists`](@ref) reports per queried id: the id as asked for, whether a record was found,
+and whether it is soft-deleted.
+"""
+struct ExistsResult
+    id::String
+    exists::Bool
+    deleted::Bool
+end
+
+"""
+    KnnRow
+
+One row of [`allknn`](@ref): item `_id` and its `k` nearest neighbours, ascending by distance.
+`_id` and `neighbors` are internal ids -- 1-based positions in insertion order -- not `doc_id`s.
+"""
+struct KnnRow
+    _id::Int32
+    neighbors::Vector{Int32}
+    dists::Vector{Float32}
+end
+
+"""
+    FFTResult
+
+What [`fft`](@ref) returns: the chosen `centers`, each item's nearest center (`nn`) and
+distance to it (`dists`), the final covering radius `epsilon`, and the two cost counters
+`SimilaritySearch.fft` reports.
+
+A faithful, typed restatement of that function's own named tuple -- `epsilon` spelled out
+rather than `ε`, and ids as `Int32` to match every other id this package hands back.
+"""
+struct FFTResult
+    centers::Vector{Int32}
+    nn::Vector{Int32}
+    dists::Vector{Float32}
+    epsilon::Float32
+    costdists::Int
+    costblocks::Int
+end
+
+"""
     EmbeddedEngine
 
 Bundles everything a script needs to keep working against one open project: its directory
@@ -344,13 +409,17 @@ end
 """
     append_items!(handle::EmbeddedEngine, items) -> Int
 
-Appends a batch of items (each an `AbstractDict` with a `"vector"` key for a dense project
-or a `"text"` key for a text one, plus optional metadata fields) -- mirrors
-`Server.handle_append`'s exact insertion sequence, so a project written to via this
-embedded API stays consistent with what a CLI `describe`/`rebuild`, or a
-`similarity-search-serve` process that later opens the same directory, would see. Returns
-the number of items actually inserted (an item missing its required key is skipped, not
-an error, matching `handle_append`'s behavior).
+Appends a batch of typed items -- [`DenseItem`](@ref Schema.DenseItem)s for a dense project,
+[`TextItem`](@ref Schema.TextItem)s for a text one, each already carrying its own `doc_id`,
+`keywords`, `refs` and `meta`. Returns the number inserted, which is always `length(items)`:
+every item in the batch is inserted, and an item of the wrong kind for this project raises
+rather than being skipped.
+
+That is the change from the dictionary form this replaced, and it is worth being explicit
+about. Appending `Dict("txt" => "...")` to a text project used to insert nothing and report
+zero, because the item had no `"text"` key and the loop skipped it -- a typo in a key name
+produced a silent no-op and a count the caller had to think to check. There is no key to
+misspell now, and nothing is skipped.
 
 For a dense (`SearchGraph`) project or a text (`BM25InvertedFile`/`InvertedFile`) project
 alike, this only *stages* items -- durably (see "Performance" below) but without any
@@ -390,7 +459,20 @@ measured independently at roughly 1000x slower than an all-at-once call for the 
 count. Prefer fewer, larger calls to this function over many small ones whenever a caller
 controls the batching.
 """
-function append_items!(handle::EmbeddedEngine, items)
+# A project indexes one kind of thing, and the item type says which. Checked per item rather
+# than once per batch so a heterogeneous `Vector{AbstractItem}` is caught on the offending
+# element instead of on whatever happened to be first.
+_reject_item(engine, item) = error(
+    "this project indexes $(IndexEngine.is_text_index(engine) ? "text" : "vectors"), " *
+    "so it takes $(IndexEngine.is_text_index(engine) ? "TextItem" : "DenseItem")s; got a $(typeof(item))" *
+    (item.doc_id === nothing ? "" : " (doc_id $(item.doc_id))"))
+
+_check_item(engine, item::Schema.TextItem) =
+    IndexEngine.is_text_index(engine) || _reject_item(engine, item)
+_check_item(engine, item::Schema.DenseItem) =
+    IndexEngine.is_text_index(engine) && _reject_item(engine, item)
+
+function append_items!(handle::EmbeddedEngine, items::AbstractVector{<:Schema.AbstractItem})
     engine = handle.engine
     project = handle.project
     is_text = IndexEngine.is_text_index(engine)
@@ -399,25 +481,23 @@ function append_items!(handle::EmbeddedEngine, items)
     staged_texts = String[]
     text_sp = is_text ? _current_size(engine) + 1 : 0
 
-    inserted = 0
     for item in items
+        _check_item(engine, item)
+        p = Schema.payload(item)
+        IndexEngine.add_item!(engine, p)
         if is_text
-            haskey(item, "text") || continue
-            text = String(item["text"])
-            IndexEngine.add_item!(engine, text)
-            push!(staged_texts, text)
-        else
-            haskey(item, "vector") || continue
-            v = convert(Vector{Float32}, item["vector"])
-            IndexEngine.add_item!(engine, v)
-            is_dense_graph && push!(staged_vectors, v)
+            push!(staged_texts, p)
+        elseif is_dense_graph
+            push!(staged_vectors, p)
         end
         _maybe_flush_index!(handle)
 
         _id = Int32(_current_size(engine))
-        record, meta = Schema.split_item(_id, handle.schema_version, Dict{String,Any}(item))
-        put_metadata!(project, record, meta)
-        inserted += 1
+        # An empty `meta` is stored as nothing rather than as an empty JSON object: there is
+        # no difference to read back (`get_meta` answers `nothing` either way) and one of them
+        # is a write that never had to happen.
+        meta = isempty(item.meta) ? nothing : item.meta
+        put_metadata!(project, Schema.metadata_record(item, _id, handle.schema_version), meta)
     end
 
     if is_dense_graph && !isempty(staged_vectors)
@@ -431,8 +511,16 @@ function append_items!(handle::EmbeddedEngine, items)
         Persistence.append_staged_texts!(Persistence.open_staged_text_store(project.db), text_sp, staged_texts)
     end
 
-    return inserted
+    return length(items)
 end
+
+"""
+    append_items!(handle::EmbeddedEngine, item::Schema.AbstractItem) -> Int
+
+One item, for a caller that has one. Note the performance warning above: this is the
+single-item call, and for a dense project it costs one `fsync` for one vector.
+"""
+append_items!(handle::EmbeddedEngine, item::Schema.AbstractItem) = append_items!(handle, [item])
 
 """
     _current_size(engine::IndexEngine.AbstractSearchEngine) -> Int
@@ -472,23 +560,46 @@ function _search_with_filter(engine::IndexEngine.AbstractSearchEngine, project::
 end
 
 function _hydrate_results(project::Project.ProjectManager, res_knn)
-    results = NamedTuple[]
+    results = SearchResult[]
     for (_id, dist, deleted) in zip(res_knn.id, res_knn.dist, res_knn.deleted)
         if deleted
-            # Metadata for a soft-deleted _id is not accessible through search --
-            # report the deletion marker instead of the (hidden) original doc_id.
-            push!(results, (id=string(_id), doc_id=_id, distance=dist, deleted=true))
+            # Metadata for a soft-deleted _id is not accessible through search, so there is no
+            # doc_id to report -- `nothing`, rather than the internal id stringified into the
+            # external id's field, which is what the named-tuple version did and which a caller
+            # had no way to tell apart from a real doc_id that happened to look like a number.
+            push!(results, SearchResult(Int32(_id), nothing, Float32(dist), true))
             continue
         end
         record = get_metadata(project, _id)
-        orig_id = record === nothing ? string(_id) : something(record.doc_id, string(_id))
-        push!(results, (id=orig_id, doc_id=_id, distance=dist, deleted=false))
+        push!(results, SearchResult(Int32(_id), record === nothing ? nothing : record.doc_id,
+                                    Float32(dist), false))
     end
     return results
 end
 
 """
-    search(handle::EmbeddedEngine, vector, k::Int=10; filter=nothing) -> Vector{<:NamedTuple}
+    _resolve_record(project, raw_id) -> Union{Schema.MetadataRecord, Nothing}
+
+The record `raw_id` names, whether it is an internal `_id` or a caller-supplied `doc_id`.
+
+Tries the numeric reading first, because it is a direct key lookup, and falls back to
+`Project.find_by_doc_id`'s linear scan. A numeric-looking `doc_id` therefore resolves as an
+`_id` if one exists with that value -- an ambiguity inherent to accepting both in one argument,
+and the reason [`fetch_items`](@ref) and [`exists`](@ref) share this function rather than each
+inventing its own precedence.
+"""
+function _resolve_record(project::Project.ProjectManager, raw_id)
+    id_str = string(raw_id)
+    maybe_int = tryparse(Int, id_str)
+    if maybe_int !== nothing
+        record = get_metadata(project, maybe_int)
+        record === nothing || return record
+    end
+    find_by_doc_id(project, id_str)
+end
+
+"""
+    search(handle::EmbeddedEngine, vector, k::Int=10; filter=nothing) -> Vector{SearchResult}
 
 Dense vector search, hydrated with each hit's original id (mirrors `Server.handle_search`
 minus the HTTP/telemetry/pagination machinery). `filter`, if given, is a
@@ -504,7 +615,7 @@ alone would've been enough for a given predicate -- the common case (filtering o
 
 Without `filter`, this is a plain top-`k` search: soft-deleted candidates are not hidden
 or backfilled -- they're returned with `deleted=true` and no hydrated metadata (see
-[`IndexEngine.search_live`](@ref)), so `id` falls back to `string(doc_id)` for them.
+[`IndexEngine.search_live`](@ref)), so `doc_id` is `nothing` for them.
 Getting `k` *live* results back is a paging concern for a layer above this one (e.g. a
 server walking successive windows via a cursor), not something this function does itself.
 
@@ -515,7 +626,9 @@ triggers a one-off `calibrate!` over `IndexEngine.DEFAULT_MINRECALL_LEVELS` and 
 the resulting `opt_beamsearch` so that calibration isn't silently repeated on every future
 search. Ignored for any other engine kind.
 
-Returns a `Vector` of `(id, doc_id, distance, deleted)` named tuples.
+Returns a `Vector{`[`SearchResult`](@ref)`}` -- `_id` is the internal id, `doc_id` the
+caller's own, and note that those two field names sit the opposite way round from the named
+tuple this replaced.
 """
 function search(handle::EmbeddedEngine, vector, k::Int=10; filter=nothing, minrecall=nothing)
     query = convert(Vector{Float32}, vector)
@@ -528,7 +641,7 @@ function search(handle::EmbeddedEngine, vector, k::Int=10; filter=nothing, minre
 end
 
 """
-    ftsearch(handle::EmbeddedEngine, text, k::Int=10; policy=QueryPolicy()) -> Vector{<:NamedTuple}
+    ftsearch(handle::EmbeddedEngine, text, k::Int=10; policy=QueryPolicy()) -> Vector{SearchResult}
 
 Text search against a bm25/weighted-inverted-file project (mirrors `Server.handle_ftsearch`).
 Same soft-delete marker behavior as [`search`](@ref); `minrecall` is accepted only for
@@ -608,55 +721,53 @@ function delete_item!(handle::EmbeddedEngine, _id::Integer)
 end
 
 """
-    fetch_items(handle::EmbeddedEngine, ids) -> Vector{Dict{String,Any}}
+    fetch_items(handle::EmbeddedEngine, ids) -> Vector{Schema.StoredItem}
 
-Batch metadata retrieval by id -- each element of `ids` may be the internal `_id` or the
-caller-supplied `doc_id` (resolved via `Project.find_by_doc_id`). Mirrors
-`Server.handle_fetch`; an id that resolves to nothing is silently skipped. Each result
-merges the record's own fields (`_id`, `doc_id`, `schema_version`, `keywords`, `ref`)
-with its `meta` (fully decoded, see `Schema.decode_meta`'s `lazy=false` mode, since the
-caller gets a plain merged `Dict` back here, not something meant for further JSON3 use).
+Batch retrieval by id -- each element of `ids` may be the internal `_id` or the
+caller-supplied `doc_id` (see [`_resolve_record`](@ref)). Mirrors `Server.handle_fetch`; an id
+that resolves to nothing is skipped, so the result can be shorter than `ids`.
+
+Each item comes back whole: the record's fixed fields, its `meta` as a plain
+`Dict{String,Any}`, and `payload` -- the very text or vector that was indexed, read from the
+engine via [`IndexEngine.stored_payload`](@ref).
+
+Both halves of that are changes from what this used to return. It used to hand back a
+`Dict{String,Any}` per item with the record's fields merged into the decoded `meta`, which
+meant a `meta` key called `"doc_id"` silently overwrote the record's own, and it could not
+return the payload at all: `"text"` was a reserved key stripped on the way in, so a text
+project's fetch answered with everything about a paragraph except the paragraph.
 """
 function fetch_items(handle::EmbeddedEngine, ids)
     project = handle.project
-    results = Dict{String, Any}[]
+    results = Schema.StoredItem[]
     for raw_id in ids
-        record = nothing
-        maybe_int = tryparse(Int, string(raw_id))
-        maybe_int !== nothing && (record = get_metadata(project, maybe_int))
-        record === nothing && (record = find_by_doc_id(project, string(raw_id)))
+        record = _resolve_record(project, raw_id)
         record === nothing && continue
-
         meta = something(get_meta(project, record._id; lazy=false), Dict{String,Any}())
-        fields = Dict{String, Any}(
-            "_id" => record._id, "doc_id" => record.doc_id,
-            "schema_version" => record.schema_version,
-            "keywords" => record.keywords, "ref" => record.refs,
-        )
-        push!(results, merge(fields, meta))
+        push!(results, Schema.StoredItem(record,
+                                         IndexEngine.stored_payload(handle.engine, record._id),
+                                         meta))
     end
     return results
 end
 
 """
-    exists(handle::EmbeddedEngine, ids) -> Vector{<:NamedTuple}
+    exists(handle::EmbeddedEngine, ids) -> Vector{ExistsResult}
 
-For each id in `ids` (internal `_id` or caller-supplied `doc_id`), reports whether a
-record exists and, if so, whether it's been soft-deleted. Mirrors `Server.handle_exists`.
+For each id in `ids` (internal `_id` or caller-supplied `doc_id`, see
+[`_resolve_record`](@ref)), reports whether a record exists and, if so, whether it's been
+soft-deleted. Mirrors `Server.handle_exists`. One result per queried id, in order, including
+the ones that were not found -- unlike [`fetch_items`](@ref), which drops those.
 """
 function exists(handle::EmbeddedEngine, ids)
     project = handle.project
     engine = handle.engine
-    results = NamedTuple[]
+    results = ExistsResult[]
     for raw_id in ids
-        id_str = string(raw_id)
-        record = nothing
-        maybe_int = tryparse(Int, id_str)
-        maybe_int !== nothing && (record = get_metadata(project, maybe_int))
-        record === nothing && (record = find_by_doc_id(project, id_str))
+        record = _resolve_record(project, raw_id)
         found = record !== nothing
         deleted = found && (record._id in engine.deleted_ids)
-        push!(results, (id=id_str, exists=found, deleted=deleted))
+        push!(results, ExistsResult(string(raw_id), found, deleted))
     end
     return results
 end
@@ -678,14 +789,17 @@ function calibrate!(handle::EmbeddedEngine; levels=IndexEngine.DEFAULT_MINRECALL
 end
 
 """
-    allknn(handle::EmbeddedEngine; k=10) -> Vector{<:NamedTuple}
+    allknn(handle::EmbeddedEngine; k=10) -> Vector{KnnRow}
 
 Runs `SimilaritySearch.allknn` synchronously against the project's dense index -- no
 Job/spool machinery at all, unlike the HTTP API's `POST /api/v1/jobs/allknn` (PLAN.md
 §8.5's "runs in-process" framing for the embedded surface). Errors if the project is a text
-index or empty (mirrors `cli_handlers.jl`'s `_require_dense`). Returns one
-`(id, neighbors, dists)` named tuple per item, `id` being the item's 1-based position in
-insertion order (matching `execute_allknn`'s own output convention), not its `doc_id`.
+index or empty (mirrors `cli_handlers.jl`'s `_require_dense`). Returns one [`KnnRow`](@ref)
+per item, its `_id` being the item's 1-based position in insertion order (matching
+`execute_allknn`'s own output convention), not its `doc_id`.
+
+A row can be shorter than `k`: the library pads unfilled neighbour slots with id `0`, and this
+stops at the first one rather than reporting a neighbour that does not exist.
 """
 function allknn(handle::EmbeddedEngine; k::Int=10)
     engine = handle.engine
@@ -694,22 +808,22 @@ function allknn(handle::EmbeddedEngine; k::Int=10)
 
     ids, dists = SimilaritySearch.allknn(engine.index, engine.ctx, k)
     n = size(ids, 2)
-    results = NamedTuple[]
+    results = KnnRow[]
     for i in 1:n
-        neighbor_ids = Int[]
-        neighbor_dists = Float64[]
+        neighbor_ids = Int32[]
+        neighbor_dists = Float32[]
         for j in 1:k
             ids[j, i] == 0 && break
-            push!(neighbor_ids, Int(ids[j, i]))
-            push!(neighbor_dists, Float64(dists[j, i]))
+            push!(neighbor_ids, Int32(ids[j, i]))
+            push!(neighbor_dists, Float32(dists[j, i]))
         end
-        push!(results, (id=i, neighbors=neighbor_ids, dists=neighbor_dists))
+        push!(results, KnnRow(Int32(i), neighbor_ids, neighbor_dists))
     end
     return results
 end
 
 """
-    fft(handle::EmbeddedEngine, k::Integer; start::Int=0, verbose::Bool=false) -> NamedTuple
+    fft(handle::EmbeddedEngine, k::Integer; start::Int=0, verbose::Bool=false) -> FFTResult
 
 Runs `SimilaritySearch.fft`'s Farthest-First-Traversal synchronously against the
 project's dense index -- picks `k` well-separated items (e.g. as diverse candidate
@@ -720,16 +834,19 @@ raw vectors (`SimilaritySearch.distance`/`database` of the engine's index) rathe
 graph search, so it works the same regardless of how well-tuned (or untuned) the
 project's `BeamSearch` is.
 
-Returns exactly what `SimilaritySearch.fft` itself does (`centers`, `nn`, `dists`, `ε`,
-`costdists`, `costblocks` -- see its own docstring). `centers`/`nn` are internal `_id`s
-(1-based position in the index), not hydrated with metadata -- look them up yourself
-(e.g. via [`fetch_items`](@ref)) if you need it.
+Returns an [`FFTResult`](@ref) -- every field `SimilaritySearch.fft` itself reports (see its
+docstring), restated as a named type with `ε` spelled `epsilon` and ids as `Int32`, matching
+every other id this package hands back. `centers`/`nn` are internal `_id`s (1-based position in
+the index), not hydrated with metadata -- look them up yourself (e.g. via
+[`fetch_items`](@ref)) if you need it.
 """
 function fft(handle::EmbeddedEngine, k::Integer; start::Int=0, verbose::Bool=false)
     engine = handle.engine
     IndexEngine.is_text_index(engine) && error("fft requires a dense (vector) index, but this project is a text index")
     length(engine.index) == 0 && error("fft requires a non-empty dense index")
-    SimilaritySearch.fft(SimilaritySearch.distance(engine.index), SimilaritySearch.database(engine.index), k; start, verbose)
+    r = SimilaritySearch.fft(SimilaritySearch.distance(engine.index), SimilaritySearch.database(engine.index), k; start, verbose)
+    FFTResult(Int32.(r.centers), Int32.(r.nn), Float32.(r.dists), Float32(r.ε),
+              Int(r.costdists), Int(r.costblocks))
 end
 
 """

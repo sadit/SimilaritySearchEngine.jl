@@ -2,14 +2,98 @@ module Schema
 
 using JSON3
 
-export MetadataRecord
-export split_item, encode_meta, decode_meta, raw_meta
+export AbstractItem, DenseItem, TextItem, MetadataRecord, StoredItem
+export payload, metadata_record, encode_meta, decode_meta, raw_meta
+
+"""
+    AbstractItem
+
+Something to append to a project: [`DenseItem`](@ref) (a vector) or [`TextItem`](@ref) (a
+string), each carrying its own external id, tags, references and free-form metadata.
+
+This package takes typed values in and hands typed values back. It does not accept a
+JSON-shaped `Dict` as an item and pick it apart, which is what it used to do -- the caller
+splits its own data, because the caller is the one who knows what its fields mean. The single
+exception is `meta`, which is free-form by definition and stays a `Dict{String,Any}`. On the
+way out the same rule holds: [`StoredItem`](@ref), not a merged dictionary. The one raw-JSON
+path that remains is [`raw_meta`](@ref), reserved for an HTTP layer forwarding stored bytes it
+never inspects.
+
+Which concrete type an item is *is* the check. A project indexing vectors takes `DenseItem`s
+and a project indexing text takes `TextItem`s; handing over the wrong one raises, where the
+dictionary form silently skipped any item whose expected key was missing and returned a count
+that quietly disagreed with what the caller passed.
+"""
+abstract type AbstractItem end
+
+"""
+    DenseItem(vector; doc_id=nothing, keywords=String[], refs=String[], meta=Dict{String,Any}())
+
+One dense vector to index, with its metadata.
+
+`vector` is converted to `Vector{Float32}` on construction -- the element type the engine
+indexes in -- so a caller holding `Float64`s or a `SubArray` does not have to convert first,
+and the conversion happens once, here, rather than per insertion.
+"""
+struct DenseItem <: AbstractItem
+    vector::Vector{Float32}
+    doc_id::Union{String,Nothing}
+    keywords::Vector{String}
+    refs::Vector{String}
+    meta::Dict{String,Any}
+end
+
+function DenseItem(vector::AbstractVector;
+                   doc_id=nothing, keywords=String[], refs=String[],
+                   meta::AbstractDict=Dict{String,Any}())
+    DenseItem(convert(Vector{Float32}, vector), _as_doc_id(doc_id),
+              _as_strings(keywords), _as_strings(refs), _as_meta(meta))
+end
+
+"""
+    TextItem(text; doc_id=nothing, keywords=String[], refs=String[], meta=Dict{String,Any}())
+
+One text document to index, with its metadata. In a paragraph-level project this is one
+paragraph, not one book: the item is whatever unit a search should hand back.
+"""
+struct TextItem <: AbstractItem
+    text::String
+    doc_id::Union{String,Nothing}
+    keywords::Vector{String}
+    refs::Vector{String}
+    meta::Dict{String,Any}
+end
+
+function TextItem(text::AbstractString;
+                  doc_id=nothing, keywords=String[], refs=String[],
+                  meta::AbstractDict=Dict{String,Any}())
+    TextItem(String(text), _as_doc_id(doc_id),
+             _as_strings(keywords), _as_strings(refs), _as_meta(meta))
+end
+
+_as_doc_id(::Nothing) = nothing
+_as_doc_id(id) = string(id)
+_as_strings(xs) = String[string(x) for x in xs]
+_as_meta(m::Dict{String,Any}) = m
+_as_meta(m::AbstractDict) = Dict{String,Any}(string(k) => v for (k, v) in m)
+
+"""
+    payload(item::AbstractItem)
+
+The part of `item` that gets indexed -- the vector of a [`DenseItem`](@ref), the text of a
+[`TextItem`](@ref) -- as opposed to the metadata that travels beside it.
+
+Exists so code that treats both kinds uniformly (staging, persistence) does not branch on the
+concrete type just to reach the one field whose name differs.
+"""
+payload(item::DenseItem) = item.vector
+payload(item::TextItem) = item.text
 
 """
     MetadataRecord
 
 Fixed-shape record every indexed object carries, independent of whatever `meta` a
-caller attaches to it (see [`split_item`](@ref)/`Project`'s own dedicated `meta`
+caller attaches to it (see [`metadata_record`](@ref)/`Project`'s own dedicated `meta`
 column family) -- there is no per-project typed-field schema to declare or validate
 against anymore: every record has exactly these fields, always. All-concrete field
 types, so `Vector{MetadataRecord}` writes/reads directly through `Avro.writetable`/
@@ -46,25 +130,48 @@ end
 MetadataRecord(_id::Int32, schema_version::Int) = MetadataRecord(_id, schema_version, nothing, String[], String[])
 
 """
-    split_item(_id::Int32, schema_version::Int, raw_dict::AbstractDict) -> (MetadataRecord, meta)
+    metadata_record(item::AbstractItem, _id::Int32, schema_version::Int) -> MetadataRecord
 
-Splits a raw appended item into its fixed [`MetadataRecord`](@ref) (`_id`,
-`schema_version`, `doc_id` from `raw_dict["doc_id"]`, `keywords` from
-`raw_dict["keywords"]`, `refs` from `raw_dict["ref"]`) and everything else as
-free-form `meta` -- a plain `Dict{String,Any}` of whatever raw_dict entries are left.
+`item`'s fixed-shape half, stamped with the id the project assigned it.
 
-`"vector"`/`"text"` are dropped entirely, not carried into either half: both already
-live in the engine's own dedicated, 1..n-indexed column family (see `Persistence`),
-so keeping a second copy here would just be redundant storage.
+The payload is deliberately not in here and not duplicated anywhere near it: a vector or a
+text already lives in the engine's own dedicated, 1..n-indexed storage (see `Persistence`),
+and this record shares that id space with it.
+
+This replaces the `split_item(_id, version, ::AbstractDict)` that used to pull `doc_id`,
+`keywords` and `ref` out of a raw dictionary by key and sweep the rest into `meta`. There is
+nothing left to split: an [`AbstractItem`](@ref) arrives already separated, by a caller who
+knows which of its fields are tags and which are payload. What was a parsing step with a
+reserved-key list is now a projection.
 """
-function split_item(_id::Int32, schema_version::Int, raw_dict::AbstractDict)
-    reserved = ("vector", "text", "keywords", "ref", "doc_id")
-    keywords = String.(get(raw_dict, "keywords", String[]))
-    refs = String.(get(raw_dict, "ref", String[]))
-    doc_id = haskey(raw_dict, "doc_id") ? string(raw_dict["doc_id"]) : nothing
-    meta = Dict{String,Any}(string(k) => v for (k, v) in raw_dict if !(string(k) in reserved))
-    return MetadataRecord(_id, schema_version, doc_id, keywords, refs), meta
+metadata_record(item::AbstractItem, _id::Int32, schema_version::Int) =
+    MetadataRecord(_id, schema_version, item.doc_id, item.keywords, item.refs)
+
+"""
+    StoredItem
+
+One indexed item read back out: its [`MetadataRecord`](@ref) fields, its free-form `meta`, and
+its `payload` -- the very text or vector that was indexed.
+
+`payload` is what a search result needs and what the dictionary-returning `fetch_items` could
+not give: `text` was a reserved key, stripped before anything reached the metadata store, so a
+hit came back with everything *about* the paragraph and not the paragraph. It is `nothing` only
+when the payload cannot be read back -- a `GenericEngine` whose id is out of range, or an
+engine kind with no per-item storage to consult.
+"""
+struct StoredItem
+    _id::Int32
+    schema_version::Int
+    doc_id::Union{String,Nothing}
+    keywords::Vector{String}
+    refs::Vector{String}
+    payload::Union{String,Vector{Float32},Nothing}
+    meta::Dict{String,Any}
 end
+
+StoredItem(record::MetadataRecord, payload, meta::Dict{String,Any}) =
+    StoredItem(record._id, record.schema_version, record.doc_id, record.keywords, record.refs,
+               payload, meta)
 
 """
     encode_meta(meta) -> String

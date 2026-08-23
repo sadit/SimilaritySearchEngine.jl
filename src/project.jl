@@ -120,7 +120,7 @@ _id_key(id::Int32) = collect(reinterpret(UInt8, [id]))
     put_metadata!(manager::ProjectManager, record::MetadataRecord, meta=nothing)
 
 Inserts or updates `record` (and its accompanying free-form `meta`, if any -- see
-[`Schema.split_item`](@ref)) in the project, keyed by `record._id` in both `cf_records`
+[`Schema.metadata_record`](@ref)) in the project, keyed by `record._id` in both `cf_records`
 and `cf_meta`. Also (re)writes `record`'s `keywords`/`refs` entries into their respective
 secondary index column families -- this is *not* incremental: any previous index entries
 for this `_id` are left in place (an update that removes a keyword/ref leaks a stale

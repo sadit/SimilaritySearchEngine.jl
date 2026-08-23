@@ -42,6 +42,13 @@ export EmbeddedEngine, create_project, open_project, close_project!, append_item
        fft, closestpairs, bichromatic_kclosestpairs,
        get_metadata, get_meta, get_raw_meta
 
+# The typed data contract: what goes in, what comes back. This package does not take a
+# JSON-shaped dictionary as an item and pick it apart, and does not answer with one either --
+# see `Schema.AbstractItem`. `get_raw_meta` above is the single exception, reserved for an HTTP
+# layer forwarding stored metadata bytes it never inspects.
+export AbstractItem, DenseItem, TextItem, MetadataRecord, StoredItem, payload
+export SearchResult, ExistsResult, KnnRow, FFTResult
+
 # Re-exported from TextSearch.jl, not defined here: they are the vocabulary a caller needs to
 # say anything to a *text* project -- `textmodel=FitFromCorpus(TextConfig(language=:es))`,
 # `textmodel=BaseProfile(load_profile("wiki20231101-es.zip"))`,
@@ -51,8 +58,9 @@ export EmbeddedEngine, create_project, open_project, close_project!, append_item
 export TextConfig, TextProfile, QueryPolicy, load_profile, save_profile
 
 # Defined in the IndexEngine submodule and re-exported here (embedded.jl adds the
-# `EmbeddedEngine` method to `text_profile` by extension, so both names below are one generic
-# function each, not a package-level copy of a submodule one).
+# `EmbeddedEngine` method to `text_profile` by extension, so it is one generic function, not a
+# package-level copy of a submodule one). `fit_profile` is TextSearch's, which IndexEngine adds
+# a `FitFromCorpus` method to -- also one function, for the same reason.
 export text_profile, fit_profile
 
 # The text-model decision a text project is created with: `create_project` refuses to guess,

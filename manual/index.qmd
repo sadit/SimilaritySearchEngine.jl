@@ -36,6 +36,10 @@ directory, the same as any other embedded database.
   `QueryPolicy`: whether to correct their spelling against the vocabulary (`ftexplain`
   reports what was corrected, `correction=:off` undoes it) and whether to widen them with
   the profile's expansion network.
+- **Typed in, typed out**: items are `DenseItem`/`TextItem` values and results are
+  `SearchResult`/`StoredItem`/`ExistsResult`. No JSON-shaped dictionary is taken apart by key
+  name on the way in or assembled on the way out; `meta` stays a free-form `Dict{String,Any}`,
+  and `get_raw_meta` is the one raw path, reserved for the HTTP server.
 - **Soft deletes**: `delete_item!` marks a document as logically deleted without touching
   the underlying index; search reports a `deleted` marker per candidate instead of
   silently hiding or backfilling it.

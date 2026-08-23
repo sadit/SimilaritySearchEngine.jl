@@ -33,6 +33,12 @@ directory, the same as any other embedded database.
   travel with a `QueryPolicy`: whether to correct their spelling against the vocabulary
   (`ftexplain` reports what was corrected, `QueryPolicy(correction=:off)` undoes it) and
   whether to widen them with the expansion network.
+- **Typed in, typed out**: items are `DenseItem`/`TextItem` values carrying their own
+  `doc_id`, `keywords`, `refs` and `meta`, and results are `SearchResult`/`StoredItem`/
+  `ExistsResult` — the library never takes a JSON-shaped dictionary and picks it apart by key
+  name, and never answers with one. `meta` stays a free-form `Dict{String,Any}` because it is
+  free-form by definition, and `get_raw_meta` is the single raw path, reserved for an HTTP
+  layer forwarding stored bytes it never inspects.
 - **Soft deletes**: `delete_item!` marks a document as logically deleted without touching
   the underlying index; search reports a `deleted` marker per candidate instead of
   silently hiding or backfilling it.
@@ -58,14 +64,13 @@ using SimilaritySearch: SearchGraph
 workdir = mktempdir()
 h = create_project(workdir, "demo"; index_type=SearchGraph, minrecall=0.9)
 
-for i in 1:1000
-    append_items!(h, [Dict("vector" => rand(Float32, 32), "doc_id" => "item-$i")])
-end
+# typed items in: this library never takes a JSON-shaped dictionary and picks it apart
+append_items!(h, [DenseItem(rand(Float32, 32); doc_id="item-$i") for i in 1:1000])
 index!(h)  # build graph connections for everything staged so far
 
-results = search(h, rand(Float32, 32), 5)
+results = search(h, rand(Float32, 32), 5)   # Vector{SearchResult}
 for r in results
-    println(r.id, " => distance ", r.distance)
+    println(r.doc_id, " => distance ", r.distance)
 end
 
 close_project!(h)

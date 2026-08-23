@@ -98,9 +98,10 @@ second half back in reserve, unindexed, for the bichromatic example further down
 half = length(items) ÷ 2
 
 batch = [
-    Dict("vector" => vectorize(lsi, it["text"]), "doc_id" => it["doc_id"],
-         "keywords" => it["keywords"], "ref" => it["ref"],
-         "word_count" => it["word_count"], "verb_count" => it["verb_count"])
+    DenseItem(vectorize(lsi, it["text"]);
+              doc_id = it["doc_id"], keywords = it["keywords"], refs = it["ref"],
+              meta = Dict{String,Any}("word_count" => it["word_count"],
+                                      "verb_count" => it["verb_count"]))
     for it in items[1:half]
 ]
 append_items!(h, batch)  # inserted == 362
@@ -138,7 +139,7 @@ paragraphs:
 query = vectorize(lsi, "the monster and its creator")
 results = search(h, query, 5)
 for r in results
-    println(r.id, " => distance ", r.distance)
+    println(r.doc_id, " => distance ", r.distance)
 end
 ```
 
@@ -229,7 +230,7 @@ hb = create_project(workdir, "frankenstein_bm25"; index_type=BM25InvertedFile,
                     textmodel=FitFromCorpus())
 
 append_items!(hb, [
-    Dict("text" => it["text"], "doc_id" => it["doc_id"], "keywords" => it["keywords"])
+    TextItem(it["text"]; doc_id = it["doc_id"], keywords = it["keywords"])
     for it in items[1:200]
 ])  # only stages raw text -- nothing searchable yet
 
@@ -237,7 +238,7 @@ index!(hb)  # first call: fits the TextProfile from everything staged so far, th
 
 hits = ftsearch(hb, "monster creature fear", 5)
 for r in hits
-    println(r.id, " => distance ", r.distance)
+    println(r.doc_id, " => distance ", r.distance)
 end
 
 close_project!(hb)
@@ -371,7 +372,7 @@ ht = create_project(workdir, "frankenstein_tfidf"; index_type=TextInvertedFile,
                     textmodel=FitFromCorpus())
 
 append_items!(ht, [
-    Dict("text" => it["text"], "doc_id" => it["doc_id"], "keywords" => it["keywords"])
+    TextItem(it["text"]; doc_id = it["doc_id"], keywords = it["keywords"])
     for it in items[1:200]
 ])
 
@@ -379,7 +380,7 @@ index!(ht)  # same stage-then-index shape as BM25 above
 
 hits = ftsearch(ht, "monster creature fear", 5)
 for r in hits
-    println(r.id, " => distance ", r.distance)
+    println(r.doc_id, " => distance ", r.distance)
 end
 
 close_project!(ht)
@@ -479,17 +480,23 @@ unrelated cross-half pair.
 ## Metadata lookups
 
 `fetch_items` and `exists` accept either the internal `_id` (an integer, or a string of
-one, e.g. `"1"`) or the `"doc_id"` you supplied when appending. `fetch_items` returns each
-record's fixed fields (`_id`, `doc_id`, `schema_version`, `keywords`, `ref`) merged with
-its free-form `meta`:
+one, e.g. `"1"`) or the `doc_id` you supplied when appending. `fetch_items` returns a
+`StoredItem` per resolved id — the record's fixed fields, its free-form `meta`, and the
+`payload` that was actually indexed:
 
 ```julia
-fetch_items(h2, [1, "frankenstein_2"])
-# [Dict("_id"=>1, "doc_id"=>"frankenstein_1", "schema_version"=>1, "keywords"=>[...],
-#       "ref"=>[...], "word_count"=>..., "verb_count"=>...), ...]
+it = only(fetch_items(h2, ["frankenstein_2"]))
+it._id            # 2
+it.doc_id         # "frankenstein_2"
+it.keywords       # ["Chapter", ...]
+it.meta["word_count"]
+it.payload        # the vector this project indexed (a paragraph, in a text project)
 
-exists(h2, [1, "some-doc-id"])
+exists(h2, [1, "some-doc-id"])   # Vector{ExistsResult}: (id, exists, deleted)
 ```
+
+An id that resolves to nothing is dropped by `fetch_items` (so the result can be shorter
+than what you asked for) and reported by `exists` (so it is always the same length).
 
 `get_metadata(h2.project, _id)` (used in the closest-pairs examples above) is the lower-level
 single-record accessor `fetch_items` itself is built on — it returns just the

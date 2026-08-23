@@ -13,10 +13,11 @@ export AbstractSearchEngine, SearchGraphEngine, GenericEngine, BM25Engine, Inver
 export ReadWriteLock, read_lock, write_lock
 export ContextPool, checkout!, checkin!
 export create_engine, restore_engine, snapshot_state, extra_state_fields, add_item!, index!, search_live, mark_deleted!, is_text_index
+export stored_payload
 export calibrate!, current_beamsearch, OptBeamSearch, DEFAULT_MINRECALL_LEVELS, CallbackLog, FileLog
 export direct_neighbors, apply_searchgraph_vectors!, build_searchgraph
 export invertedfile_objects, build_bm25invertedfile, build_textinvertedfile
-export text_profile, text_vocabulary, resolve_query, fit_profile
+export text_profile, text_vocabulary, resolve_query
 export AbstractTextModelSpec, BaseProfile, FitFromCorpus, is_text_index_type, validate_textmodel
 
 """
@@ -725,7 +726,7 @@ function _prune_vocabulary(voc::Vocabulary, spec::FitFromCorpus)
 end
 
 """
-    fit_profile(spec::FitFromCorpus, corpus; source="corpus") -> TextProfile
+    TextSearch.fit_profile(spec::FitFromCorpus, corpus; source="corpus") -> TextProfile
 
 Fits a `TextSearch.TextProfile` over `corpus` as [`FitFromCorpus`](@ref) `spec` describes it:
 a `Vocabulary` counted under `spec.textconfig` and pruned to its frequency floors, optional
@@ -740,9 +741,17 @@ document frequencies counted under the policy, and dropping the flagged tokens c
 count the model is built from, so the vocabulary has to be recounted under the pipeline that
 excludes them. `spec.stopwords === nothing` (the default) skips the second pass entirely.
 
+Written as a method of `TextSearch.fit_profile` rather than as a function of this package's
+own. The library published its own `fit_profile(::TextConfig, corpus; ...)` -- a fuller fit that
+also runs an LSI and derives an expansion network and a lemma map -- and two separate functions
+under one name, one per module, is a binding that errors the moment both modules are in scope.
+One generic function, dispatching on whether the caller brings a bare policy or one of this
+package's [`FitFromCorpus`](@ref) specs, is the honest arrangement. Delegating this method's
+body to the library's is a pending simplification.
+
 Beyond stopwords the profile carries no artifacts of its own -- a lemma map needs word
-embeddings and an expansion network needs an LSI, neither of which an indexing corpus yields,
-which is what `TextSearch.jl`'s own `textsearch fit` pipeline exists to do and what a
+embeddings and an expansion network needs an LSI, neither of which this method computes, which
+is what the library's own method and the `textsearch fit` pipeline exist to do, and what a
 [`BaseProfile`](@ref) brings instead. What this *does* preserve is any artifact the caller
 already put in `spec.textconfig.pipeline`: those are lifted out into the profile's own fields
 with `applied` set to match, so that `TextProfile`'s constructor rematerializes the identical
@@ -750,7 +759,7 @@ with `applied` set to match, so that `TextProfile`'s constructor rematerializes 
 through a lemma map the profile then claims not to have -- exactly the
 saved-copy-versus-applied-copy drift the type was introduced to make impossible.
 """
-function fit_profile(spec::FitFromCorpus, corpus; source::AbstractString="corpus")
+function TextSearch.fit_profile(spec::FitFromCorpus, corpus; source::AbstractString="corpus")
     textconfig = spec.textconfig
     voc = _prune_vocabulary(Vocabulary(textconfig, corpus), spec)
 
@@ -791,13 +800,19 @@ end
 _derive_variants(profile::Nothing) = nothing
 _derive_variants(profile::TextProfile) = derive_variants(profile.model.voc)
 
-# `query_expansion=nothing` on the index deliberately: the network is a per-query choice
-# (`QueryPolicy`'s `expansion`/`expansion_k`), and a network baked into the index would be
-# all-or-nothing for every search against it. `search_live` applies the profile's own network
-# per call instead. The `max(..., 1)` guard covers an empty vocabulary, which `InvertedFile`
-# cannot be sized zero for.
+# An empty `QueryPipeline` on the index deliberately: the network is a per-query choice
+# (`QueryPolicy`'s `expansion`/`expansion_k`), and one baked into the index would be
+# all-or-nothing for every search against it. `search_live` builds the query itself, per call,
+# from the profile's own network. The `max(..., 1)` guard covers an empty vocabulary, which
+# `InvertedFile` cannot be sized zero for.
+#
+# TextSearch 1.1 later published `QueryPipeline` -- policy, variants, expansion and distances in
+# one value, with `query_tokens`/`querybow`/`queryvector` to apply it -- which is the same
+# construction this module assembles by hand in `resolve_query`/`_search_tokens`/
+# `_query_expansion_network`. Routing through it is a pending simplification, not done here.
 _new_textinvertedfile(profile::TextProfile, distance) =
-    TextInvertedFile(profile.model, InvertedFile(max(vocsize(profile.model.voc), 1), distance), nothing)
+    TextInvertedFile(profile.model, InvertedFile(max(vocsize(profile.model.voc), 1), distance),
+                     TextSearch.QueryPipeline())
 
 """
     build_bm25invertedfile(voc::TextSearch.Vocabulary, object_blocks) -> BM25InvertedFile
@@ -1102,7 +1117,7 @@ function index!(engine::BM25Engine)
         n == 0 && error("BM25Engine has nothing staged yet -- add_item!/append_items! at least one item before calling index!")
         already = engine.index === nothing ? 0 : length(engine.index)
         if engine.profile === nothing
-            profile = fit_profile(engine.fitspec, engine.staged; source="staged")
+            profile = TextSearch.fit_profile(engine.fitspec, engine.staged; source="staged")
             engine.profile = profile
             engine.variants = _derive_variants(profile)
             engine.index = BM25InvertedFile(profile.model.voc)
@@ -1121,7 +1136,7 @@ function index!(engine::InvertedFileEngine)
         n == 0 && error("InvertedFileEngine has nothing staged yet -- add_item!/append_items! at least one item before calling index!")
         already = engine.index === nothing ? 0 : length(engine.index)
         if engine.profile === nothing
-            profile = fit_profile(engine.fitspec, engine.staged; source="staged")
+            profile = TextSearch.fit_profile(engine.fitspec, engine.staged; source="staged")
             engine.profile = profile
             engine.variants = _derive_variants(profile)
             engine.index = _new_textinvertedfile(profile, engine.distance)
@@ -1377,6 +1392,34 @@ function _query_expansion_network(profile::TextProfile, r::TextSearch.QueryResol
         end
     end
     return isempty(net) ? (nothing, nothing) : (net, dists)
+end
+
+"""
+    stored_payload(engine::AbstractSearchEngine, id::Integer) -> Union{String, Vector{Float32}, Nothing}
+
+The very text or vector indexed under internal `id`, or `nothing` if `id` is out of range.
+
+This is the read-back side of `add_item!`, and it exists because a search result is not much
+use without it: a hit carries an id and a score, and everything else a caller knows about the
+item comes from its metadata record -- which deliberately does not hold the payload, since the
+payload already lives here. Before this existed the only way to a text project's paragraph was
+`engine.staged[id]`, reaching past the public surface into a field.
+
+Reads from wherever the engine already keeps the item, with no second copy anywhere: a text
+engine's `staged` (every paragraph ever staged, in insertion order, which *is* id order), a
+`SearchGraph`'s or a `GenericEngine`'s own `database`. A dense payload is materialized into a
+fresh `Vector{Float32}` rather than handed out as a view, because the view aliases the index's
+live storage and the caller has no way to know that.
+"""
+function stored_payload(engine::Union{BM25Engine, InvertedFileEngine}, id::Integer)
+    1 <= id <= length(engine.staged) || return nothing
+    engine.staged[id]
+end
+
+function stored_payload(engine::Union{SearchGraphEngine, GenericEngine}, id::Integer)
+    db = database(engine.index)
+    1 <= id <= length(db) || return nothing
+    convert(Vector{Float32}, db[id])
 end
 
 """
