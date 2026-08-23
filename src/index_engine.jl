@@ -17,7 +17,7 @@ export stored_payload
 export calibrate!, current_beamsearch, OptBeamSearch, DEFAULT_MINRECALL_LEVELS, CallbackLog, FileLog
 export direct_neighbors, apply_searchgraph_vectors!, build_searchgraph
 export invertedfile_objects, build_bm25invertedfile, build_textinvertedfile
-export text_profile, text_vocabulary, resolve_query
+export text_profile, text_vocabulary, resolve_query, query_pipeline
 export AbstractTextModelSpec, BaseProfile, FitFromCorpus, is_text_index_type, validate_textmodel
 
 """
@@ -746,8 +746,20 @@ own. The library published its own `fit_profile(::TextConfig, corpus; ...)` -- a
 also runs an LSI and derives an expansion network and a lemma map -- and two separate functions
 under one name, one per module, is a binding that errors the moment both modules are in scope.
 One generic function, dispatching on whether the caller brings a bare policy or one of this
-package's [`FitFromCorpus`](@ref) specs, is the honest arrangement. Delegating this method's
-body to the library's is a pending simplification.
+package's [`FitFromCorpus`](@ref) specs, is the honest arrangement.
+
+The two methods share a name because they answer the same question, and they are not
+interchangeable. Measured on the same 3,000-paragraph corpus, this one takes **0.22s** and the
+library's takes **48.77s** -- 225x -- for the same 17,867-token vocabulary. The library's is not
+slower at the same job; it is doing a different, larger one, and the extra 48 seconds buy an
+LSI, a 17,867-entry expansion network and 2,744 lemmas. That is the right trade when a caller
+sits down to build a profile, and the wrong one for the first `index!` call of a project that
+merely never supplied one: a deferred fit is the cheap fallback, and turning it into a
+minutes-long pipeline would make a project's first indexing call unrecognizable.
+
+So this method is not a stopgap awaiting delegation. What it is missing is a way to *ask* for
+the full pipeline, which would delegate outright; a `FitFromCorpus` cannot express one today
+because it has no encoder/expansion/lemma options to carry.
 
 Beyond stopwords the profile carries no artifacts of its own -- a lemma map needs word
 embeddings and an expansion network needs an LSI, neither of which this method computes, which
@@ -800,16 +812,11 @@ end
 _derive_variants(profile::Nothing) = nothing
 _derive_variants(profile::TextProfile) = derive_variants(profile.model.voc)
 
-# An empty `QueryPipeline` on the index deliberately: the network is a per-query choice
-# (`QueryPolicy`'s `expansion`/`expansion_k`), and one baked into the index would be
-# all-or-nothing for every search against it. `search_live` builds the query itself, per call,
-# from the profile's own network. The `max(..., 1)` guard covers an empty vocabulary, which
-# `InvertedFile` cannot be sized zero for.
-#
-# TextSearch 1.1 later published `QueryPipeline` -- policy, variants, expansion and distances in
-# one value, with `query_tokens`/`querybow`/`queryvector` to apply it -- which is the same
-# construction this module assembles by hand in `resolve_query`/`_search_tokens`/
-# `_query_expansion_network`. Routing through it is a pending simplification, not done here.
+# An empty `QueryPipeline` on the index deliberately: policy is a per-query choice, and one
+# baked into the index would be all-or-nothing for every search against it. `search_live` builds
+# its own through [`query_pipeline`](@ref) and hands the finished query down, which is why the
+# index never has to consult this field. The `max(..., 1)` guard covers an empty vocabulary,
+# which `InvertedFile` cannot be sized zero for.
 _new_textinvertedfile(profile::TextProfile, distance) =
     TextInvertedFile(profile.model, InvertedFile(max(vocsize(profile.model.voc), 1), distance),
                      TextSearch.QueryPipeline())
@@ -1310,91 +1317,6 @@ function add_item!(engine::Union{BM25Engine, InvertedFileEngine}, item)
 end
 
 """
-    resolve_query(engine, text::AbstractString, policy::QueryPolicy=QueryPolicy()) -> TextSearch.QueryResolution
-
-Runs `text` through this text engine's own `TextConfig` -- the same normalization,
-tokenization, lemma and stopword stages every indexed document went through, since both come
-from the one `profile` -- and then through the two steps only a query gets: orthographic
-correction against the vocabulary, marked on `policy`.
-
-The returned `QueryResolution` is what [`search_live`](@ref) searches with, and it is
-returned rather than consumed silently because correcting a query is a substitution the
-person who typed it is owed a report of: `TextSearch.explain(r)` renders one line per token
-that gained or lost something ("musica appears in only 9 documents, searched as música
-instead"), and `QueryPolicy(correction=:off)` is the escape that answers the query as typed.
-
-Errors if `engine` has no profile yet (nothing has been indexed, so there is no vocabulary to
-resolve against).
-"""
-function resolve_query(engine::Union{BM25Engine, InvertedFileEngine}, text::AbstractString, policy::QueryPolicy=QueryPolicy())
-    profile = engine.profile
-    profile === nothing && error("this text engine has not been trained yet -- index! at least one staged item, or create it with a profile, before resolving a query")
-    tokens = collect(tokenize(gettextconfig(profile), text))
-    # `variants` is only read when correction is on; passing `nothing` under `:off` keeps the
-    # candidate group empty and makes the resolution a pure pass-through of what was typed.
-    variants = policy.correction === :off ? nothing : engine.variants
-    return resolve_query_tokens(profile.model.voc, tokens, variants, policy)
-end
-
-# The tokens to actually encode a query from, rebuilt from `r.resolved` -- one entry per typed
-# token *occurrence* -- rather than taken from `r.tokens`.
-#
-# They differ in exactly one way that matters here: `r.tokens` is a de-duplicated set, which is
-# the right answer for the set-intersection matcher `resolve_query_tokens` was written for, and
-# the wrong one for an index that weights by term frequency. Reading it directly would silently
-# collapse "casa casa casa" to a single occurrence and change every tf/BM25 score, including for
-# queries where nothing was corrected at all. Rebuilding per occurrence keeps multiplicity and
-# order, so a query nothing bridged encodes bit-for-bit as it did before any of this existed,
-# while a bridged occurrence still replaces (`kept == false`) or enriches (`kept == true`) in
-# place.
-function _search_tokens(r::TextSearch.QueryResolution)
-    out = String[]
-    for t in r.resolved
-        t.kept && push!(out, t.typed)
-        for (form, _) in t.added
-            push!(out, form)
-        end
-    end
-    return out
-end
-
-# Whether `dist` makes `TextInvertedFile` index *bags* rather than weighted vectors. Its
-# `push_item!` branches on exactly this (a set distance -- `Dist.Sets.Jaccard()`, `Dice()`,
-# `Intersection()`, `CosineSet()` -- scores token membership, so a weighted vector is the wrong
-# object to hand it), and a query has to be encoded the same way its documents were or the two
-# sides stop being comparable. Mirrored here rather than called through the library's own
-# unexported `FullText.is_set_distance`, and testing the same thing it does: which module the
-# distance comes from.
-_is_set_distance(dist) = parentmodule(typeof(dist)) === SimilaritySearch.Dist.Sets
-
-# The slice of `profile`'s query-expansion network this particular query should be widened
-# with, or `nothing` for "do not expand".
-#
-# Restricted to `expansion_sources(r)` -- one spelling per typed token, its group's commonest --
-# and not to every token searched: bridging deliberately reaches spellings the corpus barely
-# holds, and their neighbour lists come from a handful of documents, so expanding over the whole
-# bridged set mixes senses (`TextSearch.jl` measured `musica` -> `libreto Puccini Verdi` against
-# `música`'s actual topic). Trimming to `policy.expansion_k` here, rather than at expansion time,
-# keeps the distances aligned with the neighbours they belong to.
-function _query_expansion_network(profile::TextProfile, r::TextSearch.QueryResolution, policy::QueryPolicy)
-    (policy.expansion && profile.applied.query_expansion && !isempty(profile.query_expansion)) || return (nothing, nothing)
-    alldists = profile.query_expansion_distances
-    net = Dict{String,Vector{String}}()
-    dists = alldists === nothing ? nothing : Dict{String,Vector{Float32}}()
-    for src in expansion_sources(r)
-        neighbors = get(profile.query_expansion, src, nothing)
-        neighbors === nothing && continue
-        k = policy.expansion_k > 0 ? min(policy.expansion_k, length(neighbors)) : length(neighbors)
-        net[src] = neighbors[1:k]
-        if dists !== nothing
-            d = get(alldists, src, nothing)
-            d === nothing || (dists[src] = d[1:min(k, length(d))])
-        end
-    end
-    return isempty(net) ? (nothing, nothing) : (net, dists)
-end
-
-"""
     stored_payload(engine::AbstractSearchEngine, id::Integer) -> Union{String, Vector{Float32}, Nothing}
 
 The very text or vector indexed under internal `id`, or `nothing` if `id` is out of range.
@@ -1421,6 +1343,77 @@ function stored_payload(engine::Union{SearchGraphEngine, GenericEngine}, id::Int
     1 <= id <= length(db) || return nothing
     convert(Vector{Float32}, db[id])
 end
+
+"""
+    query_pipeline(engine, policy::QueryPolicy=QueryPolicy()) -> TextSearch.QueryPipeline
+
+How this engine should treat a query, as the one value `TextSearch` takes for it: the caller's
+`policy`, this engine's cached variant map, and the profile's expansion network with its
+distances.
+
+Built per call rather than once per index, because `policy` is per call: correcting and
+expanding are guesses about what a person meant, so the same project has to be able to answer
+both ways. The index itself therefore carries an empty pipeline (see
+[`_new_textinvertedfile`](@ref)) and every search assembles its own.
+
+The network is included only when the profile *applies* it. A fitted profile carries a network
+without applying it -- computing an artifact and deciding to use it are different acts -- and
+`QueryPipeline` reads a network it is given as the request to expand with it.
+"""
+function query_pipeline(engine::Union{BM25Engine, InvertedFileEngine}, policy::QueryPolicy=QueryPolicy())
+    profile = engine.profile
+    profile === nothing && error("this text engine has not been trained yet -- index! at least one staged item, or create it with a profile, before building a query")
+    expansion = (profile.applied.query_expansion && !isempty(profile.query_expansion)) ?
+                profile.query_expansion : nothing
+    TextSearch.QueryPipeline(;
+        policy,
+        # `variants` is only read when correction is on; withholding it under `:off` keeps the
+        # candidate group empty and makes the resolution a pass-through of what was typed
+        variants = policy.correction === :off ? nothing : engine.variants,
+        expansion,
+        distances = expansion === nothing ? nothing : profile.query_expansion_distances)
+end
+
+"""
+    resolve_query(engine, text::AbstractString, policy::QueryPolicy=QueryPolicy()) -> TextSearch.ResolvedQuery
+
+Runs `text` through `TextSearch`'s query pipeline under this engine's
+[`query_pipeline`](@ref): tokenized by the profile's own `TextConfig` -- the same normalization,
+lemma and stopword stages every indexed document went through -- then corrected against the
+vocabulary and widened by the expansion network, as `policy` allows.
+
+The result carries both halves a caller needs: `terms`, what to actually search for, and
+`resolution`, what correction did to each spelling that was typed. The second is not
+bookkeeping: correcting a query is a substitution the person who typed it is owed a report of,
+which is what `TextSearch.explain(rq.resolution)` renders and what `QueryPolicy(correction=:off)`
+undoes.
+
+This used to be assembled here -- tokenize, `resolve_query_tokens`, rebuild the term list,
+restrict the network to `expansion_sources`, weight the neighbours. `TextSearch` published all of
+it as `query_tokens`/`querybow`/`queryvector`, routed through both of its inverted files, so this
+is now the library's implementation with this engine's profile and cache wired into it. Two
+behaviours moved with it and are worth naming, because both were deliberate here and are
+deliberate there:
+
+- **Typed terms are deduplicated.** A query of `"casa casa casa"` searches `casa` once. This
+  module used to preserve multiplicity out of concern for term frequency; the concern does not
+  survive contact with the scorers. `bm25score` reads only which ids the query holds, never their
+  counts, and `queryvector` weights the words a person meant once each. A query is a set of
+  intents, not a document.
+- **Expansion contributions are not deduplicated**, and that asymmetry is the point: a neighbour
+  reachable from two query tokens contributes twice, and `queryvector` sums the contributions
+  while `querybow` collapses them.
+
+Errors if `engine` has no profile yet -- nothing indexed, so no vocabulary to resolve against.
+"""
+resolve_query(engine::Union{BM25Engine, InvertedFileEngine}, text::AbstractString, policy::QueryPolicy=QueryPolicy()) =
+    TextSearch.query_tokens(engine.profile.model.voc, text, query_pipeline(engine, policy))
+
+# Whether `dist` makes an inverted file score token membership rather than weighted vectors, in
+# which case a query is a presence-only bag and not a vector. `TextInvertedFile` branches on
+# exactly this in its own `search`; mirrored here because this module builds the query itself,
+# per call, to honour a per-call `QueryPolicy` that an index-level pipeline cannot express.
+_is_set_distance(dist) = parentmodule(typeof(dist)) === SimilaritySearch.Dist.Sets
 
 """
     search_live(engine::AbstractSearchEngine, query, k::Int; bs_override=nothing) -> (id=..., dist=..., deleted=...)
@@ -1490,6 +1483,7 @@ function search_live(engine::SearchGraphEngine, query, k::Int; bs_override=nothi
     read_lock(engine.lock) do
         ctx = checkout!(engine.search_ctx_pool)
         try
+            snap = copy(ctx.costdists)
             res = knnqueue(KnnSorted, max(k, 1))
             if bs !== nothing
                 vstate = SimilaritySearch.getvstate(length(engine.index), ctx)
@@ -1497,7 +1491,8 @@ function search_live(engine::SearchGraphEngine, query, k::Int; bs_override=nothi
             else
                 search(engine.index, ctx, query, res)
             end
-            return _collect_live(engine, res)
+            evals = SimilaritySearch.distance_evaluations(ctx, snap)
+            return _collect_live(engine, res, evals)
         finally
             checkin!(engine.search_ctx_pool, ctx)
         end
@@ -1508,9 +1503,11 @@ function search_live(engine::GenericEngine, query, k::Int; bs_override=nothing, 
     read_lock(engine.lock) do
         ctx = checkout!(engine.search_ctx_pool)
         try
+            snap = copy(ctx.costdists)
             res = knnqueue(KnnSorted, max(k, 1))
             search(engine.index, ctx, query, res)
-            return _collect_live(engine, res)
+            evals = SimilaritySearch.distance_evaluations(ctx, snap)
+            return _collect_live(engine, res, evals)
         finally
             checkin!(engine.search_ctx_pool, ctx)
         end
@@ -1520,17 +1517,19 @@ end
 function search_live(engine::BM25Engine, query, k::Int; bs_override=nothing, minrecall=nothing, policy::QueryPolicy=QueryPolicy())
     read_lock(engine.lock) do
         profile = engine.profile
-        profile === nothing && return (id=Int32[], dist=Float32[], deleted=Bool[])
+        profile === nothing && return (id=Int32[], dist=Float32[], deleted=Bool[], distance_evaluations=0)
         voc = profile.model.voc
-        r = resolve_query(engine, query, policy)
-        bow = bagofwords(voc, TokenizedText(_search_tokens(r)))
-        net, _ = _query_expansion_network(profile, r, policy)
-        net === nothing || expand_query!(bow, voc, net)
+        # presence only, and not a shortcut: BM25 scores from which ids the query holds, never
+        # from their counts (see `bm25score`), so a weighted query bag would be carried through
+        # the whole search and then ignored
+        bow = TextSearch.querybow(voc, resolve_query(engine, query, policy))
         ctx = checkout!(engine.search_ctx_pool)
         try
+            snap = copy(ctx.costdists)
             res = knnqueue(KnnSorted, max(k, 1))
             search(engine.index, ctx, bow, res)
-            return _collect_live(engine, res)
+            evals = SimilaritySearch.distance_evaluations(ctx, snap)
+            return _collect_live(engine, res, evals)
         finally
             checkin!(engine.search_ctx_pool, ctx)
         end
@@ -1540,38 +1539,31 @@ end
 function search_live(engine::InvertedFileEngine, query, k::Int; bs_override=nothing, minrecall=nothing, policy::QueryPolicy=QueryPolicy())
     read_lock(engine.lock) do
         profile = engine.profile
-        profile === nothing && return (id=Int32[], dist=Float32[], deleted=Bool[])
+        profile === nothing && return (id=Int32[], dist=Float32[], deleted=Bool[], distance_evaluations=0)
         voc = profile.model.voc
-        r = resolve_query(engine, query, policy)
-        tokens = TokenizedText(_search_tokens(r))
-        net, dists = _query_expansion_network(profile, r, policy)
-        q = if _is_set_distance(engine.distance)
-            bow = bagofwords(voc, tokens)
-            net === nothing || expand_query!(bow, voc, net)
-            bow
-        else
-            # Vectorized unnormalized on purpose when there is a network: `expand_query!` adds
-            # weight to the vector and normalizes at the end, so normalizing first would scale
-            # the typed terms against a norm the expansion then invalidates.
-            v = vectorize(profile.model, tokens; normalize=(net === nothing))
-            net === nothing ? v : expand_query!(v, voc, net; distances=dists)
-        end
+        rq = resolve_query(engine, query, policy)
+        # The representation decides what to do with the pipeline's weights: a set distance
+        # scores membership and ignores them, a vector distance applies them and normalizes.
+        q = _is_set_distance(engine.distance) ? TextSearch.querybow(voc, rq) :
+                                                TextSearch.queryvector(profile.model, rq)
         ctx = checkout!(engine.search_ctx_pool)
         try
+            snap = copy(ctx.costdists)
             res = knnqueue(KnnSorted, max(k, 1))
             search(engine.index, ctx, q, res)
-            return _collect_live(engine, res)
+            evals = SimilaritySearch.distance_evaluations(ctx, snap)
+            return _collect_live(engine, res, evals)
         finally
             checkin!(engine.search_ctx_pool, ctx)
         end
     end
 end
 
-function _collect_live(engine::AbstractSearchEngine, res)
+function _collect_live(engine::AbstractSearchEngine, res, evals=0)
     ids = view(res.ids, res.sp:res.ep)
     dists = view(res.dists, res.sp:res.ep)
     deleted = [id in engine.deleted_ids for id in ids]
-    return (id=ids, dist=dists, deleted=deleted)
+    return (id=ids, dist=dists, deleted=deleted, distance_evaluations=evals)
 end
 
 end # module

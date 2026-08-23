@@ -705,7 +705,7 @@ function ftexplain(handle::EmbeddedEngine, text::AbstractString; policy::QueryPo
     engine = handle.engine
     IndexEngine.is_text_index(engine) ||
         error("ftexplain is only meaningful for a text project (BM25InvertedFile/InvertedFile); this one is $(typeof(engine))")
-    return TextSearch.explain(IndexEngine.resolve_query(engine, text, policy))
+    return TextSearch.explain(IndexEngine.resolve_query(engine, text, policy).resolution)
 end
 
 """
