@@ -437,23 +437,52 @@ SSE.close_project!(h)
 rm(workdir; recursive=true, force=true)
 ```
 
-### The alternative: no base profile
+### The two alternatives, and why this page takes neither
 
-Every project on this page was created from a `BaseProfile`. The other form says, deliberately,
-that there is no pre-fitted model and one should be fitted from the project's own corpus:
+Every project on this page was created from a `BaseProfile`, because `prepare.jl` had just
+fitted the profile and held it in hand. The other two forms matter more for a project you are
+starting from nothing.
+
+`DefaultProfile` is the one to reach for, and it is what this page would use if it were not
+building its own profiles as it goes:
 
 ```julia
-create_project(workdir, "self-fitted";
-    index_type = BM25InvertedFile,
-    textmodel  = FitFromCorpus(TextConfig(language=:en); min_ndocs=3, stopwords=0.9))
+create_project(workdir, "noticias"; index_type=BM25InvertedFile,
+               textmodel=DefaultProfile(:es))
 ```
 
-There is no default between the two, and the reason is a trap: a fitted-here vocabulary is
-frozen at the first `index!` call, so every term a later batch introduces is dropped from then
-on, silently and forever. That is a fine trade for a corpus that arrives all at once and a bad
-surprise for one that grows. Nothing about the project's behaviour afterwards distinguishes "I
-chose this" from "I never said", which is exactly why it cannot be arrived at by omission —
-`create_project` refuses a text project with no `textmodel`.
+At the first `index!` call it loads the published Spanish paragraph profile — the same
+`wiki20231101-es-paragraphs` this tutorial's own fits are modelled on — and refits it against
+whatever you staged: counts blended, weights recomputed, stopwords and lemmas and the expansion
+network inherited. It resolves from the profile library `textsearch install` maintains, and says
+how to install the profile if it is not there.
+
+The refit narrows the vocabulary to your corpus rather than keeping the language's: measured on
+the English base, 335,336 tokens become 12,238 against an 800-document sample. What it buys is
+calibration and artifacts, not coverage; `refit=false` keeps the base whole if coverage is what
+you are after. `DefaultProfile`'s docstring has the numbers.
+
+`FitFromCorpus` says, deliberately, that there is no pre-fitted model and one should be fitted
+from the project's own corpus:
+
+```julia
+create_project(workdir, "self-fitted"; index_type=BM25InvertedFile,
+               textmodel=FitFromCorpus(TextConfig(language=:en); min_ndocs=3, stopwords=0.9))
+```
+
+There is no default among the three, and the reason is a trap. That fit is delegated whole to
+`TextSearch.fit_profile`, which has no cheap variant — it always runs the LSI, the expansion
+network and the lemma clustering — so it is bounded by `max_documents` (1,000 by default)
+instead of by the corpus. Which means its vocabulary is fitted from a *sample*: every term
+appended later that the sample never held is out-of-vocabulary and silently dropped, forever.
+Nothing about the project's behaviour afterwards distinguishes "I chose this" from "I never
+said", which is exactly why it cannot be arrived at by omission — `create_project` refuses a
+text project with no `textmodel`.
+
+The `profiles` table above is what that trap costs in the other direction: the four fits on
+this page took 129 to 863 seconds each, on corpora of 41,000 to 305,000 paragraphs. That is the
+price of a real profile, paid once, by a script — and the reason a project should be handed one
+rather than asked to produce it during its first `index!`.
 
 ## What building this cost
 

@@ -256,48 +256,87 @@ and silently dropped, so what you've staged before it has to be representative o
 you'll keep appending. `text_profile(hb)` hands you the fitted model, and `save_profile` writes
 it out for reuse — but the real fix for a project that keeps growing is the next section.
 
-## Choosing the text model: `FitFromCorpus` and `BaseProfile`
+## Choosing the text model
 
 `textmodel` above was not decoration. Creating a text project requires it, and there is no
 default:
 
 ```julia
 create_project(workdir, "oops"; index_type=BM25InvertedFile)
-# ERROR: a text project (BM25InvertedFile) needs an explicit `textmodel`, because the two
-#        ways to get a vocabulary are not interchangeable and one of them cannot be undone
-#        later: ...
+# ERROR: a text project (BM25InvertedFile) needs an explicit `textmodel`, because the ways to
+#        get a vocabulary are not interchangeable and the cheap one cannot be undone later: ...
 ```
 
-The two forms are opposite answers to *where the vocabulary comes from*, not variations on
-one setting.
+Three forms answer *where the vocabulary comes from*. They are not variations on one setting,
+and the order below is the order worth preferring them in.
+
+### `DefaultProfile` — start from a language, adapt to your corpus
+
+```julia
+hes = create_project(workdir, "noticias"; index_type=BM25InvertedFile,
+                     textmodel=DefaultProfile(:es))
+```
+
+This is the one to reach for. At the first `index!` call it loads the published Spanish
+paragraph profile and *refits* it against whatever you have staged: the base's token counts are
+blended with your corpus's, the weights recomputed, and the stopword set, lemma map and
+expansion network inherited. No embedding is fitted, which is what makes a refit cheap next to a
+fit.
+
+Be clear about what the refit does and does not give you, because the obvious guess is wrong.
+Measured on the published English profile: 335,336 tokens in the base, 12,238 after refitting
+against an 800-document sample, of which 2,649 are tokens the sample never held. Fitting on that
+sample alone would have given 9,589. So the refit **narrows** to your corpus's vocabulary,
+widened about a quarter by the base — it is not language-wide coverage. What you inherit is the
+part your own corpus cannot produce: weights calibrated over millions of paragraphs, and (for
+that base) 96 stopwords, 16,661 lemmas and 10,655 expansion entries.
+
+If coverage is what you need — terms a later batch will introduce that today's corpus has never
+seen — pass `refit=false` and index against the base untouched, all 335,336 tokens, with
+Wikipedia's weights rather than yours. Calibration or coverage: the two forms answer different
+questions.
+
+The profile is resolved from the library `textsearch install` maintains, under
+`~/.textsearch/profiles/`. Nothing is bundled or downloaded — the profiles are 70–160 MB — and
+if the one you asked for is not installed the error says so and prints the command that
+installs it. `refit=false` indexes against the base untouched, and `nickname=` points at any
+installed profile instead of the per-language default.
 
 ### `FitFromCorpus` — deliberately no base profile
 
 Fit the model from this project's own staged corpus, at the first `index!` call. This is the
-explicit way to say "I have nothing pre-fitted", and it accepts the consequence above: the
-vocabulary is frozen at that call.
-
-Its argument is the corpus-independent policy — normalization, tokenization, and the
-`language` the corpus is in. The default `TextConfig()` lowercases and strips diacritics,
-which is usually right for English and throws away a distinction that matters in Spanish:
+explicit way to say "I have nothing pre-fitted", and it is the weakest of the three:
 
 ```julia
 using TextSearch: NormalizationConfig
 
-hes = create_project(workdir, "noticias"; index_type=BM25InvertedFile,
+hf = create_project(workdir, "noticias_propias"; index_type=BM25InvertedFile,
     textmodel=FitFromCorpus(TextConfig(normalization=NormalizationConfig(lc=false, del_diac=false),
                                        language=:es);
                             min_ndocs=3, stopwords=0.9))
 ```
 
-The fit options ride on the spec itself, so they cannot be handed to the other form by
-mistake:
+Its argument is the corpus-independent policy — normalization, tokenization, and the `language`
+the corpus is in. The default `TextConfig()` lowercases and strips diacritics, which is usually
+right for English and throws away a distinction that matters in Spanish.
+
+The fit itself is handed whole to `TextSearch.fit_profile`; this package does not fit profiles.
+That has a consequence worth stating plainly: there is no cheap variant of that pipeline. Every
+fit runs an LSI over the sample, derives an expansion network from it and clusters a lemma map
+from the same embeddings. Measured on 3,000 paragraphs it takes about 49 seconds, against 0.2
+for a bare vocabulary-and-weights pass — which is why `max_documents` exists:
 
 | option | what it does |
 |---|---|
-| `local_weighting`, `global_weighting` | the `VectorModel` weighting scheme; defaults to `TfWeighting()`/`IdfWeighting()` |
-| `min_ndocs`, `min_occs` | drop a token seen in fewer than this many documents, or this many times overall. The hapax tail is most of a vocabulary's size and almost none of its retrieval value |
-| `stopwords` | a document-frequency threshold in `(0, 1]`; tokens above it are dropped and the vocabulary recounted without them. Costs a **second pass** over the corpus, since the counts change |
+| `max_documents` | read at most this many documents (1,000 by default), sampled by an even stride across the corpus rather than taken from the front. `0` lifts the cap |
+| `min_ndocs` | drop a token seen in fewer documents than this, before the encoder runs. Not cosmetic: the expansion network is an all-pairs kNN over the vocabulary |
+| `stopwords` | a document-frequency threshold in `(0, 1]`; tokens above it are dropped and the vocabulary recounted without them. A second pass over the sample |
+| `encoder`, `expansion`, `lemmas` | the library's own option groups, as `NamedTuple`s — `encoder=(; outdim=128)`, `lemmas=(; apply=true)` |
+
+The cap bounds the cost and cuts against the one thing this path is already worst at: a
+vocabulary from 1,000 sampled documents is thin, so *more* of what you append later is
+out-of-vocabulary and silently dropped. That is the trade, and it is why the section above
+exists.
 
 ### `BaseProfile` — a model fitted elsewhere
 
@@ -306,13 +345,10 @@ hp = create_project(workdir, "noticias_wiki"; index_type=BM25InvertedFile,
                     textmodel=BaseProfile(load_profile("wiki20231101-es.zip")))
 ```
 
-This trains the project before its first item is ever staged, which is the answer to the
-out-of-vocabulary limitation: the vocabulary covers the language rather than whichever batch
-happened to arrive first, so a term the tenth batch introduces is searchable like any other.
-It is also the only way to get a lemma map or a query-expansion network into a project —
-neither can be estimated from an indexing corpus without word embeddings or an LSI, which is
-what `TextSearch.jl`'s own `textsearch fit` pipeline exists to do. To load a profile but
-decline one of its artifacts, change the profile rather than the project:
+This trains the project before its first item is ever staged, and is what `DefaultProfile`
+does underneath once it has resolved and refitted — use this form when you already hold the
+file, or when you want the base used exactly as it is. To load a profile but decline one of its
+artifacts, change the profile rather than the project:
 `BaseProfile(with_applied(p; lemmas=false))`.
 
 Either way the spec is persisted with the project and restored verbatim by `open_project`. And

@@ -21,15 +21,18 @@ directory, the same as any other embedded database.
   from whatever's been staged so far, so there's no separate training step to call first.
   `ExhaustiveSearch`/`ParallelExhaustiveSearch` are the one exception, with no staging
   split at all: items are searchable the instant `append_items!` returns.
-- **A text model you state, never one you get by default**: creating a text project requires
-  a `textmodel` — either `BaseProfile(load_profile("wiki20231101-es.zip"))`, a model fitted
-  elsewhere, which trains the project before its first item is staged and brings along
-  whatever stopwords, lemmas and query-expansion network that profile carries; or
-  `FitFromCorpus(TextConfig(language=:es); min_ndocs=3, stopwords=0.9)`, which says
-  deliberately that there is no base profile and fits one from the project's own corpus
-  (weighting scheme, vocabulary pruning and stopword detection are its options). Omitting it
-  is an error, because the second form freezes the vocabulary at the first `index!` call and
-  nothing about the project later reveals that the choice was made by omission. Queries then
+- **A text model you state, never one you get by default**: creating a text project requires a
+  `textmodel`. Prefer `DefaultProfile(:es)` — the published profile for a language, refitted to
+  your corpus at the first `index!` call, so your weights are calibrated over millions of
+  paragraphs and you inherit a stopword set, a lemma map and a query-expansion network instead
+  of deriving them (`refit=false` keeps the base's full language-wide vocabulary instead of
+  narrowing to yours; the docstring has the measured trade). `BaseProfile(p)`
+  uses a profile you already have. `FitFromCorpus(TextConfig(language=:es))` is the explicit
+  "I have no profile" escape: it delegates to `TextSearch.fit_profile`, reads at most
+  `max_documents` of your corpus to bound the cost, and gives you a correspondingly thin
+  vocabulary — every term appended later that the sample never held is dropped, silently and
+  forever. Omitting `textmodel` is an error because nothing about the project afterwards
+  reveals that the choice was made by omission. Queries then
   travel with a `QueryPolicy`: whether to correct their spelling against the vocabulary
   (`ftexplain` reports what was corrected, `QueryPolicy(correction=:off)` undoes it) and
   whether to widen them with the expansion network.

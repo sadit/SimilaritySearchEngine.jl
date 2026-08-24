@@ -125,15 +125,22 @@ A few design choices worth calling out:
   structural: an artifact has exactly one home, and the `TextConfig` the tokenizer runs is
   *derived* from the profile, so an index cannot end up tokenizing documents through a
   different lemma map than the one it saves.
-- A text engine is created from an `AbstractTextModelSpec`, and the two cases are opposite
-  answers to "where does the vocabulary come from" rather than variations on one setting.
-  `BaseProfile(profile)` trains it at creation, from a model fitted elsewhere.
-  `FitFromCorpus(textconfig; local_weighting, global_weighting, min_ndocs, min_occs,
-  stopwords)` leaves it untrained and stores the recipe in `fitspec`, for the first `index!`
-  call to run over everything staged by then. `index === nothing` exactly while
+- A text engine is created from an `AbstractTextModelSpec`: three answers to "where does the
+  vocabulary come from", not variations on one setting. `BaseProfile(profile)` trains it at
+  creation. `DefaultProfile(:es)` and `FitFromCorpus(textconfig; …)` leave it untrained and
+  store the recipe in `fitspec`, for the first `index!` call to carry out — the first by loading
+  the published profile for that language and refitting it against the staged corpus, the second
+  by delegating a fit of it to `TextSearch.fit_profile`. `index === nothing` exactly while
   `profile === nothing`. There is no separate training entry point:
   `add_item!`/`append_items!` always just stage raw text into `staged` (never an error,
   trained or not — see "Staging vs. indexing" below).
+- **Fitting is the library's job, not this package's.** `train_profile` is a dispatcher over
+  the two deferred specs and nothing more: one calls `TextSearch.fit_profile`, the other
+  `TextSearch.load_profile` + `TextSearch.refit_profile`. This package used to fit a vocabulary
+  and weights itself, and every line of that was a second implementation of something the
+  library does. What delegation costs is that a fit is now the *full* pipeline — LSI, expansion
+  network, lemma clustering — with no cheap variant, which is why `FitFromCorpus` caps its
+  sample at `max_documents` and why the recommended path avoids fitting altogether.
 - `create_engine` **requires** the spec and refuses `nothing`, and the dense kinds refuse a
   spec rather than ignoring one. Both directions are deliberate. The fit-from-corpus form
   freezes the vocabulary at the first `index!` call, so every term a later batch introduces
@@ -187,16 +194,16 @@ own to lean on:
   text straight to `TextInvertedFile`, whose own `push_item!` vectorizes through the
   profile's model) and `push_item!`ing it into the real index — with one extra twist on its
   *first* call for a project created without a profile: since neither index kind can even be
-  constructed without a `Vocabulary`, that call runs the engine's `fitspec` over everything
-  staged so far and builds the real index against the resulting `TextProfile`, before running
-  the same backlog loop. Every later call is a plain catch-up, identical in shape to
+  constructed without a `Vocabulary`, that call runs the engine's `fitspec` over what is staged
+  so far and builds the real index against the resulting `TextProfile`, before running the same
+  backlog loop. Every later call is a plain catch-up, identical in shape to
   `SearchGraphEngine`'s.
 
-  A project created from a `BaseProfile` skips that entirely, and the difference is not just
-  when the work happens: a vocabulary fitted from the first batch is frozen there, so every
-  term a later batch introduces is out-of-vocabulary and silently dropped. Indexing against a
-  profile fitted over the language (`load_profile("wiki20231101-es.zip")`) is what makes an
-  incrementally-grown text project behave.
+  A project created from a `BaseProfile` skips that entirely, and the difference is not only
+  when the work happens: a vocabulary fitted from a sample of the first batch is frozen there,
+  so every term appended later that it never saw is out-of-vocabulary and silently dropped.
+  Starting from a profile fitted over the language — `DefaultProfile(:es)`, or a `BaseProfile`
+  of one you hold — is what makes an incrementally-grown text project behave.
 
 This decouples *when* an item becomes durable (immediately, on `append_items!`) from
 *when* it becomes searchable (only after an explicit `index!`), so a caller controls when

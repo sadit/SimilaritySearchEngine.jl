@@ -25,14 +25,15 @@ directory, the same as any other embedded database.
   the same `append_items!`(stage)/`index!`(build)/`ftsearch` surface as the dense case — the
   first `index!` call on a text project also fits its `TextProfile` from whatever's been
   staged so far, so there's no separate training step to call first.
-- **A text model stated explicitly**: creating a text project requires a `textmodel` —
-  `BaseProfile(load_profile("wiki20231101-es.zip"))` to index against a model fitted
-  elsewhere (the vocabulary covers the language, so terms a later batch introduces stay
-  searchable, and the project gains that profile's stopwords, lemmas and query-expansion
-  network), or `FitFromCorpus(TextConfig(language=:es); min_ndocs=3, stopwords=0.9)` to say
-  deliberately that there is no base profile and fit one from the project's own corpus.
-  There is no default: the second form freezes the vocabulary at the first `index!` call,
-  and that is not a decision to arrive at by omission. Queries then travel with a
+- **A text model stated explicitly**: creating a text project requires a `textmodel`, and
+  there is no default. Prefer `DefaultProfile(:es)` — the published profile for a language,
+  refitted to your own corpus at the first `index!` call, so your weights are calibrated over
+  millions of paragraphs and the stopwords, lemmas and query-expansion network are inherited
+  rather than derived (`refit=false` keeps the base's language-wide vocabulary instead).
+  `BaseProfile(p)` uses a profile you already hold. `FitFromCorpus(TextConfig(language=:es))`
+  is the explicit "no base profile" escape, delegated to `TextSearch.fit_profile` and capped at
+  `max_documents` to bound its cost — which makes its vocabulary thin, and that is not a
+  decision to arrive at by omission. Queries then travel with a
   `QueryPolicy`: whether to correct their spelling against the vocabulary (`ftexplain`
   reports what was corrected, `correction=:off` undoes it) and whether to widen them with
   the profile's expansion network.

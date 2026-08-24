@@ -2,8 +2,8 @@ using Test
 using SimilaritySearchEngine
 using SimilaritySearch: SearchGraph, Dist
 using TextSearch: BM25InvertedFile, InvertedFile, TextInvertedFile, NormalizationConfig,
-                  AppliedArtifacts, FreqWeighting, BinaryGlobalWeighting,
-                  vocsize, gettextconfig, lineage_summary, token2id
+                  AppliedArtifacts, vocsize, gettrainsize, gettextconfig,
+                  lineage_summary, token2id
 using JSON
 using RocksDB
 
@@ -286,16 +286,20 @@ const ACCENT_ITEMS = vcat(
             @test !isempty(ftsearch(hp, "perro", 3))
             close_project!(hp)
 
-            # the weighting scheme reaches the model, and survives a reopen
-            hw = fitted("fit_weights", FitFromCorpus(; local_weighting=FreqWeighting(),
-                                                       global_weighting=BinaryGlobalWeighting()))
-            @test text_profile(hw).model.local_weighting isa FreqWeighting
-            @test text_profile(hw).model.global_weighting isa BinaryGlobalWeighting
-            close_project!(hw)
-            hw2 = open_project(workdir, "fit_weights")
-            @test text_profile(hw2).model.local_weighting isa FreqWeighting
-            @test text_profile(hw2).model.global_weighting isa BinaryGlobalWeighting
-            close_project!(hw2)
+            # the library's own option groups pass straight through, and the lineage proves
+            # which ones the fit actually ran under
+            he = fitted("fit_encoder", FitFromCorpus(; encoder=(; outdim=16)))
+            @test occursin("outdim=16", lineage_summary(text_profile(he)))
+            close_project!(he)
+
+            # max_documents caps what the fit reads: the sample, not the corpus, is the
+            # trainsize -- which is the whole point, and also its cost
+            hc = fitted("fit_capped", FitFromCorpus(; max_documents=5))
+            @test gettrainsize(text_profile(hc).model.voc) == 5
+            close_project!(hc)
+            hf = fitted("fit_uncapped", FitFromCorpus(; max_documents=0))
+            @test gettrainsize(text_profile(hf).model.voc) == length(items)
+            close_project!(hf)
 
             # stopword detection: flagged, applied, and gone from the rebuilt vocabulary --
             # which is what the second pass over the corpus buys
@@ -322,16 +326,54 @@ const ACCENT_ITEMS = vcat(
             @test profile !== nothing
             @test gettextconfig(profile).language === :es
             @test gettextconfig(profile).normalization.lc == false
-            # the deferred fit records where it came from, so a profile saved out of a project
-            # can be told apart from one fitted deliberately over a chosen corpus
+            # the lineage is written by the library's fit, since that is what runs: this
+            # package delegates the whole job rather than recording its own step
             @test occursin("fit(", lineage_summary(profile))
-            @test occursin("source=staged", lineage_summary(profile))
+            @test occursin("encoder=lsi", lineage_summary(profile))
+            # delegating means the full pipeline, so a fitted profile carries the artifacts a
+            # bare vocabulary-and-weights pass could not produce
+            @test !isempty(profile.query_expansion)
             close_project!(h)
 
             h2 = open_project(workdir, "cfg_ds")
             @test gettextconfig(text_profile(h2)).language === :es
             @test gettextconfig(text_profile(h2)).normalization.del_diac == false
             close_project!(h2)
+        end
+    end
+
+    @testset "DefaultProfile resolves through the installed profile library" begin
+        # An unknown language is refused at construction, naming the ones that are known --
+        # there is nothing to look up and no point deferring the error to index! time.
+        @test_throws ArgumentError DefaultProfile(:xx)
+        for lang in (:en, :es, :pt)
+            @test haskey(DEFAULT_PROFILE_NICKNAMES, lang)
+            @test DefaultProfile(lang).nickname == DEFAULT_PROFILE_NICKNAMES[lang]
+        end
+        # a nickname overrides the per-language default, for a refit of your own or another snapshot
+        @test DefaultProfile(:es; nickname="mine").nickname == "mine"
+
+        # Resolution is by convention over $TEXTSEARCH_HOME, and a missing profile is an error
+        # carrying the command that installs it -- "no such file" under ~/.textsearch is not
+        # actionable to someone who has never run the CLI.
+        mktempworkdir() do home
+            withenv("TEXTSEARCH_HOME" => home) do
+                spec = DefaultProfile(:es)
+                @test SimilaritySearchEngine.IndexEngine.textsearch_home() == home
+                msg = try
+                    default_profile_path(spec); ""
+                catch e
+                    sprint(showerror, e)
+                end
+                @test occursin("not installed", msg)
+                @test occursin("textsearch install", msg)
+                @test occursin(spec.nickname, msg)
+
+                # and it resolves once the file is there
+                mkpath(joinpath(home, "profiles"))
+                touch(joinpath(home, "profiles", spec.nickname * ".zip"))
+                @test default_profile_path(spec) == joinpath(home, "profiles", spec.nickname * ".zip")
+            end
         end
     end
 

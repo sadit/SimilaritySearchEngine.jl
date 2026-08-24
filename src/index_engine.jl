@@ -18,7 +18,9 @@ export calibrate!, current_beamsearch, OptBeamSearch, DEFAULT_MINRECALL_LEVELS, 
 export direct_neighbors, apply_searchgraph_vectors!, build_searchgraph
 export invertedfile_objects, build_bm25invertedfile, build_textinvertedfile
 export text_profile, text_vocabulary, resolve_query, query_pipeline
-export AbstractTextModelSpec, BaseProfile, FitFromCorpus, is_text_index_type, validate_textmodel
+export AbstractTextModelSpec, BaseProfile, FitFromCorpus, DefaultProfile
+export DEFAULT_PROFILE_NICKNAMES, default_profile_path, train_profile
+export is_text_index_type, validate_textmodel
 
 """
     AbstractSearchEngine
@@ -181,17 +183,30 @@ const DEFAULT_MINRECALL_LEVELS = Float32[0.8, 0.9, 0.95, 0.97]
 """
     AbstractTextModelSpec
 
-The text-model decision a text project is created with, as a value: either
-[`BaseProfile`](@ref) (index against a model fitted elsewhere) or [`FitFromCorpus`](@ref)
-(fit one from this project's own corpus).
+The text-model decision a text project is created with, as a value. Three answers to "where
+does this project's vocabulary come from", in the order worth preferring them:
 
-There is no default and no `nothing`. The two are not variations on one setting, they are
-opposite answers to "where does the vocabulary come from", and the difference outlives the
-call: a fitted-here vocabulary is frozen at the first [`index!`](@ref index!(::BM25Engine))
-call, so every term a later batch introduces is out-of-vocabulary and silently dropped from
-then on. That is a fine trade for a closed corpus and a bad surprise for a growing one, which
-is why [`create_engine`](@ref) makes a text project name which one it wants rather than
-picking the cheap one by default.
+1. [`DefaultProfile`](@ref)`(:es)` -- the published profile for a language, refitted to this
+   project's own corpus at the first [`index!`](@ref index!(::BM25Engine)) call: weights
+   calibrated over millions of paragraphs, plus a stopword set, lemma map and expansion network
+   inherited rather than derived. Read its docstring for what the refit narrows and what
+   `refit=false` keeps -- the two answer different needs.
+2. [`BaseProfile`](@ref)`(profile)` -- a profile the caller already has, used as it is.
+3. [`FitFromCorpus`](@ref)`(textconfig)` -- no base profile: fit one here, from this project's
+   own staged corpus.
+
+There is no default and no `nothing`, because the third is a trap worth being made to choose.
+Fitting from the project's own corpus is delegated to `TextSearch.fit_profile`, which runs the
+full pipeline -- LSI, expansion network, lemma clustering -- so it is bounded by a sample cap
+rather than by the corpus, and its vocabulary is correspondingly thin. Every term a later batch
+introduces that the sample never held is out-of-vocabulary and silently dropped, forever.
+Nothing about the project's behaviour afterwards distinguishes "I chose this" from "I never
+said", which is exactly why it cannot be arrived at by omission.
+
+**Prefer a profile you did not fit here.** That is the whole shape of this hierarchy: the two
+good answers both start from a model fitted over more text than this project has -- which is
+where calibrated weights, a stopword set, a lemma map and an expansion network can come from at
+all -- and the third exists for the case where no such model is to be had.
 
 Each is a type rather than a flag, and carries its *own* related options, so an option that
 only means something on one path cannot be handed to the other -- the same reason the engine
@@ -221,69 +236,210 @@ end
 
 """
     FitFromCorpus(textconfig::TextConfig=TextConfig();
-                  local_weighting=TfWeighting(), global_weighting=IdfWeighting(),
-                  min_ndocs=1, min_occs=1, stopwords=nothing)
+                  min_ndocs=1, max_documents=1000, stopwords=nothing,
+                  encoder=NamedTuple(), expansion=NamedTuple(), lemmas=NamedTuple())
 
 Fit this project's text model from its own staged corpus, under `textconfig` -- the
 corpus-independent policy (normalization, tokenization, `language`), with no base profile.
-This is the explicit form of "I have no pre-fitted model": see [`AbstractTextModelSpec`](@ref)
-for the out-of-vocabulary consequence it accepts.
+This is the explicit form of "I have no pre-fitted model", and the least good of the three
+choices: see [`AbstractTextModelSpec`](@ref) for what it costs and [`DefaultProfile`](@ref)
+for what to reach for instead.
 
-The fit is deferred to the first [`index!`](@ref index!(::BM25Engine)) call, which runs it
-over everything staged by then -- whatever you have appended before that call *is* the
-training corpus.
+The fit is deferred to the first [`index!`](@ref index!(::BM25Engine)) call, and delegated
+whole to `TextSearch.fit_profile` -- this package does not fit profiles, it asks the library
+to. That means every fit runs the full pipeline: an LSI over the sample, a query-expansion
+network from it, and a lemma map clustered from the same embeddings. There is no cheap variant,
+and the numbers are not small: measured on 3,000 paragraphs, that pipeline takes 48.8s where a
+bare vocabulary-and-weights pass takes 0.2s.
+
+# `max_documents` is why this is affordable at all
+
+The fit reads at most `max_documents` of the staged corpus (1,000 by default), sampled by an
+even stride across it rather than taken from the front -- the front is whatever batch arrived
+first, one book or one import, and a stride spans everything staged. Without the cap the cost
+grows with the corpus: the same pipeline over 300,000 paragraphs took 863s.
+
+The cap is a real trade, not a free win, and it cuts the wrong way from the one thing this path
+is worst at. A vocabulary fitted from 1,000 sampled documents is smaller than one fitted from
+the whole corpus, so *more* of what gets appended later is out-of-vocabulary and silently
+dropped. `max_documents=0` lifts the cap for a caller who would rather pay; the honest fix is
+not to fit here at all.
 
 # Options
-- `local_weighting`/`global_weighting`: the `VectorModel` weighting scheme (`TfWeighting`,
-  `TpWeighting`, `FreqWeighting`, `BinaryLocalWeighting` × `IdfWeighting`,
-  `BinaryGlobalWeighting`, `EntropyWeighting`). Only the weighted index kind scores through
-  it; a `BM25InvertedFile` scores from raw bags, and carries the model for the query side.
-- `min_ndocs`/`min_occs`: drop a token seen in fewer than `min_ndocs` documents, or fewer than
-  `min_occs` times overall, before the model is built. Both default to `1` (keep everything).
-  Worth raising on real corpora: the long tail of hapaxes is most of a vocabulary's size and
-  almost none of its retrieval value, and it is where unaccented misspellings and
-  foreign-language fragments live.
+
+`min_ndocs`, `stopwords`, `encoder`, `expansion` and `lemmas` are passed through to
+`TextSearch.fit_profile`; see it for the full set each accepts.
+
+- `min_ndocs`: drop a token seen in fewer documents than this before the encoder runs. Not
+  cosmetic -- the expansion network is an all-pairs kNN over the vocabulary, so pruning cuts
+  the most expensive stage quadratically.
 - `stopwords`: a document-frequency threshold in `(0, 1]`, or `nothing` (the default) not to
-  detect any. When given, tokens above the threshold are flagged by
-  `TextSearch.stopword_candidates` and the vocabulary is rebuilt with them filtered out --
-  which costs a **second pass over the corpus**, because the counts have to be recomputed
-  under the pipeline that drops them. A frequency heuristic only, and per spelling rather than
-  per word (`stopword_candidates` explains what that costs); it is the one artifact estimable
-  from an indexing corpus at all -- a lemma map needs word embeddings and an expansion network
-  needs an LSI, which is what a [`BaseProfile`](@ref) brings instead.
+  detect any. Given, it becomes the library's `stopwords=(; doc_freq_threshold=...)`, which
+  costs a second pass over the sample because the counts have to be recomputed under the
+  pipeline that drops the flagged tokens.
+- `encoder`, `expansion`, `lemmas`: the library's own option groups, as `NamedTuple`s --
+  `encoder=(; outdim=128)`, `lemmas=(; apply=true)`, and so on.
+
+Two options this spec used to carry are gone, because the library's fit does not express them
+and delegation is the policy: the `VectorModel` weighting scheme (it always fits
+`IdfWeighting`/`TfWeighting`) and `min_occs` (it prunes by document count only).
 """
 struct FitFromCorpus <: AbstractTextModelSpec
     textconfig::TextConfig
-    local_weighting::LocalWeighting
-    global_weighting::GlobalWeighting
     min_ndocs::Int
-    min_occs::Int
+    max_documents::Int
     stopwords::Union{Nothing,Float64}
+    encoder::NamedTuple
+    expansion::NamedTuple
+    lemmas::NamedTuple
 
     function FitFromCorpus(textconfig::TextConfig=TextConfig();
-                           local_weighting::LocalWeighting=TfWeighting(),
-                           global_weighting::GlobalWeighting=IdfWeighting(),
-                           min_ndocs::Integer=1, min_occs::Integer=1,
-                           stopwords::Union{Nothing,Real}=nothing)
+                           min_ndocs::Integer=1, max_documents::Integer=1000,
+                           stopwords::Union{Nothing,Real}=nothing,
+                           encoder::NamedTuple=NamedTuple(),
+                           expansion::NamedTuple=NamedTuple(),
+                           lemmas::NamedTuple=NamedTuple())
         min_ndocs >= 1 || throw(ArgumentError("min_ndocs must be at least 1; got $min_ndocs"))
-        min_occs >= 1 || throw(ArgumentError("min_occs must be at least 1; got $min_occs"))
+        max_documents >= 0 ||
+            throw(ArgumentError("max_documents must be non-negative (0 lifts the cap); got $max_documents"))
         stopwords === nothing || 0 < stopwords <= 1 ||
             throw(ArgumentError("stopwords must be a document-frequency threshold in (0, 1], or nothing; got $stopwords"))
-        new(textconfig, local_weighting, global_weighting, Int(min_ndocs), Int(min_occs),
-            stopwords === nothing ? nothing : Float64(stopwords))
+        new(textconfig, Int(min_ndocs), Int(max_documents),
+            stopwords === nothing ? nothing : Float64(stopwords), encoder, expansion, lemmas)
     end
 end
+
+"""
+    DefaultProfile(language::Symbol; nickname=..., refit=true, max_documents=1000)
+
+Index against the published profile for `language` (`:en`, `:es`, `:pt`), adapted to this
+project's own corpus at the first [`index!`](@ref index!(::BM25Engine)) call.
+
+This is the choice to reach for. `TextSearch.refit_profile` blends the base's token counts with
+this project's own, recomputes the weights from the blend, and *inherits* the stopword set,
+lemma map and expansion network instead of re-deriving them. No embedding is fitted, which is
+what makes a refit cheap next to a fit and is the point of bootstrapping.
+
+# What a refit actually gives you, and what it does not
+
+Measured: the published English paragraph profile holds 335,336 tokens; refitting it against an
+800-document sample gives 12,238, of which 2,649 are tokens the sample never contained and the
+base kept. Fitting on that sample alone would give 9,589.
+
+So a refit is **not** language-wide vocabulary coverage. It narrows to this corpus's own
+vocabulary, widened about a quarter by the base. What it inherits is the part an indexing corpus
+cannot produce for itself: idf and BM25 weights calibrated over millions of paragraphs rather
+than hundreds, plus the artifacts -- for that English base, 96 stopwords, 16,661 lemmas and
+10,655 expansion entries.
+
+`refit=false` is therefore not just "skip a step": it indexes against the base untouched, all
+335,336 tokens of it, so a term this project has never seen is still in the vocabulary and still
+searchable when a later batch brings it. The weights are Wikipedia's rather than yours. Choose
+by which you need -- calibration for this corpus, or coverage beyond it. With `refit=false` this
+is exactly `BaseProfile(load_profile(path))` with the path resolved for you.
+
+`max_documents` caps the refit sample as it does on [`FitFromCorpus`](@ref), and here the cap is
+cheap: the sample's only job is to say how this corpus differs from the base.
+
+# Where the profile comes from
+
+`~/.textsearch/profiles/<nickname>.zip` (or under `\$TEXTSEARCH_HOME`) -- the library of
+installed profiles `textsearch install` maintains, reused rather than reinvented. Nothing is
+bundled with this package and nothing is downloaded: the profiles are 70-160 MB each. If the
+one you asked for is not installed, [`default_profile_path`](@ref) says so and prints the
+command that installs it.
+
+`nickname` defaults to [`DEFAULT_PROFILE_NICKNAMES`](@ref)`[language]` and can be overridden to
+point at any installed profile -- a refit of your own, a different Wikipedia snapshot, a
+domain-specific base.
+"""
+struct DefaultProfile <: AbstractTextModelSpec
+    language::Symbol
+    nickname::String
+    refit::Bool
+    max_documents::Int
+
+    function DefaultProfile(language::Symbol;
+                            nickname::Union{Nothing,AbstractString}=nothing,
+                            refit::Bool=true, max_documents::Integer=1000)
+        nick = nickname === nothing ? get(DEFAULT_PROFILE_NICKNAMES, language, nothing) : String(nickname)
+        nick === nothing && throw(ArgumentError(
+            "no default profile is known for language $(repr(language)); known: " *
+            join(sort(String.(collect(keys(DEFAULT_PROFILE_NICKNAMES)))), ", ") *
+            ". Pass `nickname=` to name an installed profile explicitly."))
+        max_documents >= 0 ||
+            throw(ArgumentError("max_documents must be non-negative (0 lifts the cap); got $max_documents"))
+        new(language, nick, refit, Int(max_documents))
+    end
+end
+
+"""
+    DEFAULT_PROFILE_NICKNAMES
+
+The installed-profile nickname [`DefaultProfile`](@ref) looks for, per language.
+
+Paragraph-level profiles, matching what a project built out of paragraphs indexes: a document
+frequency counted over paragraphs separates a real stopword from an artifact, where one counted
+over whole articles says almost nothing. English is the `-partial` build, which is what exists.
+"""
+const DEFAULT_PROFILE_NICKNAMES = Dict{Symbol,String}(
+    :en => "wiki20231101-en-paragraphs-partial",
+    :es => "wiki20231101-es-paragraphs",
+    :pt => "wiki20231101-pt-paragraphs",
+)
+
+"""
+    textsearch_home() -> String
+
+Where `textsearch install` keeps its profile library: `\$TEXTSEARCH_HOME`, or `~/.textsearch`.
+
+The convention is replicated here rather than called, because it lives in the `textsearch` CLI
+app -- which is an application, not a package this one can depend on. One line, and the env var
+is the part that matters: a caller who moved their profile library expects both halves to agree
+about where it went.
+"""
+textsearch_home() = get(ENV, "TEXTSEARCH_HOME", joinpath(homedir(), ".textsearch"))
+
+"""
+    default_profile_path(spec::DefaultProfile) -> String
+
+The installed profile file `spec` names, under [`textsearch_home`](@ref).
+
+Raises if it is not installed, and the message carries the command that installs it: "no such
+file" naming a path under `~/.textsearch` is not actionable to someone who has never run the
+CLI, and this is the most likely first thing a caller of [`DefaultProfile`](@ref) hits.
+"""
+function default_profile_path(spec::DefaultProfile)
+    path = joinpath(textsearch_home(), "profiles", spec.nickname * ".zip")
+    isfile(path) && return path
+    error("""
+        the default profile for $(repr(spec.language)) is not installed: no $path
+        Install it from a profile zip (they are 70-160 MB, so nothing here downloads one for you):
+            textsearch install path/to/$(spec.nickname).zip $(spec.nickname)
+        TextSearch ships builds under corpus-profiles/profiles/. To skip the profile library \
+        entirely, pass the file directly instead:
+            textmodel = BaseProfile(load_profile("path/to/$(spec.nickname).zip"))""")
+end
+
+# The two specs that leave a project untrained until its first `index!` call, each carrying what
+# that call needs to produce a profile. `BaseProfile` is the third and is trained on arrival.
+const DeferredFit = Union{FitFromCorpus, DefaultProfile}
 
 Base.show(io::IO, s::BaseProfile) = print(io, "BaseProfile(", s.profile.model.voc |> vocsize, " tokens)")
 
 function Base.show(io::IO, s::FitFromCorpus)
     print(io, "FitFromCorpus(", s.textconfig.language)
-    print(io, ", ", nameof(typeof(s.local_weighting)), "/", nameof(typeof(s.global_weighting)))
     s.min_ndocs == 1 || print(io, ", min_ndocs=", s.min_ndocs)
-    s.min_occs == 1 || print(io, ", min_occs=", s.min_occs)
+    print(io, ", max_documents=", s.max_documents == 0 ? "uncapped" : string(s.max_documents))
     s.stopwords === nothing || print(io, ", stopwords=", s.stopwords)
+    isempty(s.encoder) || print(io, ", encoder=", s.encoder)
+    isempty(s.expansion) || print(io, ", expansion=", s.expansion)
+    isempty(s.lemmas) || print(io, ", lemmas=", s.lemmas)
     print(io, ")")
 end
+
+Base.show(io::IO, s::DefaultProfile) = print(io, "DefaultProfile(:", s.language, ", ", s.nickname,
+                                             s.refit ? ", refit" : ", as-is", ")")
 
 """
     is_text_index_type(::Type) -> Bool
@@ -301,20 +457,23 @@ is_text_index_type(::Type) = false
 # deferred fit. Exactly one of them is ever non-`nothing` at creation, which is what makes the
 # choice unambiguous downstream -- `index!` fits if and only if it finds no profile.
 _initial_profile(spec::BaseProfile) = spec.profile
-_initial_profile(::FitFromCorpus) = nothing
+_initial_profile(::DeferredFit) = nothing
 _deferred_fit(::BaseProfile) = nothing
-_deferred_fit(spec::FitFromCorpus) = spec
+_deferred_fit(spec::DeferredFit) = spec
 
 function _require_textmodel(IndexType::Type, textmodel)
     textmodel isa AbstractTextModelSpec && return textmodel
     textmodel === nothing && error("""
-        a text project ($(nameof(IndexType))) needs an explicit `textmodel`, because the two ways to get \
-        a vocabulary are not interchangeable and one of them cannot be undone later:
-          textmodel=BaseProfile(load_profile("wiki20231101-es.zip"))  -- index against a model fitted \
-        elsewhere; the vocabulary covers the language, so terms a later batch introduces stay searchable
-          textmodel=FitFromCorpus(TextConfig())  -- fit one from this project's own corpus at the first \
-        index! call, which freezes the vocabulary there: every term appended afterwards that it never saw \
-        is out-of-vocabulary and silently dropped""")
+        a text project ($(nameof(IndexType))) needs an explicit `textmodel`, because the ways to get a \
+        vocabulary are not interchangeable and the cheap one cannot be undone later:
+          textmodel=DefaultProfile(:es)  -- recommended. The published profile for a language, refitted \
+        to this project's corpus at the first index! call: a vocabulary fitted over a whole Wikipedia \
+        edition, with its stopwords, lemmas and expansion network, adapted without fitting an embedding
+          textmodel=BaseProfile(load_profile("path/to/profile.zip"))  -- a profile you already have, \
+        used as it is
+          textmodel=FitFromCorpus(TextConfig())  -- no base profile: fit one here, from at most \
+        max_documents of this project's own corpus. Bounded in cost and thin in vocabulary, so every \
+        term appended later that the sample never held is out-of-vocabulary and silently dropped""")
     error("textmodel must be a BaseProfile or a FitFromCorpus; got $(typeof(textmodel))")
 end
 
@@ -423,7 +582,7 @@ it has to) and encodes/indexes the backlog.
   (`gettextconfig(profile)`) is *derived* from it, so an index cannot end up tokenizing
   documents through a different lemma map than the one it saves. `index === nothing` if and
   only if this is `nothing`.
-- `fitspec::Union{Nothing, FitFromCorpus}`: the recipe for the deferred fit (policy,
+- `fitspec::Union{Nothing, DeferredFit}`: the recipe for the deferred fit (policy,
   weighting, pruning, stopword threshold) -- consulted only by the [`index!`](@ref
   index!(::BM25Engine)) call that has to fit `profile`, and never again once one exists;
   `gettextconfig(profile)` is the authority from that point on, since it additionally carries
@@ -456,7 +615,7 @@ it has to) and encodes/indexes the backlog.
 mutable struct BM25Engine <: AbstractSearchEngine
     index::Union{Nothing, BM25InvertedFile}
     profile::Union{Nothing, TextProfile}
-    fitspec::Union{Nothing, FitFromCorpus}
+    fitspec::Union{Nothing, DeferredFit}
     variants::Union{Nothing, Dict{String,Vector{String}}}
     staged::Vector{String}
     ctx::InvertedFileContext
@@ -487,7 +646,7 @@ only ever *stage* raw text into `staged`.
 - `profile::Union{Nothing, TextProfile}`: as on [`BM25Engine`](@ref) -- vocabulary,
   weights, artifacts and lineage in one value. `index.model` is this profile's own
   `VectorModel`, not a second copy of it.
-- `fitspec::Union{Nothing, FitFromCorpus}`: as on [`BM25Engine`](@ref) -- the recipe for the
+- `fitspec::Union{Nothing, DeferredFit}`: as on [`BM25Engine`](@ref) -- the recipe for the
   deferred fit, unused once `profile` exists, `nothing` when there was never one to defer.
 - `variants::Union{Nothing, Dict{String,Vector{String}}}`: as on [`BM25Engine`](@ref).
 - `distance::SimilaritySearch.PreMetric`: the distance chosen at `create_engine` time --
@@ -513,7 +672,7 @@ only ever *stage* raw text into `staged`.
 mutable struct InvertedFileEngine <: AbstractSearchEngine
     index::Union{Nothing, TextInvertedFile}
     profile::Union{Nothing, TextProfile}
-    fitspec::Union{Nothing, FitFromCorpus}
+    fitspec::Union{Nothing, DeferredFit}
     variants::Union{Nothing, Dict{String,Vector{String}}}
     distance::SimilaritySearch.PreMetric
     staged::Vector{String}
@@ -713,96 +872,77 @@ text_profile(engine::Union{BM25Engine, InvertedFileEngine}) = engine.profile
 text_profile(::AbstractSearchEngine) = nothing
 text_vocabulary(engine::AbstractSearchEngine) = (p = text_profile(engine); p === nothing ? nothing : p.model.voc)
 
-# Drops tokens below `spec`'s frequency floors. Returns `voc` untouched when both floors are
-# 1, so the no-pruning default costs nothing (`filter_tokens` rebuilds the whole vocabulary).
-# `filter_tokens` carries `trainsize`/`numtokens` across unchanged, which is what BM25's
-# average document length is computed from -- the pruned tokens still occurred in those
-# documents, so those totals should not shrink with the vocabulary.
-function _prune_vocabulary(voc::Vocabulary, spec::FitFromCorpus)
-    (spec.min_ndocs <= 1 && spec.min_occs <= 1) && return voc
-    filter_tokens(voc) do t
-        t.ndocs >= spec.min_ndocs && t.occs >= spec.min_occs
-    end
+"""
+    _sample(corpus, max_documents) -> corpus, or an evenly-strided view of it
+
+At most `max_documents` of `corpus`, taken by an even stride rather than from the front.
+
+The front of a staged corpus is whatever batch arrived first -- one book, one import, one day's
+ingest -- so a prefix is a biased sample of exactly the axis a text model should not be biased
+on. A stride spans everything staged and needs no RNG, so two runs over the same corpus fit the
+same model. `max_documents <= 0` means no cap.
+"""
+function _sample(corpus, max_documents::Integer)
+    n = length(corpus)
+    (max_documents <= 0 || n <= max_documents) && return corpus
+    view(corpus, 1:cld(n, max_documents):n)
 end
 
 """
-    TextSearch.fit_profile(spec::FitFromCorpus, corpus; source="corpus") -> TextProfile
+    TextSearch.fit_profile(spec::FitFromCorpus, corpus; verbose=false) -> TextProfile
 
-Fits a `TextSearch.TextProfile` over `corpus` as [`FitFromCorpus`](@ref) `spec` describes it:
-a `Vocabulary` counted under `spec.textconfig` and pruned to its frequency floors, optional
-stopword detection, a `VectorModel` under its weighting scheme, and a `:fit` lineage step
-recording the corpus size and where it came from (`source` -- `"staged"` when the fit was the
-deferred one an [`index!`](@ref index!(::BM25Engine)) call ran over a project's own staged
-text, which is worth telling apart from a fit a caller ran deliberately over a corpus it
-chose).
+Fits a profile from `corpus` as [`FitFromCorpus`](@ref) `spec` asks -- by handing the whole job
+to the library.
 
-Stopword detection is what makes this two passes rather than one: the flags come from
-document frequencies counted under the policy, and dropping the flagged tokens changes every
-count the model is built from, so the vocabulary has to be recounted under the pipeline that
-excludes them. `spec.stopwords === nothing` (the default) skips the second pass entirely.
+This method is an adapter and nothing else: it samples `corpus` down to `spec.max_documents`
+(see [`_sample`](@ref)) and calls `TextSearch.fit_profile(spec.textconfig, sample; ...)`. This
+package does not fit profiles. It used to -- a vocabulary, a weighting scheme and an optional
+stopword pass, about forty lines -- and every one of those lines was a second implementation of
+something the library does, with the drift that implies. Delegating is the policy, and the
+forty lines are gone.
 
-Written as a method of `TextSearch.fit_profile` rather than as a function of this package's
-own. The library published its own `fit_profile(::TextConfig, corpus; ...)` -- a fuller fit that
-also runs an LSI and derives an expansion network and a lemma map -- and two separate functions
-under one name, one per module, is a binding that errors the moment both modules are in scope.
-One generic function, dispatching on whether the caller brings a bare policy or one of this
-package's [`FitFromCorpus`](@ref) specs, is the honest arrangement.
+What the caller gets for it is the full pipeline rather than the cheap subset: an LSI over the
+sample, a query-expansion network derived from it, and a lemma map clustered from the same
+embeddings. That is strictly more than the old body produced and it costs accordingly, which is
+what `spec.max_documents` exists to bound and what [`DefaultProfile`](@ref) exists to avoid.
 
-The two methods share a name because they answer the same question, and they are not
-interchangeable. Measured on the same 3,000-paragraph corpus, this one takes **0.22s** and the
-library's takes **48.77s** -- 225x -- for the same 17,867-token vocabulary. The library's is not
-slower at the same job; it is doing a different, larger one, and the extra 48 seconds buy an
-LSI, a 17,867-entry expansion network and 2,744 lemmas. That is the right trade when a caller
-sits down to build a profile, and the wrong one for the first `index!` call of a project that
-merely never supplied one: a deferred fit is the cheap fallback, and turning it into a
-minutes-long pipeline would make a project's first indexing call unrecognizable.
-
-So this method is not a stopgap awaiting delegation. What it is missing is a way to *ask* for
-the full pipeline, which would delegate outright; a `FitFromCorpus` cannot express one today
-because it has no encoder/expansion/lemma options to carry.
-
-Beyond stopwords the profile carries no artifacts of its own -- a lemma map needs word
-embeddings and an expansion network needs an LSI, neither of which this method computes, which
-is what the library's own method and the `textsearch fit` pipeline exist to do, and what a
-[`BaseProfile`](@ref) brings instead. What this *does* preserve is any artifact the caller
-already put in `spec.textconfig.pipeline`: those are lifted out into the profile's own fields
-with `applied` set to match, so that `TextProfile`'s constructor rematerializes the identical
-`TextConfig` rather than the bare policy. Skipping that step would silently index documents
-through a lemma map the profile then claims not to have -- exactly the
-saved-copy-versus-applied-copy drift the type was introduced to make impossible.
+`verbose` is passed through, defaulting to `false` here rather than the library's `true`: this
+runs inside an [`index!`](@ref index!(::BM25Engine)) call, which is not a place a caller asked
+for a progress report.
 """
-function TextSearch.fit_profile(spec::FitFromCorpus, corpus; source::AbstractString="corpus")
-    textconfig = spec.textconfig
-    voc = _prune_vocabulary(Vocabulary(textconfig, corpus), spec)
+function TextSearch.fit_profile(spec::FitFromCorpus, corpus; verbose::Bool=false)
+    sample = _sample(corpus, spec.max_documents)
+    stopwords = spec.stopwords === nothing ? NamedTuple() : (; doc_freq_threshold=spec.stopwords)
+    TextSearch.fit_profile(spec.textconfig, sample;
+                           min_ndocs=spec.min_ndocs, stopwords,
+                           encoder=spec.encoder, expansion=spec.expansion,
+                           lemmas=spec.lemmas, verbose)
+end
 
-    detected = 0
-    if spec.stopwords !== nothing
-        flagged = stopword_candidates(voc, spec.stopwords)
-        if !isempty(flagged)
-            detected = length(flagged)
-            carried = textconfig.pipeline.stopwords
-            stops = carried === nothing ? Set{String}(flagged) : union(carried, flagged)
-            textconfig = TextConfig(textconfig;
-                pipeline=TokenPipeline(lemmas=textconfig.pipeline.lemmas, stopwords=stops))
-            voc = _prune_vocabulary(Vocabulary(textconfig, corpus), spec)
-        end
-    end
+"""
+    train_profile(spec::DeferredFit, corpus; verbose=false) -> TextProfile
 
-    model = VectorModel(spec.global_weighting, spec.local_weighting, voc)
-    pipeline = textconfig.pipeline
-    stopwords = pipeline.stopwords === nothing ? Set{String}() : pipeline.stopwords
-    lemmas = pipeline.lemmas === nothing ? Dict{String,String}() : pipeline.lemmas
-    applied = AppliedArtifacts(; stopwords=pipeline.stopwords !== nothing,
-                                 lemmas=pipeline.lemmas !== nothing)
-    return TextProfile(model; stopwords, lemmas, applied,
-                       lineage=[LineageStep(:fit;
-                                            trainsize=length(corpus),
-                                            source=String(source),
-                                            local_weighting=String(string(nameof(typeof(spec.local_weighting)))),
-                                            global_weighting=String(string(nameof(typeof(spec.global_weighting)))),
-                                            min_ndocs=spec.min_ndocs,
-                                            min_occs=spec.min_occs,
-                                            stopwords_detected=detected)])
+The profile a deferred spec produces, given the corpus staged by the time
+[`index!`](@ref index!(::BM25Engine)) first runs.
+
+One entry point over the two deferred specs, because `index!` should not care which it is
+holding -- it asks for a profile and gets one. What happens underneath is entirely different in
+cost and in quality:
+
+- [`FitFromCorpus`](@ref) fits one from the sample, through the library.
+- [`DefaultProfile`](@ref) loads the installed base for its language and, unless `refit=false`,
+  adapts it with `TextSearch.refit_profile`: the base's counters blended with this corpus's,
+  the weights recomputed, the stopword set, lemma map and expansion network inherited. No
+  embedding is fitted, which is what makes this the cheap path *and* the one with the better
+  vocabulary -- the opposite of the trade `FitFromCorpus` has to make.
+"""
+train_profile(spec::FitFromCorpus, corpus; verbose::Bool=false) =
+    TextSearch.fit_profile(spec, corpus; verbose)
+
+function train_profile(spec::DefaultProfile, corpus; verbose::Bool=false)
+    base = TextSearch.load_profile(default_profile_path(spec))
+    spec.refit || return base
+    TextSearch.refit_profile(base, _sample(corpus, spec.max_documents); verbose)
 end
 
 # The variant map cached on a text engine (see `BM25Engine`'s `variants` field): derived once,
@@ -932,19 +1072,21 @@ above. `TextInvertedFile` and `InvertedFile` select the same engine and are inte
 here; `TextInvertedFile` is the name of what actually gets built (see
 [`InvertedFileEngine`](@ref)).
 
-`textmodel::`[`AbstractTextModelSpec`](@ref) is **required** -- there is no default:
+`textmodel::`[`AbstractTextModelSpec`](@ref) is **required** -- there is no default. See that
+type for the three forms and why the order matters; briefly:
 
-- [`BaseProfile`](@ref)`(profile)` indexes against a model fitted elsewhere. The engine is
-  trained from this moment: the real index is built immediately, nothing is inferred from the
-  data appended later, and the vocabulary covers the language rather than just this project's
-  first batch.
-- [`FitFromCorpus`](@ref)`(textconfig; ...)` fits one from this project's own staged corpus at
-  the first [`index!`](@ref index!(::BM25Engine)) call, with no base profile.
+- [`DefaultProfile`](@ref)`(:es)` -- recommended. The published profile for a language, refitted
+  to this project's corpus at the first [`index!`](@ref index!(::BM25Engine)) call.
+- [`BaseProfile`](@ref)`(profile)` -- a profile in hand, used as it is. The engine is trained
+  from this moment: the index is built immediately and nothing is inferred from later data.
+- [`FitFromCorpus`](@ref)`(textconfig; ...)` -- no base profile: fit one at the first `index!`
+  call from at most `max_documents` of this project's own staged corpus.
 
-Omitting it is an error rather than a default, and that is the point: the second form freezes
-the vocabulary at the first `index!` call, so every term a later batch introduces is
-out-of-vocabulary and silently dropped from then on. Nothing about a project's behaviour later
-reveals that this choice was made by omission, which is exactly why it cannot be.
+Omitting it is an error rather than a default, and that is the point: the third form's
+vocabulary is fitted from a capped sample, so every term appended later that the sample never
+held is out-of-vocabulary and silently dropped from then on. Nothing about a project's
+behaviour later reveals that this choice was made by omission, which is exactly why it cannot
+be.
 """
 function create_engine(::Type{BM25InvertedFile}; distance=nothing, minrecall=nothing,
                        textmodel::Union{Nothing,AbstractTextModelSpec}=nothing,
@@ -1124,7 +1266,7 @@ function index!(engine::BM25Engine)
         n == 0 && error("BM25Engine has nothing staged yet -- add_item!/append_items! at least one item before calling index!")
         already = engine.index === nothing ? 0 : length(engine.index)
         if engine.profile === nothing
-            profile = TextSearch.fit_profile(engine.fitspec, engine.staged; source="staged")
+            profile = train_profile(engine.fitspec, engine.staged)
             engine.profile = profile
             engine.variants = _derive_variants(profile)
             engine.index = BM25InvertedFile(profile.model.voc)
@@ -1143,7 +1285,7 @@ function index!(engine::InvertedFileEngine)
         n == 0 && error("InvertedFileEngine has nothing staged yet -- add_item!/append_items! at least one item before calling index!")
         already = engine.index === nothing ? 0 : length(engine.index)
         if engine.profile === nothing
-            profile = TextSearch.fit_profile(engine.fitspec, engine.staged; source="staged")
+            profile = train_profile(engine.fitspec, engine.staged)
             engine.profile = profile
             engine.variants = _derive_variants(profile)
             engine.index = _new_textinvertedfile(profile, engine.distance)
@@ -1291,6 +1433,8 @@ function index!(engine::SearchGraphEngine)
     return engine
 end
 
+index!(engine::GenericEngine) = engine
+
 """
     add_item!(engine::AbstractSearchEngine, item)
 
@@ -1353,8 +1497,8 @@ distances.
 
 Built per call rather than once per index, because `policy` is per call: correcting and
 expanding are guesses about what a person meant, so the same project has to be able to answer
-both ways. The index itself therefore carries an empty pipeline (see
-[`_new_textinvertedfile`](@ref)) and every search assembles its own.
+both ways. The index itself therefore carries an empty pipeline and every
+search assembles its own.
 
 The network is included only when the profile *applies* it. A fitted profile carries a network
 without applying it -- computing an artifact and deciding to use it are different acts -- and

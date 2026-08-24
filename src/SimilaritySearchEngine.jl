@@ -65,6 +65,7 @@ export text_profile, fit_profile
 
 # The text-model decision a text project is created with: `create_project` refuses to guess,
 # so these two are part of the minimum vocabulary for creating one at all.
-export AbstractTextModelSpec, BaseProfile, FitFromCorpus
+export AbstractTextModelSpec, BaseProfile, DefaultProfile, FitFromCorpus
+export DEFAULT_PROFILE_NICKNAMES, default_profile_path, train_profile
 
 end # module

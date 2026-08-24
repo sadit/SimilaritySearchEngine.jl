@@ -4,6 +4,7 @@ using JSON3
 
 export AbstractItem, DenseItem, TextItem, MetadataRecord, StoredItem
 export payload, metadata_record, encode_meta, decode_meta, raw_meta
+export get_field, matches_filter
 
 """
     AbstractItem
@@ -229,5 +230,52 @@ also call `decode_meta` on the same underlying data), copy it first.
 """
 raw_meta(bytes::Vector{UInt8}) = isempty(bytes) ? nothing : String(bytes)
 raw_meta(::Nothing) = nothing
+
+"""
+    get_field(record::MetadataRecord, meta, name::String) -> Any
+
+Retrieves a field by name either from `record`'s fixed fields (`_id`, `doc_id`, `keywords`, `refs`, `schema_version`)
+or from free-form `meta` dictionary / object.
+"""
+function get_field(record::MetadataRecord, meta, name::String)
+    name == "_id" && return record._id
+    name == "doc_id" && return record.doc_id
+    name == "keywords" && return record.keywords
+    name == "refs" && return record.refs
+    name == "schema_version" && return record.schema_version
+    meta isa AbstractDict && return get(meta, name, nothing)
+    meta !== nothing && hasproperty(meta, Symbol(name)) && return getproperty(meta, Symbol(name))
+    return nothing
+end
+get_field(record::MetadataRecord, name::String) = get_field(record, nothing, name)
+
+"""
+    matches_filter(record::MetadataRecord, meta, filter::AbstractDict) -> Bool
+
+Post-filter predicate for `/search`-family endpoints (PLAN.md §5.4). `filter` maps field
+names to either a bare value (equality) or a spec dict supporting `gte`/`lte`/`gt`/`lt`
+(range), `in`/`nin` (set membership), and `eq`/`neq`. A field missing from the record/meta fails the filter.
+"""
+function matches_filter(record::MetadataRecord, meta, filter::AbstractDict)
+    for (field, spec) in filter
+        value = get_field(record, meta, string(field))
+        value === nothing && return false
+
+        if spec isa AbstractDict
+            haskey(spec, "gte") && !(value >= spec["gte"]) && return false
+            haskey(spec, "lte") && !(value <= spec["lte"]) && return false
+            haskey(spec, "gt") && !(value > spec["gt"]) && return false
+            haskey(spec, "lt") && !(value < spec["lt"]) && return false
+            haskey(spec, "in") && !(value in spec["in"]) && return false
+            haskey(spec, "nin") && (value in spec["nin"]) && return false
+            haskey(spec, "eq") && !(value == spec["eq"]) && return false
+            haskey(spec, "neq") && !(value != spec["neq"]) && return false
+        elseif value != spec
+            return false
+        end
+    end
+    return true
+end
+matches_filter(record::MetadataRecord, filter::AbstractDict) = matches_filter(record, nothing, filter)
 
 end # module

@@ -195,17 +195,21 @@ at creation, since it's carried on the engine and restored verbatim by [`open_pr
 rather than re-derived later -- `calibrate!` remains available afterwards as a separate,
 explicit re-optimization pass. Ignored for index types with no `BeamSearch` to autotune.
 `textmodel` says where a *text* project's vocabulary comes from, and a text project cannot be
-created without it (see `IndexEngine.AbstractTextModelSpec` for why it has no default):
+created without it (see `IndexEngine.AbstractTextModelSpec` for why it has no default). Three
+forms, in the order worth preferring them:
 
-- `textmodel=BaseProfile(load_profile("wiki20231101-es.zip"))` — index against a model fitted
-  elsewhere. The project is trained before its first item is staged, so its vocabulary covers
-  the language rather than whichever batch arrived first, and it gains whatever stopword set,
-  lemma map and query-expansion network that profile carries.
+- `textmodel=DefaultProfile(:es)` — **recommended.** The published profile for a language,
+  refitted to this project's own corpus at the first [`index!`](@ref index!(::EmbeddedEngine))
+  call: a vocabulary fitted over a whole Wikipedia edition, with its stopword set, lemma map and
+  expansion network, adapted without fitting an embedding. Resolved from the profile library
+  `textsearch install` maintains; `IndexEngine.default_profile_path` says so, and how to install
+  it, when the one you asked for is not there.
+- `textmodel=BaseProfile(load_profile("path/to/profile.zip"))` — a profile you already have,
+  used as it is. The project is trained before its first item is staged.
 - `textmodel=FitFromCorpus(TextConfig(language=:es); min_ndocs=3)` — deliberately no base
-  profile: fit one from this project's own corpus at the first [`index!`](@ref
-  index!(::EmbeddedEngine)) call, under the given policy and fit options (weighting scheme,
-  vocabulary pruning, stopword detection — see `IndexEngine.FitFromCorpus`). That call freezes
-  the vocabulary, so every term a later batch introduces is dropped from then on.
+  profile: fit one at the first `index!` call from at most `max_documents` of this project's own
+  corpus, delegated whole to `TextSearch.fit_profile`. Bounded in cost and thin in vocabulary,
+  so terms appended later that the sample never held are dropped from then on.
 
 Passing a `textmodel` to a *dense* project is an error rather than an ignored keyword: there is
 no reading under which it does anything, and swallowing it silently is how a project ends up
