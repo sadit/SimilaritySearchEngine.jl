@@ -1,0 +1,1125 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en-US" xml:lang="en-US"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.9.38">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>Paragraph search over books and Wikipedia – SimilaritySearchEngine.jl</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="https://cdn.jsdelivr.net/npm/jquery@3.5.1/dist/jquery.min.js" integrity="sha384-ZvpUoO/+PpLXR1lu4jmpXWu80pZlYUAfxl5NsBMWOEPSjUn/6Z/hRTt8+pR6L4N2" crossorigin="anonymous"></script><script src="../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="../">
+<script src="../site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="../site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="../site_libs/quarto-html/popper.min.js"></script>
+<script src="../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-15634bcf2e68342d4ad2dfa704d543f6.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../site_libs/bootstrap/bootstrap-3e7735b7b22659e5fa437aca0bb49075.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+<script src="https://cdn.jsdelivr.net/npm/requirejs@2.3.6/require.min.js" integrity="sha384-c9c+LnTbwQ3aujuU7ULEPVvgLs+Fn6fJUvIGTsuu1ZcCf11fiEubah0ttpca4ntM sha384-6V1/AdqZRWk1KAlWbKBlGhN7VG4iE/yAZcO6NZPMF8od0vukrvr0tg4qY6NSrItx" crossorigin="anonymous"></script>
+
+<script type="application/javascript">define('jquery', [],function() {return window.jQuery;})</script>
+
+
+<link rel="stylesheet" href="../styles.css">
+</head>
+
+<body class="nav-fixed quarto-light">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a class="navbar-brand" href="../index.html">
+    <span class="navbar-title">SimilaritySearchEngine.jl</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="Search"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" role="menu" aria-expanded="false" aria-label="Toggle navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../index.html"> 
+<span class="menu-text">Home</span></a>
+  </li>  
+  <li class="nav-item">
+    <a class="nav-link" href="../architecture.html"> 
+<span class="menu-text">Architecture</span></a>
+  </li>  
+  <li class="nav-item">
+    <a class="nav-link" href="../tutorials/index.html"> 
+<span class="menu-text">Tutorial</span></a>
+  </li>  
+</ul>
+          </div> <!-- /navcollapse -->
+            <div class="quarto-navbar-tools">
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+</header>
+<!-- content -->
+<div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">On this page</h2>
+   
+  <ul>
+  <li><a href="#before-you-start" id="toc-before-you-start" class="nav-link active" data-scroll-target="#before-you-start">Before you start</a></li>
+  <li><a href="#the-corpora" id="toc-the-corpora" class="nav-link" data-scroll-target="#the-corpora">The corpora</a></li>
+  <li><a href="#profiles" id="toc-profiles" class="nav-link" data-scroll-target="#profiles">Profiles</a>
+  <ul class="collapse">
+  <li><a href="#installing-listing-and-describing-profiles" id="toc-installing-listing-and-describing-profiles" class="nav-link" data-scroll-target="#installing-listing-and-describing-profiles">Installing, listing and describing profiles</a></li>
+  </ul></li>
+  <li><a href="#searching" id="toc-searching" class="nav-link" data-scroll-target="#searching">Searching</a></li>
+  <li><a href="#correcting-a-query" id="toc-correcting-a-query" class="nav-link" data-scroll-target="#correcting-a-query">Correcting a query</a></li>
+  <li><a href="#expanding-a-query" id="toc-expanding-a-query" class="nav-link" data-scroll-target="#expanding-a-query">Expanding a query</a></li>
+  <li><a href="#building-a-project-from-scratch" id="toc-building-a-project-from-scratch" class="nav-link" data-scroll-target="#building-a-project-from-scratch">Building a project from scratch</a>
+  <ul class="collapse">
+  <li><a href="#the-two-alternatives-and-why-this-page-takes-neither" id="toc-the-two-alternatives-and-why-this-page-takes-neither" class="nav-link" data-scroll-target="#the-two-alternatives-and-why-this-page-takes-neither">The two alternatives, and why this page takes neither</a></li>
+  </ul></li>
+  <li><a href="#what-building-this-cost" id="toc-what-building-this-cost" class="nav-link" data-scroll-target="#what-building-this-cost">What building this cost</a></li>
+  <li><a href="#where-to-go-next" id="toc-where-to-go-next" class="nav-link" data-scroll-target="#where-to-go-next">Where to go next</a></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default">
+<div class="quarto-title">
+<h1 class="title">Paragraph search over books and Wikipedia</h1>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<p>This is the tutorial to read after <a href="../tutorials/getting-started.html">Getting started</a>. That one used one novel and took every default; this one uses four real corpora, in three languages, each indexed against a text model fitted for it — which is where the decisions that matter start mattering.</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 20%">
+<col style="width: 20%">
+<col style="width: 20%">
+<col style="width: 20%">
+<col style="width: 20%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>corpus</th>
+<th>source</th>
+<th>language</th>
+<th>documents</th>
+<th>retrieval unit</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>gutenberg-en</code></td>
+<td>Project Gutenberg</td>
+<td>English</td>
+<td>100 books</td>
+<td>paragraph</td>
+</tr>
+<tr class="even">
+<td><code>gutenberg-es</code></td>
+<td>Project Gutenberg</td>
+<td>Spanish</td>
+<td>100 books</td>
+<td>paragraph</td>
+</tr>
+<tr class="odd">
+<td><code>gutenberg-pt</code></td>
+<td>Project Gutenberg</td>
+<td>Portuguese</td>
+<td>100 books</td>
+<td>paragraph</td>
+</tr>
+<tr class="even">
+<td><code>wikipedia-en</code></td>
+<td>Wikipedia 2023-11-01</td>
+<td>English</td>
+<td>1000 articles</td>
+<td>paragraph</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Paragraphs, not documents.</strong> A search here answers with the paragraph that contains the answer, not with the book it appears in. That choice runs all the way down: it is the unit the corpora are built in, the unit the profiles are fitted on, and the unit the projects index. Retrieving whole books would be close to useless — <em>Moby-Dick</em> is “about” almost anything you can ask — and it is also a worse model, because a document frequency computed over books says nothing (nearly every word is in nearly every book) while one computed over paragraphs is informative.</p>
+<section id="before-you-start" class="level2">
+<h2 class="anchored" data-anchor-id="before-you-start">Before you start</h2>
+<p>Everything below reads what <code>tutorials/prepare.jl</code> builds. That script downloads the books, extracts the Wikipedia articles, fits a profile per corpus and indexes each into a project. It is measured in tens of minutes and hundreds of megabytes, which is exactly why it is a script and not a section of this page:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode sh code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># from the repository root</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">--project</span><span class="op">=</span>tutorials tutorials/prepare.jl            <span class="co"># the documented scale, ~1 hour</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">--project</span><span class="op">=</span>tutorials tutorials/prepare.jl <span class="at">--smoke</span>    <span class="co"># a few books and articles, ~5 minutes</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Each step (<code>corpora</code>, <code>profiles</code>, <code>projects</code>) is separately runnable and caches to disk, so a run that fails halfway resumes instead of restarting.</p>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Note</span>Rendering this page yourself
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>Quarto’s Julia engine needs a writable runtime directory. On a machine where <code>/run/user/$UID</code> is not writable, <code>quarto render</code> fails with <code>PermissionDenied ... mkdir '/run/user/…/julia'</code> before running a single cell. Point it somewhere else:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode sh code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="va">XDG_RUNTIME_DIR</span><span class="op">=</span><span class="va">$(</span><span class="fu">mktemp</span> <span class="at">-d</span><span class="va">)</span> <span class="ex">quarto</span> render manual</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+</div>
+</section>
+<section id="the-corpora" class="level2">
+<h2 class="anchored" data-anchor-id="the-corpora">The corpora</h2>
+<div id="4" class="cell" data-execution_count="1">
+<div class="cell-output cell-output-display" data-execution_count="1">
+<pre><code>true</code></pre>
+</div>
+</div>
+<p><code>prepare.jl</code> writes one JSONL file per corpus, one paragraph per line, and records what it measured. Everything this page reports about the build is read back from that record rather than typed into the prose — a number in a document goes stale silently; a number read from the file the build wrote is either current or missing.</p>
+<div id="6" class="cell" data-execution_count="1">
+<div class="cell-output cell-output-display" data-execution_count="1">
+<div class="markdown">
+<table class="caption-top table table-sm table-striped small">
+<tbody>
+<tr class="odd">
+<th style="text-align: right;" data-quarto-table-cell-role="th">corpus</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">language</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">documents</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">paragraphs</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">per document</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">JSONL</th>
+</tr>
+<tr class="even">
+<td style="text-align: right;"><code>gutenberg-en</code></td>
+<td style="text-align: right;">en</td>
+<td style="text-align: right;">100</td>
+<td style="text-align: right;">265,424</td>
+<td style="text-align: right;">2654.2</td>
+<td style="text-align: right;">120.1 MB</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;"><code>gutenberg-es</code></td>
+<td style="text-align: right;">es</td>
+<td style="text-align: right;">100</td>
+<td style="text-align: right;">216,247</td>
+<td style="text-align: right;">2162.5</td>
+<td style="text-align: right;">89.2 MB</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;"><code>gutenberg-pt</code></td>
+<td style="text-align: right;">pt</td>
+<td style="text-align: right;">100</td>
+<td style="text-align: right;">304,688</td>
+<td style="text-align: right;">3046.9</td>
+<td style="text-align: right;">104.2 MB</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;"><code>wikipedia-en</code></td>
+<td style="text-align: right;">en</td>
+<td style="text-align: right;">1,000</td>
+<td style="text-align: right;">41,279</td>
+<td style="text-align: right;">41.3</td>
+<td style="text-align: right;">30.2 MB</td>
+</tr>
+</tbody>
+</table>
+
+</div>
+</div>
+</div>
+<p>Two things in that table are worth pausing on.</p>
+<p><strong>Wikipedia yields far more paragraphs per article than you would expect.</strong> The dump is ordered longest-article-first, so the first shard — which is what a thousand articles come from — is the densest part of the corpus. TextSearch’s own measurements put the corpus-wide figure near 7 paragraphs per article; take them from the front and you get an order of magnitude more. Sampling the convenient slice and extrapolating is how corpus-size estimates go wrong.</p>
+<p><strong>Books vary enormously, and the average hides it.</strong> A hundred Gutenberg volumes is not a hundred comparable things. In the Portuguese corpus a single dictionary contributes 128,133 paragraphs — 42% of the total, and thirty times the largest novel in the same hundred. The per-document average in the table above is therefore a number no actual book resembles, and what it costs you shows up in <em>Searching</em> below.</p>
+<p>Each record carries the paragraph plus enough metadata to say where it came from:</p>
+<div id="8" class="cell" data-execution_count="1">
+<div class="cell-output cell-output-stdout">
+<pre><code>keys: doc_id, text, source, lang, book_id, title, author, paragraph
+
+doc_id: gutenberg-es-61851-p1
+title:  El crimen y el castigo — Dostoyevsky, Fyodor
+text:   Se ha respetado la ortografía y la acentuación del original.…</code></pre>
+</div>
+</div>
+<p><code>doc_id</code> is the caller’s own identifier; the engine hands it back on every hit. Everything except <code>text</code>, <code>vector</code>, <code>keywords</code>, <code>ref</code> and <code>doc_id</code> goes into the record’s metadata, which is what a filtered search reads.</p>
+</section>
+<section id="profiles" class="level2">
+<h2 class="anchored" data-anchor-id="profiles">Profiles</h2>
+<p>A text project needs to know how to turn text into tokens and how to weight them. That is a <code>TextProfile</code>: a vocabulary and weights, plus whatever a corpus produced — a stopword set, a lemma map, a query-expansion network — plus the lineage saying how it was made.</p>
+<p><code>prepare.jl</code> fits one per corpus with TextSearch’s own <code>textsearch fit</code>, and not with this package’s <code>fit_profile</code>. The difference is what you get: <code>fit_profile</code> produces a vocabulary and weights, which is all an indexing corpus can yield on its own, while <code>textsearch fit</code> additionally runs an LSI over the corpus and derives a query-expansion network and a lemma map from it. Those artifacts are the reason the two query-side sections below demonstrate something instead of describing it.</p>
+<p>The configuration used for every corpus is worth reading, because one line in it drives most of this page:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode toml code-with-copy"><code class="sourceCode toml"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">[normalization]</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="dt">del_diac</span> <span class="op">=</span> <span class="cn">false</span>      <span class="co"># keep diacritics</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="dt">lc</span> <span class="op">=</span> <span class="cn">false</span>            <span class="co"># keep case</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="dt">del_punc</span> <span class="op">=</span> <span class="cn">true</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="dt">group_num</span> <span class="op">=</span> <span class="cn">true</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="dt">group_url</span> <span class="op">=</span> <span class="cn">true</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Keeping case and diacritics is a deliberate cost. Folding them is cheaper and gives a smaller vocabulary, and it is what the default <code>TextConfig()</code> does — but it also collapses <code>leon</code> and <code>León</code> into one token before the index ever sees them, which leaves the query side with nothing to work with. Everything in <em>Correcting a query</em> below exists only because these are <code>false</code>.</p>
+<div id="10" class="cell" data-execution_count="1">
+<div class="cell-output cell-output-display" data-execution_count="1">
+<div class="markdown">
+<table class="caption-top table table-sm table-striped small">
+<tbody>
+<tr class="odd">
+<th style="text-align: right;" data-quarto-table-cell-role="th">profile</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">vocabulary</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">stopwords</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">lemmas</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">expansion</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">fit</th>
+</tr>
+<tr class="even">
+<td style="text-align: right;"><code>gutenberg-en</code></td>
+<td style="text-align: right;">136,716</td>
+<td style="text-align: right;">9 <em>(applied)</em></td>
+<td style="text-align: right;">28,465</td>
+<td style="text-align: right;">136,716</td>
+<td style="text-align: right;">265s</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;"><code>gutenberg-es</code></td>
+<td style="text-align: right;">337,336</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">83,792</td>
+<td style="text-align: right;">337,336</td>
+<td style="text-align: right;">476s</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;"><code>gutenberg-pt</code></td>
+<td style="text-align: right;">407,778</td>
+<td style="text-align: right;">1 <em>(applied)</em></td>
+<td style="text-align: right;">94,234</td>
+<td style="text-align: right;">407,778</td>
+<td style="text-align: right;">863s</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;"><code>wikipedia-en</code></td>
+<td style="text-align: right;">139,776</td>
+<td style="text-align: right;">18 <em>(applied)</em></td>
+<td style="text-align: right;">23,186</td>
+<td style="text-align: right;">139,776</td>
+<td style="text-align: right;">129s</td>
+</tr>
+</tbody>
+</table>
+
+</div>
+</div>
+</div>
+<p>Note the <em>(applied)</em> markers, or rather where they are missing. A freshly fitted profile <strong>carries</strong> its lemma map and its expansion network without applying them. That is not an oversight, it is the distinction the type exists to make: computing an artifact and deciding to use it are different acts, and the second belongs to whoever indexes with the profile. Stopwords are applied because the vocabulary was counted with them already removed — un-applying those would mean refitting.</p>
+<p>Printing a profile shows its lineage, which answers “where did this come from?” without guesswork:</p>
+<div id="12" class="cell" data-execution_count="1">
+<div class="cell-output cell-output-stdout">
+<pre><code>TextProfile: base
+  fit(doc_freq_threshold=0.5, encoder=lsi, outdim=128, scaling=none, source_path=, trainsize=41279)
+  stopwords: 18 (applied)
+  lemmas: 23186 (carried)
+  query_expansion: 139776 (carried), with distances
+  VectorModel:
+    global_weighting: TextSearch.IdfWeighting()
+    local_weighting: TextSearch.TfWeighting()
+    maxoccs: 33158
+    Vocabulary:
+      vocsize: 139776
+      trainsize: 41279
+      numtokens: 2898621
+      avgdoclen: 70.2202330482812
+      TextConfig:
+        NormalizationConfig:
+            del_diac: false
+            del_dup: false
+            del_punc: true
+            group_num: true
+            group_url: true
+            group_usr: false
+            group_emo: false
+            lc: false
+            re_user: r"@[^;:,.@#&amp;\\\-\"'/:\*\(\)\[\]\¿\?\¡\!\{\}~\&lt;\&gt;\|\s]+"
+            re_url: r"(http|ftp|https)://\S+"
+            re_num: r"[-+]?(\d+\.?\d*)|(\.\d+)"
+            emojis: 3923 emoji chars
+        TokenizationConfig:
+            nlist: Int8[1]
+            mark_token_type: true
+            generators: TextSearch.Tokenizer.AbstractTokenGenerator[]
+        pipeline: TokenPipeline(lemmas=nothing, stopwords=18 tokens)
+        language: unknown</code></pre>
+</div>
+</div>
+<section id="installing-listing-and-describing-profiles" class="level3">
+<h3 class="anchored" data-anchor-id="installing-listing-and-describing-profiles">Installing, listing and describing profiles</h3>
+<p>This tutorial loads profiles from plain files on disk, with <code>load_profile(path)</code>, because that needs nothing installed and keeps every path in this page explicit. For day-to-day use TextSearch’s CLI manages a profile library under <code>~/.textsearch/profiles/</code> instead:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode sh code-with-copy"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">textsearch</span> install tutorials/profiles/gutenberg-es.zip gutenberg-es   <span class="co"># copy in under a nickname</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="ex">textsearch</span> install tutorials/profiles/gutenberg-es.zip                <span class="co"># nickname defaults to the filename</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="ex">textsearch</span> list                                                       <span class="co"># what is installed</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a><span class="ex">textsearch</span> info gutenberg-es                                          <span class="co"># vocabulary, artifacts, lineage</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="ex">textsearch</span> uninstall gutenberg-es                                     <span class="co"># reports what it *would* delete</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a><span class="ex">textsearch</span> uninstall gutenberg-es <span class="at">--force</span>                             <span class="co"># actually deletes it</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>The nickname is a positional argument, not a flag, and defaults to the zip’s filename. Note what <code>uninstall</code> does without <code>--force</code>: it prints the path, the size and the command that would delete it, and removes nothing. Here the registration <em>is</em> the file — a profile can represent hours of compute and the installed copy may be the only one left — so the destructive reading of the word has to be asked for.</p>
+<p>Once installed, a nickname works anywhere a path does in the CLI’s own commands. The file itself sits at <code>~/.textsearch/profiles/&lt;nickname&gt;.zip</code> (or under <code>$TEXTSEARCH_HOME</code>), and <code>load_profile</code> takes that path like any other. Nothing below depends on having installed anything.</p>
+</section>
+</section>
+<section id="searching" class="level2">
+<h2 class="anchored" data-anchor-id="searching">Searching</h2>
+<p>A project is created against a profile, and from then on it is trained: the vocabulary covers the language rather than whichever batch happened to arrive first.</p>
+<div id="16" class="cell" data-execution_count="1">
+<div class="cell-output cell-output-stdout">
+<pre><code>[gutenberg-en]  the whale rose out of the sea
+  1. Moby Dick; Or, The Whale                    -74.805
+     Secondly: It is well known in the Sperm Whale Fishery, however ignorant the world ashore may be of it, that there have been several memorable historic…
+  2. Moby Dick; Or, The Whale                    -70.770
+     Throughout the Pacific, and also in Nantucket, and New Bedford, and Sag Harbor, you will come across lively sketches of whales and whaling-scenes, gra…
+  3. Moby Dick; Or, The Whale                    -67.435
+     In life, the visible surface of the Sperm Whale is not the least among the many marvels he presents. Almost invariably it is all over obliquely crosse…
+
+[gutenberg-es]  Fortunata y Jacinta en Madrid
+  1. La Odisea                                   -90.754
+     TEBAS (Θήβη y Θῆβαι):
+  2. La Ilíada                                   -90.754
+     TEBAS (Θήβη y Θῆβαι):
+  3. Fortunata y Jacinta: dos historias de casa  -63.504
+     Doña Lupe la invitó, dos días después de la tarde del choque con Jacinta, a volver a visitar a Mauricia. ¡Qué diría doña Guillermina si no volvían! Ne…
+
+[gutenberg-pt]  o crime do padre Amaro na aldeia
+  1. O crime do padre Amaro, scenas da vida dev  -66.331
+     Foi em casa do sineiro, d'ahi a dias, que Amaro participou a Amelia o plano do padre-mestre. Preparou-a, revelando-lhe primeiro que o conego sabia tud…
+  2. O crime do padre Amaro, scenas da vida dev  -65.218
+     João Eduardo sahiu acabrunhado. Que havia de fazer agora? O doutor Godinho, aquelle colosso, repellia-o com palavras tremendas! E que podia elle, pobr…
+  3. Diccionario de João Fernandes: Lições de l  -64.082
+     *SORRISO* (DAS CREANÇAS)--Flor do paraizo.
+
+[wikipedia-en]  anarchism as a political philosophy
+  1. Anarcho-capitalism                          -141.363
+     Anarcho-capitalism Anarchist activists and scholars do not consider anarcho-capitalism as a part of the anarchist movement, arguing that anarchism has…
+  2. Anarcho-capitalism                          -134.281
+     Anarcho-capitalism Anarchism In both its social and individualist forms, anarchism is usually considered an anti-capitalist and radical left-wing or f…
+  3. Anarcho-capitalism                          -134.086
+     Anarcho-capitalism Rothbard argued that anarcho-capitalism is the only true form of anarchism—the only form of anarchism that could possibly exist in …
+</code></pre>
+</div>
+</div>
+<p>The distances are BM25 scores, negated so that smaller is better — the same convention every index kind in <code>SimilaritySearch.jl</code> uses, so a caller never has to ask whether high or low wins.</p>
+<p>Nothing about the calls above is language-specific. The language lives in the profile the project was created with; <code>ftsearch</code> is the same function in all four.</p>
+<p>If a dictionary entry outranked the novel you were expecting, that is the corpus and the scoring function telling you something true. Gutenberg’s popularity ranking is not a balanced sample: the Portuguese top hundred includes a <code>Novo dicionário da língua portuguesa</code> that is <strong>42% of that corpus’s paragraphs</strong> on its own, and the Spanish hundred contributes an English-Spanish-Tagalog dictionary. BM25 normalises by document length, and a two-line dictionary entry sharing one query term with you scores far above a hundred-word paragraph of prose sharing three. Neither the index nor the profile is misbehaving — a corpus assembled by popularity is simply not a corpus assembled for retrieval, and this is what that looks like before anyone filters it.</p>
+</section>
+<section id="correcting-a-query" class="level2">
+<h2 class="anchored" data-anchor-id="correcting-a-query">Correcting a query</h2>
+<p>Because the profiles keep case and diacritics, a Spanish query typed without accents is not the same query the corpus contains. <code>QueryPolicy</code>’s default handles that, and can explain itself:</p>
+<div id="18" class="cell" data-execution_count="1">
+<div class="cell-output cell-output-stdout">
+<pre><code>query: la musica del corazon
+  ~ musica is in 9 documents against música's 724, so it reads as a misspelling; searched as música (variant), Música (variant) instead
+
+query: el pais y la republica
+  ~ republica is in 3 documents against República's 307, so it reads as a misspelling; searched as República (variant), república (variant) instead
+</code></pre>
+</div>
+</div>
+<p>Each line is a token the search replaced, with the evidence for replacing it. A correction happens only where the evidence says the typed spelling is wrong — it is absent from the vocabulary, or far rarer than another spelling of the same word. A correctly typed query produces no lines at all:</p>
+<div id="20" class="cell" data-execution_count="1">
+<div class="cell-output cell-output-stdout">
+<pre><code>ftexplain on a correctly typed query: String[]</code></pre>
+</div>
+</div>
+<p>A search that silently substitutes what was asked for owes the person a way back, which is <code>correction=:off</code>:</p>
+<div id="22" class="cell" data-execution_count="1">
+<div class="cell-output cell-output-stdout">
+<pre><code>[gutenberg-es]  la musica del corazon
+  1. Diccionario Bagobo-Español                  -121.829
+     Pipit ca casócot.--Menudear, repitir la petición.
+  2. Diccionario Bagobo-Español                  -94.831
+     Ca-polao.--Letargo, pertubación del jucio.
+
+[gutenberg-es]  la musica del corazon
+  1. The Spanish American Reader                 -134.627
+     [10] =Telegrama=, _telegram_. RELATED WORDS: =Dirección=, _address_; =firma=, _signature_; =telegrama al interior=, =telegrama al exterior= (or =cable…
+  2. Diccionario Bagobo-Español                  -121.829
+     Pipit ca casócot.--Menudear, repitir la petición.
+</code></pre>
+</div>
+</div>
+<p>This is the “showing results for … / search instead for …” pair every commercial search engine offers, and both halves are one keyword apart.</p>
+</section>
+<section id="expanding-a-query" class="level2">
+<h2 class="anchored" data-anchor-id="expanding-a-query">Expanding a query</h2>
+<p>The expansion network relates each vocabulary token to its nearest neighbours in the LSI space the fit computed. <code>prepare.jl</code> turns it on when it creates each project — <code>fit</code> leaves it carried, and applying it is the indexer’s decision:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb12"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>base <span class="op">=</span> <span class="fu">load_profile</span>(<span class="st">"tutorials/profiles/wikipedia-en.zip"</span>)</span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>prof <span class="op">=</span> TextSearch.<span class="fu">with_applied</span>(base; query_expansion<span class="op">=</span><span class="cn">true</span>)</span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="fu">create_project</span>(dir, <span class="st">"wikipedia-en"</span>; index_type<span class="op">=</span>BM25InvertedFile, textmodel<span class="op">=</span><span class="fu">BaseProfile</span>(prof))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>What the network holds for a few terms:</p>
+<div id="24" class="cell" data-execution_count="1">
+<div class="cell-output cell-output-stdout">
+<pre><code>anarchism    -&gt; anarchist, capitalism, individualist, Individualist, anarcho, anarchists
+philosophy   -&gt; metaphysics, philosophical, epistemology, Immanuel, Sramana, Sramanas
+revolution   -&gt; revolutions, Enlightenment, revolutionary, monde, mentalités, autonomy</code></pre>
+</div>
+</div>
+<p>And what turning it off does to a search:</p>
+<div id="26" class="cell" data-execution_count="1">
+<div class="cell-output cell-output-stdout">
+<pre><code>[wikipedia-en]  anarchism
+  1. Anarcho-capitalism                          -124.245
+     Anarcho-capitalism Anarchist activists and scholars do not consider anarcho-capitalism as a part of the anarchist movement, arguing that anarchism has…
+  2. Anarcho-capitalism                          -121.518
+     Anarcho-capitalism Classification Anarcho-capitalism developed from radical American anti-state libertarianism and individualist anarchism. A strong c…
+
+[wikipedia-en]  anarchism
+  1. Anarchism                                   -18.357
+     Anarchism References Explanatory notes Citations General and cited sources Primary sources Secondary sources Tertiary sources Further reading Criticis…
+  2. Anarcho-capitalism                          -18.200
+     Anarcho-capitalism See also Agorism Anarcho-capitalism and minarchism Consequentialist libertarianism Counter-economics Creative disruption Crypto-ana…
+</code></pre>
+</div>
+</div>
+<p>Expansion widens reach at the cost of precision, which is why it is a property of the query rather than of the index: the same project answers both ways, one keyword apart. <code>expansion_k</code> takes only the nearest few neighbours per token instead of the whole list, which is the middle setting between the two.</p>
+</section>
+<section id="building-a-project-from-scratch" class="level2">
+<h2 class="anchored" data-anchor-id="building-a-project-from-scratch">Building a project from scratch</h2>
+<p>Everything above opened projects <code>prepare.jl</code> had already built. Here is the whole path, live, on a small slice — this is what <code>prepare.jl</code> does, minus the scale:</p>
+<div id="28" class="cell" data-execution_count="1">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>slice <span class="op">=</span> <span class="fu">map</span>(<span class="bu">Iterators</span>.<span class="fu">take</span>(<span class="fu">eachline</span>(<span class="fu">corpus_file</span>(<span class="st">"gutenberg-en"</span>)), <span class="fl">2000</span>)) <span class="cf">do</span> line</span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>    o <span class="op">=</span> JSON3.<span class="fu">read</span>(line)</span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>    meta <span class="op">=</span> <span class="fu">Dict</span><span class="dt">{String,Any}</span>(<span class="fu">String</span>(k) <span class="op">=&gt;</span> v <span class="cf">for</span> (k, v) <span class="kw">in</span> <span class="fu">pairs</span>(o) <span class="cf">if</span> k <span class="op">!==</span> <span class="op">:</span>text <span class="op">&amp;&amp;</span> k <span class="op">!==</span> <span class="op">:</span>doc_id)</span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>    SSE.<span class="fu">TextItem</span>(<span class="fu">String</span>(o.text); doc_id<span class="op">=</span><span class="fu">String</span>(o.doc_id), meta)   <span class="co"># typed in, typed out</span></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>workdir <span class="op">=</span> <span class="fu">mktempdir</span>()</span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>h <span class="op">=</span> SSE.<span class="fu">create_project</span>(workdir, <span class="st">"slice"</span>;</span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>        index_type <span class="op">=</span> TextSearch.BM25InvertedFile,</span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>        textmodel  <span class="op">=</span> SSE.<span class="fu">BaseProfile</span>(profiles[<span class="st">"gutenberg-en"</span>]))</span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>SSE.<span class="fu">append_items!</span>(h, slice)          <span class="co"># stages: durable, but nothing is searchable yet</span></span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a><span class="fu">isempty</span>(SSE.<span class="fu">ftsearch</span>(h, <span class="st">"the whale"</span>, <span class="fl">3</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-display" data-execution_count="1">
+<pre><code>true</code></pre>
+</div>
+</div>
+<div id="30" class="cell" data-execution_count="1">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="fu">quiet</span>() <span class="cf">do</span>                           <span class="co"># see the note below on the engine's progress log</span></span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>    SSE.<span class="fu">index!</span>(h)                    <span class="co"># encodes and indexes the backlog</span></span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>[r.doc_id for r <span class="kw">in</span> SSE.<span class="fu">ftsearch</span>(h, <span class="st">"the whale"</span>, <span class="fl">3</span>)]</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-display" data-execution_count="1">
+<pre><code>3-element Vector{String}:
+ "gutenberg-en-2701-p576"
+ "gutenberg-en-2701-p1200"
+ "gutenberg-en-2701-p775"</code></pre>
+</div>
+</div>
+<p><code>quiet</code> there is this page’s own helper, <code>redirect_stderr(devnull) do … end</code>. Every index kind installs an <code>InformativeLog</code> that reports insertion progress on stderr, which is the right default for a build that runs for an hour and the wrong one for a document. Nothing about it is configurable through <code>create_project</code>; redirecting the stream is how you turn it off.</p>
+<p>The split between the two cells is the engine’s staging model: <code>append_items!</code> makes an item durable immediately and searchable never; <code>index!</code> is the explicit, idempotent step that makes it searchable. It is why the first cell finds nothing and the second finds everything, and it is what lets a caller decide when to pay for indexing.</p>
+<p>Reusing a profile a project already fitted is the same two lines in the other direction:</p>
+<div id="32" class="cell" data-execution_count="1">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb19"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a>TextSearch.<span class="fu">save_profile</span>(<span class="fu">joinpath</span>(workdir, <span class="st">"exported"</span>), SSE.<span class="fu">text_profile</span>(h))</span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>reloaded <span class="op">=</span> TextSearch.<span class="fu">load_profile</span>(<span class="fu">joinpath</span>(workdir, <span class="st">"exported"</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<div id="34" class="cell" data-execution_count="1">
+<div class="cell-output cell-output-stdout">
+<pre><code>exported vocabulary: 136,716 tokens</code></pre>
+</div>
+</div>
+<section id="the-two-alternatives-and-why-this-page-takes-neither" class="level3">
+<h3 class="anchored" data-anchor-id="the-two-alternatives-and-why-this-page-takes-neither">The two alternatives, and why this page takes neither</h3>
+<p>Every project on this page was created from a <code>BaseProfile</code>, because <code>prepare.jl</code> had just fitted the profile and held it in hand. The other two forms matter more for a project you are starting from nothing.</p>
+<p><code>DefaultProfile</code> is the one to reach for, and it is what this page would use if it were not building its own profiles as it goes:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb21"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="fu">create_project</span>(workdir, <span class="st">"noticias"</span>; index_type<span class="op">=</span>BM25InvertedFile,</span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>               textmodel<span class="op">=</span><span class="fu">DefaultProfile</span>(<span class="op">:</span>es))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>At the first <code>index!</code> call it loads the published Spanish paragraph profile — the same <code>wiki20231101-es-paragraphs</code> this tutorial’s own fits are modelled on — and refits it against whatever you staged: counts blended, weights recomputed, stopwords and lemmas and the expansion network inherited. It resolves from the profile library <code>textsearch install</code> maintains, and says how to install the profile if it is not there.</p>
+<p>The refit narrows the vocabulary to your corpus rather than keeping the language’s: measured on the English base, 335,336 tokens become 12,238 against an 800-document sample. What it buys is calibration and artifacts, not coverage; <code>refit=false</code> keeps the base whole if coverage is what you are after. <code>DefaultProfile</code>’s docstring has the numbers.</p>
+<p><code>FitFromCorpus</code> says, deliberately, that there is no pre-fitted model and one should be fitted from the project’s own corpus:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb22"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="fu">create_project</span>(workdir, <span class="st">"self-fitted"</span>; index_type<span class="op">=</span>BM25InvertedFile,</span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>               textmodel<span class="op">=</span><span class="fu">FitFromCorpus</span>(<span class="fu">TextConfig</span>(language<span class="op">=:</span>en); min_ndocs<span class="op">=</span><span class="fl">3</span>, stopwords<span class="op">=</span><span class="fl">0.9</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>There is no default among the three, and the reason is a trap. That fit is delegated whole to <code>TextSearch.fit_profile</code>, which has no cheap variant — it always runs the LSI, the expansion network and the lemma clustering — so it is bounded by <code>max_documents</code> (1,000 by default) instead of by the corpus. Which means its vocabulary is fitted from a <em>sample</em>: every term appended later that the sample never held is out-of-vocabulary and silently dropped, forever. Nothing about the project’s behaviour afterwards distinguishes “I chose this” from “I never said”, which is exactly why it cannot be arrived at by omission — <code>create_project</code> refuses a text project with no <code>textmodel</code>.</p>
+<p>The <code>profiles</code> table above is what that trap costs in the other direction: the four fits on this page took 129 to 863 seconds each, on corpora of 41,000 to 305,000 paragraphs. That is the price of a real profile, paid once, by a script — and the reason a project should be handed one rather than asked to produce it during its first <code>index!</code>.</p>
+</section>
+</section>
+<section id="what-building-this-cost" class="level2">
+<h2 class="anchored" data-anchor-id="what-building-this-cost">What building this cost</h2>
+<p>The numbers below were measured by the build, not estimated:</p>
+<div id="36" class="cell" data-execution_count="1">
+<div class="cell-output cell-output-display" data-execution_count="1">
+<div class="markdown">
+<table class="caption-top table table-sm table-striped small">
+<tbody>
+<tr class="odd">
+<th style="text-align: right;" data-quarto-table-cell-role="th">project</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">paragraphs</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">vocabulary</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">create</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">append</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">index</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">ms/paragraph</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">on disk</th>
+</tr>
+<tr class="even">
+<td style="text-align: right;"><code>gutenberg-en</code></td>
+<td style="text-align: right;">265,424</td>
+<td style="text-align: right;">136,716</td>
+<td style="text-align: right;">2s</td>
+<td style="text-align: right;">9s</td>
+<td style="text-align: right;">86s</td>
+<td style="text-align: right;">0.32</td>
+<td style="text-align: right;">278 MB</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;"><code>gutenberg-es</code></td>
+<td style="text-align: right;">216,247</td>
+<td style="text-align: right;">337,336</td>
+<td style="text-align: right;">3s</td>
+<td style="text-align: right;">7s</td>
+<td style="text-align: right;">47s</td>
+<td style="text-align: right;">0.22</td>
+<td style="text-align: right;">201 MB</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;"><code>gutenberg-pt</code></td>
+<td style="text-align: right;">304,688</td>
+<td style="text-align: right;">407,778</td>
+<td style="text-align: right;">4s</td>
+<td style="text-align: right;">9s</td>
+<td style="text-align: right;">61s</td>
+<td style="text-align: right;">0.20</td>
+<td style="text-align: right;">238 MB</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;"><code>wikipedia-en</code></td>
+<td style="text-align: right;">41,279</td>
+<td style="text-align: right;">139,776</td>
+<td style="text-align: right;">1s</td>
+<td style="text-align: right;">2s</td>
+<td style="text-align: right;">7s</td>
+<td style="text-align: right;">0.17</td>
+<td style="text-align: right;">66 MB</td>
+</tr>
+</tbody>
+</table>
+
+</div>
+</div>
+</div>
+<p>Three things in that table are worth naming.</p>
+<p><strong>Incremental persistence is cheap, and the first project pays for the whole run.</strong> Every <code>push_item!</code> reports an <code>:add!</code> event and the project’s callback writes that paragraph’s encoded object to RocksDB as its own record, which sounds expensive and is not: measured warm on 3,000 paragraphs, the raw TextSearch push loop takes 0.08 ms per paragraph and the engine’s <code>index!</code> takes 0.129 — <strong>1.6×</strong> for durability at every step.</p>
+<p>The <code>index!</code> column is worth reading with that in mind, because the first row is not comparable with the others. Julia compiles the indexing path on its first execution, and the first project built absorbs all of it: an earlier measurement here reported thirty times the library’s cost per paragraph, and it was measuring compilation. The lesson generalises past this table — the first timing in a fresh Julia session is a compilation measurement wearing a throughput measurement’s clothes.</p>
+<p><strong>A search hit carries an id and a score, and nothing else.</strong> <code>ftsearch</code> answers with [<code>SearchResult</code>]s — <code>_id</code>, <code>doc_id</code>, <code>distance</code>, <code>deleted</code> — and getting from there to the paragraph means one <code>fetch_items</code> call per hit, as <code>show_hits</code> above does. That is one metadata read and one payload read per result, and a caller displaying a page of ten hits pays for ten of each.</p>
+<p>Writing this page is what found that: the first version of it could not print a paragraph at all. <code>fetch_items</code> used to return a <code>Dict{String,Any}</code> of the record merged with its metadata, and the paragraph was in neither — <code>text</code> was a reserved key, stripped on the way in — so the page reached through <code>handle.engine.staged[…]</code> into a private field. Both halves are fixed now: <code>fetch_items</code> returns a typed <code>StoredItem</code> whose <code>payload</code> is the indexed text or vector, read through the public <code>IndexEngine.stored_payload</code>.</p>
+<p><strong>Creating a project against a large profile writes the whole profile into it.</strong> The <code>create</code> column is not project setup; it is the profile being serialised into the project’s own store so that reopening needs nothing but the project directory. That is the right default — a project that depends on a file somewhere else is a project that breaks when the file moves — but it does mean a shared profile is stored once per project that uses it.</p>
+</section>
+<section id="where-to-go-next" class="level2">
+<h2 class="anchored" data-anchor-id="where-to-go-next">Where to go next</h2>
+<ul>
+<li><a href="../tutorials/getting-started.html">Getting started</a> — the smaller tour: dense vector search, soft deletes, filtering, recall calibration and the whole-dataset operations (<code>allknn</code>, <code>fft</code>, <code>closestpairs</code>).</li>
+<li><a href="../architecture.html">Architecture</a> — why the staging split exists, how a project is laid out on disk, and what each engine kind persists.</li>
+<li><code>tutorials/prepare.jl</code> — the build itself, which is also the worked example of driving the engine over a corpus that does not fit in a page.</li>
+</ul>
+
+
+</section>
+
+</main> <!-- /main -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp('/' + window.location.host + '/');
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+</div> <!-- /content -->
+
+
+
+
+</body></html>

@@ -1,0 +1,908 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en-US" xml:lang="en-US"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.9.38">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>Architecture – SimilaritySearchEngine.jl</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+</style>
+
+
+<script src="site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="site_libs/quarto-nav/headroom.min.js"></script>
+<script src="site_libs/clipboard/clipboard.min.js"></script>
+<script src="site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="site_libs/quarto-search/fuse.min.js"></script>
+<script src="site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="./">
+<script src="site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="site_libs/quarto-html/popper.min.js"></script>
+<script src="site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="site_libs/quarto-html/anchor.min.js"></script>
+<link href="site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="site_libs/quarto-html/quarto-syntax-highlighting-15634bcf2e68342d4ad2dfa704d543f6.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="site_libs/bootstrap/bootstrap-3e7735b7b22659e5fa437aca0bb49075.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+<meta name="mermaid-theme" content="neutral">
+<script src="site_libs/quarto-diagram/mermaid.min.js"></script>
+<script src="site_libs/quarto-diagram/mermaid-init.js"></script>
+<link href="site_libs/quarto-diagram/mermaid.css" rel="stylesheet">
+
+
+<link rel="stylesheet" href="styles.css">
+</head>
+
+<body class="nav-fixed quarto-light">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a class="navbar-brand" href="./index.html">
+    <span class="navbar-title">SimilaritySearchEngine.jl</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="Search"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" role="menu" aria-expanded="false" aria-label="Toggle navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="./index.html"> 
+<span class="menu-text">Home</span></a>
+  </li>  
+  <li class="nav-item">
+    <a class="nav-link active" href="./architecture.html" aria-current="page"> 
+<span class="menu-text">Architecture</span></a>
+  </li>  
+  <li class="nav-item">
+    <a class="nav-link" href="./tutorials/index.html"> 
+<span class="menu-text">Tutorial</span></a>
+  </li>  
+</ul>
+          </div> <!-- /navcollapse -->
+            <div class="quarto-navbar-tools">
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+</header>
+<!-- content -->
+<div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">On this page</h2>
+   
+  <ul>
+  <li><a href="#module-map" id="toc-module-map" class="nav-link active" data-scroll-target="#module-map">Module map</a></li>
+  <li><a href="#engine-type-hierarchy" id="toc-engine-type-hierarchy" class="nav-link" data-scroll-target="#engine-type-hierarchy">Engine type hierarchy</a></li>
+  <li><a href="#staging-vs.-indexing-every-engine-kind-has-the-split-except-exact-search" id="toc-staging-vs.-indexing-every-engine-kind-has-the-split-except-exact-search" class="nav-link" data-scroll-target="#staging-vs.-indexing-every-engine-kind-has-the-split-except-exact-search">Staging vs.&nbsp;indexing: every engine kind has the split except exact search</a></li>
+  <li><a href="#concurrency-model" id="toc-concurrency-model" class="nav-link" data-scroll-target="#concurrency-model">Concurrency model</a>
+  <ul class="collapse">
+  <li><a href="#readwritelock" id="toc-readwritelock" class="nav-link" data-scroll-target="#readwritelock"><code>ReadWriteLock</code></a></li>
+  <li><a href="#contextpool" id="toc-contextpool" class="nav-link" data-scroll-target="#contextpool"><code>ContextPool</code></a></li>
+  </ul></li>
+  <li><a href="#persistence-one-storage-unit-per-concern" id="toc-persistence-one-storage-unit-per-concern" class="nav-link" data-scroll-target="#persistence-one-storage-unit-per-concern">Persistence: one storage unit per concern</a>
+  <ul class="collapse">
+  <li><a href="#enginestore-per-field-keys-not-one-blob" id="toc-enginestore-per-field-keys-not-one-blob" class="nav-link" data-scroll-target="#enginestore-per-field-keys-not-one-blob"><code>EngineStore</code>: per-field keys, not one blob</a></li>
+  <li><a href="#dense-vectors-a-memory-mapped-file-not-a-rocksdb-column-family" id="toc-dense-vectors-a-memory-mapped-file-not-a-rocksdb-column-family" class="nav-link" data-scroll-target="#dense-vectors-a-memory-mapped-file-not-a-rocksdb-column-family">Dense vectors: a memory-mapped file, not a RocksDB column family</a></li>
+  <li><a href="#incremental-adjacencyposting-list-persistence-different-shapes-by-necessity" id="toc-incremental-adjacencyposting-list-persistence-different-shapes-by-necessity" class="nav-link" data-scroll-target="#incremental-adjacencyposting-list-persistence-different-shapes-by-necessity">Incremental adjacency/posting-list persistence: different shapes, by necessity</a></li>
+  <li><a href="#reopening-a-project" id="toc-reopening-a-project" class="nav-link" data-scroll-target="#reopening-a-project">Reopening a project</a></li>
+  </ul></li>
+  <li><a href="#logging-informative-output-and-persistence-are-independent" id="toc-logging-informative-output-and-persistence-are-independent" class="nav-link" data-scroll-target="#logging-informative-output-and-persistence-are-independent">Logging: informative output and persistence are independent</a></li>
+  <li><a href="#soft-deletes" id="toc-soft-deletes" class="nav-link" data-scroll-target="#soft-deletes">Soft deletes</a></li>
+  <li><a href="#whole-dataset-operations" id="toc-whole-dataset-operations" class="nav-link" data-scroll-target="#whole-dataset-operations">Whole-dataset operations</a></li>
+  <li><a href="#where-this-leaves-similaritysearchserver" id="toc-where-this-leaves-similaritysearchserver" class="nav-link" data-scroll-target="#where-this-leaves-similaritysearchserver">Where this leaves <code>SimilaritySearchServer</code></a></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default">
+<div class="quarto-title">
+<h1 class="title">Architecture</h1>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<p>This page describes how <code>SimilaritySearchEngine.jl</code> is put together: its module map, the engine type hierarchy that replaces name/enum-based dispatch with real Julia types, the staging-vs-indexing split that lets a project decouple insertion from the expensive graph-connection/encoding step (dense <em>and</em> full-text alike), the concurrency model that lets searches run in parallel while staying safe from concurrent inserts, and the RocksDB-column-families-plus-one-mmap-file layout that makes persistence incremental instead of a single ever-growing blob.</p>
+<section id="module-map" class="level2">
+<h2 class="anchored" data-anchor-id="module-map">Module map</h2>
+<p>The package is five source files, four of them real submodules (<code>Schema</code>, <code>Project</code>, <code>IndexEngine</code>, <code>Persistence</code>) plus <code>embedded.jl</code>, which defines <code>EmbeddedEngine</code> and the top-level functions (<code>create_project</code>, <code>append_items!</code>, <code>search</code>, …) directly in the <code>SimilaritySearchEngine</code> module itself — the friendly surface a script actually calls.</p>
+<div class="cell" data-layout-align="default">
+<div class="cell-output-display">
+<div>
+<p></p><figure class="figure"><p></p>
+<div>
+<pre class="mermaid mermaid-js">flowchart LR
+    Schema["Schema&lt;br/&gt;&lt;small&gt;MetadataRecord (_id, doc_id,&lt;br/&gt;keywords, refs), meta split&lt;/small&gt;"]
+    Project["Project&lt;br/&gt;&lt;small&gt;ProjectManager, metadata CRUD&lt;/small&gt;"]
+    IndexEngine["IndexEngine&lt;br/&gt;&lt;small&gt;AbstractSearchEngine hierarchy&lt;/small&gt;"]
+    Persistence["Persistence&lt;br/&gt;&lt;small&gt;EngineStore, AdjacencyStore, ...&lt;/small&gt;"]
+    Embedded["embedded.jl&lt;br/&gt;&lt;small&gt;EmbeddedEngine + top-level API&lt;/small&gt;"]
+    Caller(["Julia script, or&lt;br/&gt;SimilaritySearchServer"])
+
+    Schema --&gt; Project
+    Schema --&gt; Embedded
+    Project --&gt; Embedded
+    IndexEngine --&gt; Embedded
+    Persistence --&gt; Embedded
+    Embedded --&gt; Caller
+</pre>
+</div>
+<p></p></figure><p></p>
+</div>
+</div>
+</div>
+<p><code>IndexEngine</code> and <code>Persistence</code> are deliberately independent of <code>Project</code>/<code>Schema</code> and of each other: <code>IndexEngine</code> knows nothing about RocksDB (its persistence hook is a plain <code>(index, sp, ep) -&gt; nothing</code> callback), and <code>Persistence</code> knows nothing about metadata schemas or search engines (it stores plain Julia values under string keys). <code>embedded.jl</code> is the one place that wires all four together — every other module could, in principle, be reused on its own.</p>
+<p><code>Schema</code>/<code>Project</code> have no per-project typed-field schema to declare anymore: every project has exactly the same fixed-shape <code>Schema.MetadataRecord</code> (<code>_id</code>, <code>doc_id</code>, <code>keywords</code>, <code>refs</code>) plus a free-form <code>meta</code> JSON blob for everything else appended with an item — <code>_id</code> is the internal, sequential, always-present handle (the same id space the engine’s own vector/text store uses); <code>doc_id</code> is the caller’s own external id, if any; <code>keywords</code>/<code>refs</code> are the only two fields with a secondary index (<code>Project</code>’s fixed <code>idx_keywords</code>/<code>idx_refs</code> column families), everything else lives in <code>meta</code>, looked up straight from <code>Project</code>, never indexed.</p>
+</section>
+<section id="engine-type-hierarchy" class="level2">
+<h2 class="anchored" data-anchor-id="engine-type-hierarchy">Engine type hierarchy</h2>
+<p>Every index kind (<code>SearchGraph</code>, <code>ExhaustiveSearch</code>/<code>ParallelExhaustiveSearch</code>, <code>BM25InvertedFile</code>, <code>InvertedFile</code>) gets its own concrete engine struct, each carrying only the state that kind actually needs. There is no enum tag or string name anywhere in this hierarchy — the concrete Julia type itself is what <code>add_item!</code>, <code>search_live</code>, <code>restore_engine</code>, and every other generic function dispatch on.</p>
+<div class="cell" data-layout-align="default">
+<div class="cell-output-display">
+<div>
+<p></p><figure class="figure"><p></p>
+<div>
+<pre class="mermaid mermaid-js">classDiagram
+    class AbstractSearchEngine {
+        &lt;&lt;abstract&gt;&gt;
+    }
+    class SearchGraphEngine {
+        index: SearchGraph
+        ctx: SearchGraphContext
+        minrecall: Union~Nothing, Float32~
+        opt_beamsearch: OptBeamSearch
+        search_ctx_pool: ContextPool
+        deleted_ids: Set~UInt32~
+        lock: ReadWriteLock
+    }
+    class GenericEngine~IndexType~ {
+        index: IndexType
+        ctx: Any
+        search_ctx_pool: ContextPool
+        deleted_ids: Set~UInt32~
+        lock: ReadWriteLock
+    }
+    class BM25Engine {
+        index: Union~Nothing, BM25InvertedFile~
+        profile: Union~Nothing, TextProfile~
+        textconfig: TextConfig
+        variants: Union~Nothing, Dict~
+        staged: Vector~String~
+        ctx: InvertedFileContext
+        search_ctx_pool: ContextPool
+        deleted_ids: Set~UInt32~
+        lock: ReadWriteLock
+    }
+    class InvertedFileEngine {
+        index: Union~Nothing, TextInvertedFile~
+        profile: Union~Nothing, TextProfile~
+        textconfig: TextConfig
+        variants: Union~Nothing, Dict~
+        distance: PreMetric
+        staged: Vector~String~
+        ctx: InvertedFileContext
+        search_ctx_pool: ContextPool
+        deleted_ids: Set~UInt32~
+        lock: ReadWriteLock
+    }
+    AbstractSearchEngine &lt;|-- SearchGraphEngine
+    AbstractSearchEngine &lt;|-- GenericEngine
+    AbstractSearchEngine &lt;|-- BM25Engine
+    AbstractSearchEngine &lt;|-- InvertedFileEngine
+</pre>
+</div>
+<p></p></figure><p></p>
+</div>
+</div>
+</div>
+<p>A few design choices worth calling out:</p>
+<ul>
+<li><code>GenericEngine{IndexType}</code> covers <code>ExhaustiveSearch</code>/<code>ParallelExhaustiveSearch</code> (and any future dense index with no engine-specific state) with a single struct parameterized by the wrapped index type, instead of one struct per index kind.</li>
+<li><code>minrecall</code>/<code>opt_beamsearch</code> only exist on <code>SearchGraphEngine</code> — only a <code>SearchGraph</code> autotunes a <code>BeamSearch</code> toward a target recall.</li>
+<li><code>BM25Engine</code> and <code>InvertedFileEngine</code> each carry their whole text model in one field, <code>profile::Union{Nothing, TextProfile}</code> — vocabulary and weights (<code>profile.model</code>) plus the corpus-produced artifacts (stopword set, lemma map, query-expansion network) and the lineage saying how it was produced. That replaces the <code>voc</code>/<code>model</code> pair they carried before <code>TextSearch</code> 1.1 published <code>TextProfile</code>, and the reason to prefer it is structural: an artifact has exactly one home, and the <code>TextConfig</code> the tokenizer runs is <em>derived</em> from the profile, so an index cannot end up tokenizing documents through a different lemma map than the one it saves.</li>
+<li>A text engine is created from an <code>AbstractTextModelSpec</code>: three answers to “where does the vocabulary come from”, not variations on one setting. <code>BaseProfile(profile)</code> trains it at creation. <code>DefaultProfile(:es)</code> and <code>FitFromCorpus(textconfig; …)</code> leave it untrained and store the recipe in <code>fitspec</code>, for the first <code>index!</code> call to carry out — the first by loading the published profile for that language and refitting it against the staged corpus, the second by delegating a fit of it to <code>TextSearch.fit_profile</code>. <code>index === nothing</code> exactly while <code>profile === nothing</code>. There is no separate training entry point: <code>add_item!</code>/<code>append_items!</code> always just stage raw text into <code>staged</code> (never an error, trained or not — see “Staging vs.&nbsp;indexing” below).</li>
+<li><strong>Fitting is the library’s job, not this package’s.</strong> <code>train_profile</code> is a dispatcher over the two deferred specs and nothing more: one calls <code>TextSearch.fit_profile</code>, the other <code>TextSearch.load_profile</code> + <code>TextSearch.refit_profile</code>. This package used to fit a vocabulary and weights itself, and every line of that was a second implementation of something the library does. What delegation costs is that a fit is now the <em>full</em> pipeline — LSI, expansion network, lemma clustering — with no cheap variant, which is why <code>FitFromCorpus</code> caps its sample at <code>max_documents</code> and why the recommended path avoids fitting altogether.</li>
+<li><code>create_engine</code> <strong>requires</strong> the spec and refuses <code>nothing</code>, and the dense kinds refuse a spec rather than ignoring one. Both directions are deliberate. The fit-from-corpus form freezes the vocabulary at the first <code>index!</code> call, so every term a later batch introduces is dropped from then on — nothing about the project’s behaviour afterwards distinguishes “I chose this” from “I never said”, which is exactly why it cannot be a default. In the other direction, a text model handed to an index of vectors has no reading under which it does anything, so swallowing it is how a project ends up not being the kind its author thought it was. Each spec is a type carrying its <em>own</em> options, so an option that only means something on one path cannot be handed to the other — the same reason this hierarchy discriminates on concrete types instead of an enum tag.</li>
+<li><code>variants</code> caches the orthographic variant map a query is bridged with (<code>musica</code> → <code>música</code>). It is a pure function of the frozen vocabulary, so it is derived once, the moment <code>profile</code> is set, rather than per query — deriving it costs ~0.24s over a half-million-token vocabulary, and doing it up front also keeps <code>search_live</code> free of any write to the engine, so it stays safe under a plain read lock. It is not persisted: reopening a project re-derives it from the restored vocabulary.</li>
+<li>Every kind shares three fields regardless of what else it carries: <code>deleted_ids::Set{UInt32}</code> (logically deleted document ids — <code>UInt32</code> uniformly, matching the id type search results actually come back as), <code>lock::ReadWriteLock</code>, and <code>search_ctx_pool::ContextPool</code> (see below).</li>
+</ul>
+</section>
+<section id="staging-vs.-indexing-every-engine-kind-has-the-split-except-exact-search" class="level2">
+<h2 class="anchored" data-anchor-id="staging-vs.-indexing-every-engine-kind-has-the-split-except-exact-search">Staging vs.&nbsp;indexing: every engine kind has the split except exact search</h2>
+<p><code>append_items!</code>/<code>add_item!</code> only ever <em>stages</em> an item — for <code>SearchGraphEngine</code>, <code>BM25Engine</code>, and <code>InvertedFileEngine</code> alike; <code>search_live</code>/<code>ftsearch</code>/<code>allknn</code>/<code>fft</code>/ <code>closestpairs</code>/<code>bichromatic_kclosestpairs</code> only ever see items an explicit <code>index!</code> call has actually processed, not merely staged. <code>GenericEngine</code> (<code>ExhaustiveSearch</code>/<code>ParallelExhaustiveSearch</code>) is the one exception: it always evaluates directly against <code>db</code>, so <code>append_items!</code>/<code>add_item!</code> indexes it synchronously and it has no <code>index!</code> method of its own.</p>
+<p><code>SimilaritySearch.jl</code>’s own <code>SearchGraph</code> separates <em>staging</em> raw vectors into its database from the (expensive) graph-connection work, and this package extends that same split to the two inverted-file text engines, which have no such native support of their own to lean on:</p>
+<ul>
+<li><p><code>SearchGraphEngine</code>: <code>insert_dense!(index::SearchGraph, ctx, item) = push_item!(index.db, item)</code> only ever appends <code>item</code> to <code>index.db</code> — cheap, and durable the instant it happens (see Persistence below), but <code>index.adj</code> (the graph itself) is untouched. <code>IndexEngine.index!(engine::SearchGraphEngine)</code> is the explicit, idempotent step that actually builds graph connections for whatever has been staged since the last call (or since creation) — it delegates to <code>SimilaritySearch.index!(engine.index, engine.ctx)</code>, which itself only ever processes the backlog (<code>length(engine.index)+1:length(database(engine.index))</code>), so calling it repeatedly, or with nothing new staged, is a cheap no-op.</p></li>
+<li><p><code>BM25Engine</code>/<code>InvertedFileEngine</code>: <code>add_item!</code> just pushes raw text onto <code>engine.staged</code> — the text-engine counterpart of <code>index.db</code>, since <code>TextSearch.jl</code>’s inverted-file types have no raw-item staging area of their own to reuse. <code>IndexEngine.index!(engine)</code> (no corpus argument) catches up the exact same backlog range (<code>(engine.index === nothing ? 0 : length(engine.index))+1:length(engine.staged)</code>), encoding each staged text (<code>bagofwords</code> for BM25; for the weighted engine, handing the text straight to <code>TextInvertedFile</code>, whose own <code>push_item!</code> vectorizes through the profile’s model) and <code>push_item!</code>ing it into the real index — with one extra twist on its <em>first</em> call for a project created without a profile: since neither index kind can even be constructed without a <code>Vocabulary</code>, that call runs the engine’s <code>fitspec</code> over what is staged so far and builds the real index against the resulting <code>TextProfile</code>, before running the same backlog loop. Every later call is a plain catch-up, identical in shape to <code>SearchGraphEngine</code>’s.</p>
+<p>A project created from a <code>BaseProfile</code> skips that entirely, and the difference is not only when the work happens: a vocabulary fitted from a sample of the first batch is frozen there, so every term appended later that it never saw is out-of-vocabulary and silently dropped. Starting from a profile fitted over the language — <code>DefaultProfile(:es)</code>, or a <code>BaseProfile</code> of one you hold — is what makes an incrementally-grown text project behave.</p></li>
+</ul>
+<p>This decouples <em>when</em> an item becomes durable (immediately, on <code>append_items!</code>) from <em>when</em> it becomes searchable (only after an explicit <code>index!</code>), so a caller controls when the expensive graph-connection/encoding cost is paid — once per big batch, on a schedule, or right before the next round of queries — instead of paying it synchronously on every single insert the way <code>GenericEngine</code> still does.</p>
+</section>
+<section id="concurrency-model" class="level2">
+<h2 class="anchored" data-anchor-id="concurrency-model">Concurrency model</h2>
+<p>None of the four underlying index kinds tolerates a search running concurrently with an insertion into the <em>same</em> index — a search reading <code>index.adj</code>/<code>index.db</code> while <code>add_item!</code> resizes/appends to those same arrays is exactly the kind of concurrent read-during-mutation none of them are built for. But all four <em>do</em> safely support running multiple searches concurrently against the same index, since that is exactly what their own <code>searchbatch</code>/<code>allknn</code> parallel paths already rely on internally.</p>
+<section id="readwritelock" class="level3">
+<h3 class="anchored" data-anchor-id="readwritelock"><code>ReadWriteLock</code></h3>
+<p>Each engine’s <code>lock</code> is a custom reader/writer lock (built from a <code>Threads.Condition</code> plus a reader count), not a plain <code>ReentrantLock</code>: <code>search_live</code>/<code>current_beamsearch</code> take it as a <em>read</em> lock (any number of readers concurrently), while <code>add_item!</code>/<code>index!</code>/ <code>mark_deleted!</code>/<code>calibrate!</code> take it as a <em>write</em> lock (exclusive of every reader and every other writer).</p>
+<div class="cell" data-layout-align="default">
+<div class="cell-output-display">
+<div>
+<p></p><figure class="figure"><p></p>
+<div>
+<pre class="mermaid mermaid-js">sequenceDiagram
+    participant S1 as search_live (thread 1)
+    participant S2 as search_live (thread 2)
+    participant W as add_item! (thread 3)
+    participant L as engine.lock
+
+    S1-&gt;&gt;L: read_lock (readers 0 to 1)
+    S2-&gt;&gt;L: read_lock (readers 1 to 2)
+    Note over S1,S2: both searches run concurrently
+    W-&gt;&gt;L: write_lock (blocks: readers &gt; 0)
+    S1-&gt;&gt;L: release (readers 2 to 1)
+    S2-&gt;&gt;L: release (readers 1 to 0)
+    L-&gt;&gt;W: write lock granted
+    Note over W: insert_dense! / push_item! using engine.ctx
+    W-&gt;&gt;L: release
+</pre>
+</div>
+<p></p></figure><p></p>
+</div>
+</div>
+</div>
+<p>A read-to-write “upgrade” on the same logical operation would deadlock (the write lock waits for the reader count to hit zero, including the reader this same call is itself holding) — so a <code>SearchGraphEngine</code>’s <code>minrecall</code>-driven auto-<code>calibrate!</code> inside <code>search_live</code> is always resolved <em>before</em> the read lock is acquired, never nested inside it.</p>
+</section>
+<section id="contextpool" class="level3">
+<h3 class="anchored" data-anchor-id="contextpool"><code>ContextPool</code></h3>
+<p>Guarding the index data isn’t enough by itself: <code>SearchGraphContext</code>/<code>GenericContext</code>/ <code>InvertedFileContext</code> are all <em>mutable, reused</em> scratch spaces (beam buffers, visited-vertices state, per-batch cost counters, …), and two concurrent searches sharing the same context object corrupt each other’s scratch state — confirmed directly by a segfault inside <code>SearchGraph</code>’s own beam search when two threads raced on a shared context.</p>
+<p><code>ContextPool</code> avoids both bad alternatives — sharing one context (unsafe) and allocating a fresh one on every single call (wasteful, since these contexts are non-trivial to allocate) — by handing each concurrent <code>search_live</code> call its own checked-out context, returned to the pool when done:</p>
+<div class="cell" data-layout-align="default">
+<div class="cell-output-display">
+<div>
+<p></p><figure class="figure"><p></p>
+<div>
+<pre class="mermaid mermaid-js">flowchart LR
+    A["search_live call"] --&gt; B{"pool.available&lt;br/&gt;non-empty?"}
+    B -- yes --&gt; C["pop! an idle context"]
+    B -- no --&gt; D["deepcopy(pool.template)"]
+    C --&gt; E["run the search with this context"]
+    D --&gt; E
+    E --&gt; F["checkin!: push! back onto pool.available"]
+</pre>
+</div>
+<p></p></figure><p></p>
+</div>
+</div>
+</div>
+<p>The pool grows lazily to (and then stays at) however many concurrent searches an engine has actually seen at once — never pre-allocated speculatively, never shrunk either. <code>ctx</code> itself (the engine’s own field) is never touched by <code>search_live</code>; it stays reserved for insertion, which already runs under an exclusive <code>write_lock</code>, so sharing it there is safe.</p>
+</section>
+</section>
+<section id="persistence-one-storage-unit-per-concern" class="level2">
+<h2 class="anchored" data-anchor-id="persistence-one-storage-unit-per-concern">Persistence: one storage unit per concern</h2>
+<p>Earlier iterations of this design re-serialized the <em>entire</em> engine state — including the whole index — on every mutation. The current design instead gives each kind of state its own RocksDB column family (or, for a <code>SearchGraph</code>’s raw vectors, its own file outside RocksDB entirely — see below), so a mutation only ever rewrites the storage it actually touched.</p>
+<div class="cell" data-layout-align="default">
+<div class="cell-output-display">
+<div>
+<p></p><figure class="figure"><p></p>
+<div>
+<pre class="mermaid mermaid-js">flowchart TB
+    subgraph db["one RocksDB directory per project"]
+        records[("records&lt;br/&gt;&lt;small&gt;_id → MetadataRecord (fixed shape)&lt;/small&gt;")]
+        meta[("meta&lt;br/&gt;&lt;small&gt;_id → free-form meta (JSON)&lt;/small&gt;")]
+        oplog[("op_log")]
+        idxkw[("idx_keywords&lt;br/&gt;&lt;small&gt;keyword → _ids&lt;/small&gt;")]
+        idxrefs[("idx_refs&lt;br/&gt;&lt;small&gt;referenced doc_id → _ids&lt;/small&gt;")]
+        engine[("engine &lt;small&gt;(ENGINE_CF)&lt;/small&gt;&lt;br/&gt;&lt;small&gt;one key per engine struct field&lt;/small&gt;")]
+        adj[("searchgraph_adj &lt;small&gt;(ADJACENCY_CF)&lt;/small&gt;&lt;br/&gt;&lt;small&gt;object_id → direct neighbors&lt;/small&gt;")]
+        stagedtext[("staged_text &lt;small&gt;(STAGED_TEXT_CF)&lt;/small&gt;&lt;br/&gt;&lt;small&gt;append-only raw, not-yet-encoded text blocks&lt;/small&gt;")]
+        sparsedb[("sparse_db &lt;small&gt;(INVFILE_DB_CF)&lt;/small&gt;&lt;br/&gt;&lt;small&gt;append-only encoded object blocks&lt;/small&gt;")]
+    end
+    mmapfile[["dense_vectors.mmapdb&lt;br/&gt;&lt;small&gt;-- not RocksDB --&lt;br/&gt;one row per staged vector&lt;/small&gt;"]]
+
+    ProjectManager -- "put_metadata! / get_metadata" --&gt; records
+    ProjectManager -- "get_meta / get_raw_meta" --&gt; meta
+    ProjectManager -- "secondary lookups" --&gt; idxkw
+    ProjectManager -- "secondary lookups" --&gt; idxrefs
+    EngineStore -- "save_field! / load_field" --&gt; engine
+    AdjacencyStore -- "save_neighbors! / load_neighbors" --&gt; adj
+    StagedTextStore -- "append_staged_texts! / load_staged_text_blocks" --&gt; stagedtext
+    InvertedFileObjectStore -- "append_objects! / load_object_blocks" --&gt; sparsedb
+    append_items_dense["append_items!&lt;br/&gt;(SearchGraph)"] --&gt; mmapfile
+    append_items_text["append_items!&lt;br/&gt;(BM25InvertedFile/InvertedFile)"] --&gt; stagedtext
+</pre>
+</div>
+<p></p></figure><p></p>
+</div>
+</div>
+</div>
+<p>Every RocksDB column family above lives in the <em>same</em> directory/connection as the project’s metadata store (<code>Project.ProjectManager.db</code>) — <code>Project.open_project</code>’s <code>extra_cf_names</code> keyword is how <code>IndexEngine</code>’s persistence layer gets its own column families listed alongside <code>Project</code>’s, since every column family that exists on disk must be named at <code>opendb</code> time on <em>every</em> open, not only the first. <code>dense_vectors.mmapdb</code> is the one exception: a plain file, alongside (not inside) the RocksDB directory – raw text has no fixed-size-record shape to exploit that way, so <code>staged_text</code> stays a RocksDB column family, structured exactly like <code>sparse_db</code> (append-only, blocks keyed by starting position) but holding <em>raw, un-encoded</em> text instead of already-encoded objects.</p>
+<section id="enginestore-per-field-keys-not-one-blob" class="level3">
+<h3 class="anchored" data-anchor-id="enginestore-per-field-keys-not-one-blob"><code>EngineStore</code>: per-field keys, not one blob</h3>
+<p><code>EngineStore</code> is a <code>field_name::Symbol =&gt; value</code> map, one RocksDB key per struct field. <code>save_field!</code>/<code>load_field</code> touch exactly one key; <code>save_fields!</code> is only used for rare, one-shot multi-field transitions (right after <code>create_engine</code>, or the moment a text engine’s vocabulary is first trained). A soft delete only ever rewrites <code>:deleted_ids</code>; a <code>calibrate!</code> call only ever rewrites <code>:opt_beamsearch</code>.</p>
+</section>
+<section id="dense-vectors-a-memory-mapped-file-not-a-rocksdb-column-family" class="level3">
+<h3 class="anchored" data-anchor-id="dense-vectors-a-memory-mapped-file-not-a-rocksdb-column-family">Dense vectors: a memory-mapped file, not a RocksDB column family</h3>
+<p>A <code>SearchGraphEngine</code>’s raw vectors are fixed-dimension <code>Float32</code> data — exactly what <code>SimilaritySearch.MMapMatrixDatabase</code> is for, and its own append-only counter/growth/fsync discipline already gives durable, in-order, crash-safe storage with no need for RocksDB’s batch-keying scheme, at a much cheaper per-vector read than a RocksDB point lookup (confirmed empirically against <code>VectorDatabase</code>/<code>BlockMatrixDatabase</code> in <code>SimilaritySearch.jl</code>’s own test suite). <code>append_items!</code> writes staged vectors directly into this file, at stage time — not through <code>CallbackLog</code> at all, unlike everything else in this section — since a vector is durable-worthy the moment it’s staged, long before any graph-linking work happens. The file (<code>dense_vectors.mmapdb</code>) is created lazily, on the first dense append, since its dimension isn’t known before then.</p>
+<p>Batch size matters a lot here: <code>MMapMatrixDatabase</code> <code>fsync</code>s once per <code>append_items!</code> call, never per individual vector, so the number of calls a caller makes (not the total vector count) drives wall-clock time — confirmed empirically, 200,000 128-dim vectors as one 200,000-item call took ~0.10s; the same total split into calls of 10 items took ~2.1s; one call per single item measured roughly 1000x slower than the all-at-once case. Prefer fewer, larger <code>append_items!</code> calls over many small ones.</p>
+</section>
+<section id="incremental-adjacencyposting-list-persistence-different-shapes-by-necessity" class="level3">
+<h3 class="anchored" data-anchor-id="incremental-adjacencyposting-list-persistence-different-shapes-by-necessity">Incremental adjacency/posting-list persistence: different shapes, by necessity</h3>
+<p>The graph/posting-list structure itself is the other expensive, ever-growing part, so it is never saved as a single value either. Its incremental format is driven by <code>IndexEngine.CallbackLog</code>, an <code>AbstractLog</code> backend that fires a <code>flush(index, sp, ep)</code> callback on every <code>:add!</code> event a mutating call reports — <code>SimilaritySearch.jl</code> standardizes every index kind’s <code>LOG</code> calls onto this one event name for a real structural mutation, regardless of which entry point triggered it, so <code>CallbackLog</code> never has to branch on the event itself. What <em>does</em> differ by index kind is the <em>shape</em> of what gets saved, and <em>when</em> this callback fires relative to <code>append_items!</code>.</p>
+<div class="cell" data-layout-align="default">
+<div class="cell-output-display">
+<div>
+<p></p><figure class="figure"><p></p>
+<div>
+<pre class="mermaid mermaid-js">sequenceDiagram
+    participant Caller as index!(handle)
+    participant Idx as SearchGraph
+    participant CB as CallbackLog
+    participant ES as EngineStore
+    participant AS as AdjacencyStore
+
+    Note over Caller,Idx: append_items! already staged vectors into&lt;br/&gt;dense_vectors.mmapdb -- no CallbackLog involved
+    Caller-&gt;&gt;Idx: SimilaritySearch.index!(engine.index, ctx)
+    Idx-&gt;&gt;Idx: build graph connections for the staged backlog (range sp:ep)
+    Idx-&gt;&gt;CB: LOG(:add!, index, ctx, sp, ep)
+    Note right of Idx: fires BEFORE connect_reverse_links!&lt;br/&gt;index.adj[sp:ep] holds only direct links
+    CB-&gt;&gt;AS: save_neighbors!(i, direct_neighbors(i)) for i in sp:ep
+    CB-&gt;&gt;ES: save_field!(:graph_len, ep)
+    Idx-&gt;&gt;Idx: connect_reverse_links! (in memory only)
+</pre>
+</div>
+<p></p></figure><p></p>
+</div>
+</div>
+</div>
+<p>For a <code>SearchGraph</code>, <code>LOG</code> fires <em>before</em> <code>connect_reverse_links!</code> runs for that range — so what’s captured at that instant is exactly the direct-links-only slice. This is by design, not a bug to route around: <code>connect_reverse_links!</code> isn’t idempotent (re-running it on an already-complete graph would duplicate reverse edges), so the on-disk format never saves reverse links at all. <code>:graph_len</code> (how far graph-indexing actually got, which can lag behind how many vectors are staged in <code>dense_vectors.mmapdb</code> if the process closed between an <code>append_items!</code> and its follow-up <code>index!</code>) lets reloading resume exactly where indexing left off, over the same, already-fully-restored <code>.db</code>.</p>
+<p><code>BM25InvertedFile</code>/<code>InvertedFile</code> have no direct/reverse-link hazard: their own <code>LOG</code> only fires after a <code>push_item!</code> call’s mutation is fully done, so <code>InvertedFileObjectStore</code> simply appends the raw encoded objects just inserted (<code>invertedfile_objects</code>) as a new block. <code>LOG</code> here fires from <em>inside</em> an <code>index!</code> call’s backlog loop (see “Staging vs. indexing” above) rather than from <code>append_items!</code> directly — <code>append_items!</code> only ever writes to <code>StagedTextStore</code>, the raw-text counterpart of <code>dense_vectors.mmapdb</code>; <code>sparse_db</code>’s already-encoded blocks only grow once an <code>index!</code> call actually catches the backlog up. Reloading <code>index</code> itself still rebuilds the whole thing by replaying every saved <em>encoded</em> object back through the library’s own <code>push_item!</code> — a rebuild-by-reinsertion design, not a real on-disk posting-list format — while <code>staged</code> (every raw text ever staged, whether or not it’s been encoded yet) is restored separately, straight from <code>StagedTextStore</code>, and handed to <code>restore_engine</code> alongside <code>object_blocks</code>. This is a deliberate scaling limit, not an oversight: it’s fine up to a few million documents, since the whole corpus and the whole rebuilt index have to fit in memory and reloading costs the full original indexing time again. It is <em>not</em> a design for billion-document corpora, which need genuinely disk-backed, paged-on-demand posting lists.</p>
+<p><code>GenericEngine</code> (<code>ExhaustiveSearch</code>/<code>ParallelExhaustiveSearch</code>) has no incremental format of its own — its <code>on_change</code> just flags <code>pending_flush[]</code>, and <code>embedded.jl</code> saves the <em>whole</em> index as a single <code>:index</code> value right after the triggering <code>add_item!</code> call returns. This is acceptable for these exact, in-memory-only index kinds, which have no adjacency or posting-list structure to split apart in the first place, and index synchronously on every <code>add_item!</code> same as the text engines.</p>
+</section>
+<section id="reopening-a-project" class="level3">
+<h3 class="anchored" data-anchor-id="reopening-a-project">Reopening a project</h3>
+<div class="cell" data-layout-align="default">
+<div class="cell-output-display">
+<div>
+<p></p><figure class="figure"><p></p>
+<div>
+<pre class="mermaid mermaid-js">sequenceDiagram
+    participant Caller as open_project
+    participant MM as dense_vectors.mmapdb
+    participant ES as EngineStore
+    participant AS as AdjacencyStore
+    participant IE as IndexEngine
+
+    Caller-&gt;&gt;ES: load_field(:kind)
+    Caller-&gt;&gt;MM: open_dense_vectors(dir) → vector_blocks (one block, every staged vector)
+    Caller-&gt;&gt;AS: load_neighbors(i) for i in 1:graph_len
+    Caller-&gt;&gt;ES: load_field(:graph_len, 0)
+    Caller-&gt;&gt;IE: build_searchgraph(distance, vector_blocks, load_neighbors, graph_len)
+    IE-&gt;&gt;IE: replay every staged vector into index.db (in full)
+    IE-&gt;&gt;IE: add! each of the first graph_len objects' saved direct neighbors
+    IE-&gt;&gt;IE: connect_reverse_links! once, over 1:graph_len
+    IE--&gt;&gt;Caller: reconstructed SearchGraph -- index.len[] = graph_len
+    Caller-&gt;&gt;IE: restore_engine(state, on_change) → SearchGraphEngine
+</pre>
+</div>
+<p></p></figure><p></p>
+</div>
+</div>
+</div>
+<p><code>graph_len</code> can be <code>&lt;= length(index.db)</code>: every staged vector is always fully restored into <code>.db</code> (that’s durable from the moment it was staged), but only the first <code>graph_len</code> of them were ever graph-indexed before the project last closed — if it closed between an <code>append_items!</code> and its follow-up <code>index!</code> call, the gap is restored as staged-but-not-yet- searchable, waiting on a future <code>index!(handle)</code> call to catch it up, exactly as it was before closing.</p>
+<p><code>restore_engine</code> dispatches on <code>state.kind</code> exactly the way <code>create_engine</code> dispatches on an index type. <code>IndexEngine.extra_state_fields(kind)</code> only covers <code>GenericEngine</code>’s wrapped index types (<code>ExhaustiveSearch</code>/<code>ParallelExhaustiveSearch</code>) — the static, per-kind list of extra <code>EngineStore</code> keys <code>open_project</code>’s generic fallback branch reads back before an engine instance exists to ask <code>snapshot_state</code> directly. <code>SearchGraphEngine</code>/ <code>BM25Engine</code>/<code>InvertedFileEngine</code> are deliberately <em>not</em> covered by it: each needs its own dedicated combination of <code>EngineStore</code> fields (<code>:minrecall</code>/<code>:opt_beamsearch</code> for <code>SearchGraphEngine</code>; <code>:profile</code>/<code>:fitspec</code> for <code>BM25Engine</code>; those two plus <code>:distance</code> for <code>InvertedFileEngine</code>) <em>plus</em> its own dedicated block-store reads (<code>vector_blocks</code>/ <code>load_neighbors</code>/<code>graph_len</code> for <code>SearchGraphEngine</code>; <code>object_blocks</code>/<code>staged</code> for the two text engines) assembled by hand, directly in <code>open_project</code>, rather than a generic per-kind field list.</p>
+</section>
+</section>
+<section id="logging-informative-output-and-persistence-are-independent" class="level2">
+<h2 class="anchored" data-anchor-id="logging-informative-output-and-persistence-are-independent">Logging: informative output and persistence are independent</h2>
+<p>Every engine’s context installs a logger (<code>ctx.logger</code>), fanned out via <code>LogList</code> when more than one backend is active:</p>
+<ul>
+<li><strong><code>InformativeLog</code></strong> (from <code>SimilaritySearch.jl</code> itself) — always on, prints a throttled status line to <code>stderr</code>. Purely informative.</li>
+<li><strong><code>FileLog</code></strong> — the same throttled status line, but to any caller-given <code>IO</code> (an open file handle, or <code>stdout</code>/<code>stderr</code>) instead of a hardcoded <code>stderr</code>. Also purely informative: adding one changes nothing about what gets persisted.</li>
+<li><strong><code>CallbackLog</code></strong> — the mechanism described above: forwards every report, untouched by its own throttling, to whatever <code>on_change</code> closure <code>embedded.jl</code> installed (the actual persistence trigger).</li>
+</ul>
+<div class="cell" data-layout-align="default">
+<div class="cell-output-display">
+<div>
+<p></p><figure class="figure"><p></p>
+<div>
+<pre class="mermaid mermaid-js">flowchart LR
+    Event["LOG :add! event&lt;br/&gt;(from push_item!/append_items!)"] --&gt; LogList
+    LogList --&gt; InformativeLog["InformativeLog&lt;br/&gt;→ stderr, throttled"]
+    LogList --&gt; FileLog["FileLog&lt;br/&gt;→ any IO, throttled&lt;br/&gt;(optional)"]
+    LogList --&gt; CallbackLog["CallbackLog&lt;br/&gt;→ on_change(index, sp, ep)&lt;br/&gt;(persistence trigger)"]
+</pre>
+</div>
+<p></p></figure><p></p>
+</div>
+</div>
+</div>
+<p><code>FileLog</code>/<code>InformativeLog</code> and <code>CallbackLog</code> are independent by construction: removing either informative logger changes nothing about persistence, and vice versa.</p>
+</section>
+<section id="soft-deletes" class="level2">
+<h2 class="anchored" data-anchor-id="soft-deletes">Soft deletes</h2>
+<p><code>mark_deleted!</code> adds a document’s id to <code>deleted_ids</code> and nothing else — the underlying index is never touched, so no rebuild or backfill is needed. <code>search_live</code> reports a <code>deleted</code> flag per candidate instead of silently dropping deleted candidates and backfilling with the next-best live one: compensating for deletions by overfetching would have to grow with the total number of deletions, and it would hide from the caller which ids were even considered. A caller that wants <code>k</code> <em>live</em> results after filtering is expected to page for more (e.g.&nbsp;via a cursor over successive top-<code>k'</code> windows) at a layer above this one — <code>SimilaritySearchServer</code>, not this package.</p>
+</section>
+<section id="whole-dataset-operations" class="level2">
+<h2 class="anchored" data-anchor-id="whole-dataset-operations">Whole-dataset operations</h2>
+<p><code>allknn</code>, <code>fft</code>, <code>closestpairs</code>, and <code>bichromatic_kclosestpairs</code> all run synchronously, in-process, directly against a dense project’s index — no job queue, unlike the HTTP API’s <code>POST /api/v1/jobs/allknn</code>. Each does real work proportional to the <em>whole</em> dataset (or two datasets, for the bichromatic case): <code>allknn</code> is every item’s own top-<code>k</code> neighbors at once; <code>fft</code> (Farthest-First-Traversal) picks <code>k</code> well-separated items for diverse sampling; <code>closestpairs</code> finds the <code>k</code> globally closest pairs within one project (near-duplicate/echo detection); <code>bichromatic_kclosestpairs</code> finds the <code>k</code> closest pairs between a project’s own index and a second, unindexed collection of vectors. All four require a dense (<code>SearchGraphEngine</code>) project that’s had <code>index!</code> run at least once — none apply to a text project.</p>
+</section>
+<section id="where-this-leaves-similaritysearchserver" class="level2">
+<h2 class="anchored" data-anchor-id="where-this-leaves-similaritysearchserver">Where this leaves <code>SimilaritySearchServer</code></h2>
+<p>This package covers project lifecycle, core CRUD, calibration, and the whole-dataset operations above. Pagination policy over soft-deleted results, HTTP/CLI surfaces, job queues, and telemetry all live one layer up, in the sibling <code>SimilaritySearchServer</code> package, which depends on this one and is kept in sync with it as this package’s design settles.</p>
+
+
+</section>
+
+</main> <!-- /main -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp('/' + window.location.host + '/');
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+</div> <!-- /content -->
+
+
+
+
+</body></html>

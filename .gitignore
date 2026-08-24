@@ -10,7 +10,13 @@
 /docs/Manifest.toml
 
 # Quarto site build output/cache (manual/ -- description, architecture, tutorial)
-/manual/docs/
+#
+# `manual/docs/` is deliberately NOT ignored, unlike every other build product here. The
+# paragraph-search tutorial executes Julia against corpora that are themselves gitignored --
+# 827k paragraphs, an hour and a network connection to rebuild -- so no CI can render it. The
+# rendered HTML is the only form of that page that can be published, which makes it source for
+# publishing purposes even though it is output for every other purpose. Re-render and commit it
+# when the pages change: XDG_RUNTIME_DIR=$(mktemp -d) quarto render manual
 /manual/.quarto/
 /manual/_freeze/
 **/*.quarto_ipynb
