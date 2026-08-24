@@ -15,6 +15,13 @@ website:
         text: "Architecture"
       - href: tutorials/index.qmd
         text: "Tutorial"
+    # The API reference is a separate Documenter site deployed beside this one, at the root of
+    # the same Pages domain. An absolute URL rather than a relative one: this navbar is shared
+    # by pages at two different depths, and `quarto preview` serves them off a local port where
+    # no relative path could reach the deployed reference anyway.
+    right:
+      - href: https://sadit.github.io/SimilaritySearchEngine.jl/dev/
+        text: "API reference"
 
 format:
   html:

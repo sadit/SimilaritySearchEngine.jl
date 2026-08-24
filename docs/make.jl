@@ -15,7 +15,10 @@ makedocs(;
     ),
     pages=[
         "Home" => "index.md",
-        "API" => "api.md"
+        "API" => "api.md",
+        # No entry for the manual: Documenter validates `pages` as file paths and rejects a
+        # URL ("'https:/…/manual/' is not an existing page!"), so the links to it live in
+        # index.md instead, which the sidebar always reaches as "Home".
     ],
     doctest=false,
     warnonly=true
