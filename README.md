@@ -96,6 +96,13 @@ Pkg.develop(path="path/to/SimilaritySearchEngine.jl")
 
 ## Documentation
 
+Published at **<https://sadit.github.io/SimilaritySearchEngine.jl/>** — the
+[API reference](https://sadit.github.io/SimilaritySearchEngine.jl/dev/) and the
+[manual](https://sadit.github.io/SimilaritySearchEngine.jl/manual/) (architecture and
+tutorials). `./publish-docs.sh` rebuilds and republishes both; it is a script rather than a
+CI workflow because this package builds only against unreleased local checkouts of
+SimilaritySearch and TextSearch, which no runner can resolve.
+
 - **[Architecture](manual/architecture.qmd)** — the module map, the engine type
   hierarchy, the staging-vs-indexing split, the concurrency model, and the persistence
   layout, each with a diagram. Render the site with `quarto render manual` / `quarto
