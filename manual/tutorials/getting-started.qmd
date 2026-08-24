@@ -460,9 +460,15 @@ representative sample of the corpus (e.g. candidate cluster centers), rather tha
 
 ```julia
 R = fft(h2, 8; verbose=false)
-R.centers  # 8 well-separated internal _ids
-R.ε        # the separation radius achieved
+R.centers      # 8 well-separated internal _ids
+R.separation   # the smallest distance between two of those 8
+R.covering     # the largest distance from any item to its nearest one
 ```
+
+`R.assign[i]` says which of the 8 item `i` belongs to — a **position** in `R.centers`, from
+`1` to `8`, so `R.centers[R.assign[i]]` is that center's own `_id` and `R.assigndist[i]` is
+how far item `i` sits from it. That makes `fft` double as a quick partition of the corpus
+around `k` spread-out seeds.
 
 ### `k` closest pairs (near-duplicates and echoes within one corpus)
 

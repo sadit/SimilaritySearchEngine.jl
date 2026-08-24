@@ -59,18 +59,26 @@ end
 """
     FFTResult
 
-What [`fft`](@ref) returns: the chosen `centers`, each item's nearest center (`nn`) and
-distance to it (`dists`), the final covering radius `epsilon`, and the two cost counters
-`SimilaritySearch.fft` reports.
+What [`fft`](@ref) returns: the chosen `centers`, which center each item was assigned to
+(`assign`) and its distance to it (`assigndist`), the two radii describing the selection, and
+the two cost counters `SimilaritySearch.fft` reports.
 
-A faithful, typed restatement of that function's own named tuple -- `epsilon` spelled out
-rather than `ε`, and ids as `Int32` to match every other id this package hands back.
+A faithful, typed restatement of `SimilaritySearch.CenterSelection`, with ids as `Int32` to
+match every other id this package hands back.
+
+- `centers` are internal `_id`s (1-based position in the index), not hydrated with metadata.
+- `assign[i]` is a **position in `centers`**, from `1` to `length(centers)` -- not an `_id`.
+  The `_id` of item `i`'s center is `centers[assign[i]]`.
+- `covering` is the largest `assigndist`: the radius the centers need to cover everything.
+- `separation` is the smallest distance between two centers. These two are different numbers
+  and used to be conflated under one name; see `SimilaritySearch.CenterSelection`.
 """
 struct FFTResult
     centers::Vector{Int32}
-    nn::Vector{Int32}
-    dists::Vector{Float32}
-    epsilon::Float32
+    assign::Vector{Int32}
+    assigndist::Vector{Float32}
+    covering::Float32
+    separation::Float32
     costdists::Int
     costblocks::Int
 end
@@ -839,17 +847,18 @@ graph search, so it works the same regardless of how well-tuned (or untuned) the
 project's `BeamSearch` is.
 
 Returns an [`FFTResult`](@ref) -- every field `SimilaritySearch.fft` itself reports (see its
-docstring), restated as a named type with `ε` spelled `epsilon` and ids as `Int32`, matching
-every other id this package hands back. `centers`/`nn` are internal `_id`s (1-based position in
-the index), not hydrated with metadata -- look them up yourself (e.g. via
-[`fetch_items`](@ref)) if you need it.
+docstring and `SimilaritySearch.CenterSelection`), with ids as `Int32` to match every other id
+this package hands back. `centers` are internal `_id`s (1-based position in the index), not
+hydrated with metadata -- look them up yourself (e.g. via [`fetch_items`](@ref)) if you need
+it. `assign[i]` is a position in `centers`, so item `i`'s center is `centers[assign[i]]`.
 """
 function fft(handle::EmbeddedEngine, k::Integer; start::Int=0, verbose::Bool=false)
     engine = handle.engine
     IndexEngine.is_text_index(engine) && error("fft requires a dense (vector) index, but this project is a text index")
     length(engine.index) == 0 && error("fft requires a non-empty dense index")
     r = SimilaritySearch.fft(SimilaritySearch.distance(engine.index), SimilaritySearch.database(engine.index), k; start, verbose)
-    FFTResult(Int32.(r.centers), Int32.(r.nn), Float32.(r.dists), Float32(r.ε),
+    FFTResult(Int32.(r.centers), Int32.(r.assign), Float32.(r.assigndist),
+              Float32(r.covering), Float32(r.separation),
               Int(r.costdists), Int(r.costblocks))
 end
 
