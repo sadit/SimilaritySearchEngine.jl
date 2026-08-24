@@ -19,8 +19,8 @@ Order   = [:type, :function]
 ## `IndexEngine`
 
 The `AbstractSearchEngine` type hierarchy, insertion/search, calibration, and the
-concurrency (`ReadWriteLock`/`ContextPool`) and logging (`CallbackLog`/`FileLog`)
-machinery underneath the embedded API.
+concurrency (`ReadWriteLock`/`ContextPool`) and logging (reporters and observers, see
+`SimilaritySearch.jl`'s `log.jl`) machinery underneath the embedded API.
 
 ```@autodocs
 Modules = [SimilaritySearchEngine.IndexEngine]

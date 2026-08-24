@@ -359,11 +359,11 @@ Prefer fewer, larger `append_items!` calls over many small ones.
 
 The graph/posting-list structure itself is the other expensive, ever-growing part, so it
 is never saved as a single value either. Its incremental format is driven by
-`IndexEngine.CallbackLog`, an `AbstractLog` backend that fires a `flush(index, sp, ep)`
-callback on every `:add!` event a mutating call reports — `SimilaritySearch.jl`
-standardizes every index kind's `LOG` calls onto this one event name for a real structural
-mutation, regardless of which entry point triggered it, so `CallbackLog` never has to
-branch on the event itself. What *does* differ by index kind is the *shape* of what gets
+`SimilaritySearch.CallbackLog`, an *observer* that fires a `flush(index, sp, ep)` callback
+on every `:add!` event a mutating call reports — `SimilaritySearch.jl` standardizes every
+index kind's structural events onto this one name, regardless of which entry point
+triggered it, and the observation channel carries nothing else, so `CallbackLog` never has
+to branch on the event itself. What *does* differ by index kind is the *shape* of what gets
 saved, and *when* this callback fires relative to `append_items!`.
 
 ```{mermaid}
@@ -462,28 +462,33 @@ per-kind field list.
 
 ## Logging: informative output and persistence are independent
 
-Every engine's context installs a logger (`ctx.logger`), fanned out via `LogList` when
-more than one backend is active:
+Every engine's context carries **two** logging slots, and that split is what makes the
+independence structural instead of a convention to remember. This engine used to hand-roll
+it — one slot holding three backends of two different kinds, with a comment explaining
+which of them could affect persistence — until `SimilaritySearch.jl` grew the distinction
+itself.
 
-- **`InformativeLog`** (from `SimilaritySearch.jl` itself) — always on, prints a throttled
-  status line to `stderr`. Purely informative.
-- **`FileLog`** — the same throttled status line, but to any caller-given `IO` (an open
-  file handle, or `stdout`/`stderr`) instead of a hardcoded `stderr`. Also purely
-  informative: adding one changes nothing about what gets persisted.
-- **`CallbackLog`** — the mechanism described above: forwards every report, untouched by
-  its own throttling, to whatever `on_change` closure `embedded.jl` installed (the actual
-  persistence trigger).
+- **`ctx.reporters`** — where progress goes to be *read*. Always at least one
+  `InformativeLog` printing a throttled status line to `stderr`; a `log_io` adds a second
+  one writing the same line to any caller-given `IO` (an open file handle, or
+  `stdout`/`stderr`). Purely informative, and it cannot be anything else: a reporter is
+  only ever handed a message.
+- **`ctx.observers`** — what *reacts* to a structural change. A `CallbackLog` here forwards
+  every `:add!` report, untouched by any throttling, to whatever `on_change` closure
+  `embedded.jl` installed. This is the actual persistence trigger.
 
 ```{mermaid}
 flowchart LR
-    Event["LOG :add! event<br/>(from push_item!/append_items!)"] --> LogList
-    LogList --> InformativeLog["InformativeLog<br/>→ stderr, throttled"]
-    LogList --> FileLog["FileLog<br/>→ any IO, throttled<br/>(optional)"]
-    LogList --> CallbackLog["CallbackLog<br/>→ on_change(index, sp, ep)<br/>(persistence trigger)"]
+    Mutation["push_item! / append_items!"] --> INFORM["INFORM<br/>(ctx.reporters)"]
+    Mutation --> OBSERVE["OBSERVE :add!<br/>(ctx.observers)"]
+    INFORM --> Stderr["InformativeLog<br/>→ stderr, throttled"]
+    INFORM --> FileIO["InformativeLog(log_io)<br/>→ any IO, throttled<br/>(optional)"]
+    OBSERVE --> CallbackLog["CallbackLog<br/>→ on_change(index, sp, ep)<br/>(persistence trigger)"]
 ```
 
-`FileLog`/`InformativeLog` and `CallbackLog` are independent by construction: removing
-either informative logger changes nothing about persistence, and vice versa.
+The two channels cannot interfere. Silencing the console is `reporters=[]`, and persistence
+continues untouched; conversely no observer can be lost by turning output down, because
+turning output down does not reach that slot.
 
 ## Soft deletes
 

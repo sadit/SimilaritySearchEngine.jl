@@ -14,7 +14,7 @@ export ReadWriteLock, read_lock, write_lock
 export ContextPool, checkout!, checkin!
 export create_engine, restore_engine, snapshot_state, extra_state_fields, add_item!, index!, search_live, mark_deleted!, is_text_index
 export stored_payload
-export calibrate!, current_beamsearch, OptBeamSearch, DEFAULT_MINRECALL_LEVELS, CallbackLog, FileLog
+export calibrate!, current_beamsearch, OptBeamSearch, DEFAULT_MINRECALL_LEVELS
 export direct_neighbors, apply_searchgraph_vectors!, build_searchgraph
 export invertedfile_objects, build_bm25invertedfile, build_textinvertedfile
 export text_profile, text_vocabulary, resolve_query, query_pipeline
@@ -682,99 +682,27 @@ mutable struct InvertedFileEngine <: AbstractSearchEngine
     lock::ReadWriteLock
 end
 
-"""
-    CallbackLog(flush::Function)
-
-An `AbstractLog` backend (see `SimilaritySearch.jl`'s `log.jl`) that calls
-`flush(index, sp, ep)` -- instead of printing, the way `InformativeLog` does -- on every
-`:add!` event a `push_item!`/`append_items!` call reports, forwarding exactly the range
-`sp:ep` the library itself reports, with no batching/throttling of its own. Knows nothing
-about RocksDB or any other storage backend; `flush` is supplied by the caller.
-
-`SimilaritySearch.jl`'s `log.jl` standardized every index kind's `LOG` calls onto two
-canonical events regardless of which entry point (`push_item!`, `append_items!`, `index!`,
-...) triggered them: `:add!` for a real, `sp:ep`-scoped structural mutation, and `:info`
-for a no-op (only `ExhaustiveSearch`/`ParallelExhaustiveSearch`'s `index!` fires this,
-since their database already *is* the index). This package's `IndexEngine.index!(engine::SearchGraphEngine)`
-does call `SimilaritySearch.index!` directly (unlike `push_item!`/`append_items!`, which
-only ever stage) -- but a genuine no-op call (nothing new staged since the last one) fires
-no `LOG` at all, since `SimilaritySearch.index!`'s own backlog loop (`length(index)+1:n`)
-is simply empty in that case, not a `:info` call to filter out. `BM25Engine`/
-`InvertedFileEngine`'s own `index!` methods have the same staged-vs-indexed split (see
-their docstrings) but no `SimilaritySearch.index!` of their own to delegate to -- they run
-their backlog loop by calling `push_item!` once per staged-but-not-yet-indexed item
-directly, which fires `LOG(:add!, ...)` per item exactly as an eager `add_item!` used to.
-Either way `CallbackLog` never has to branch on `event` itself: every call it does receive
-here is a real mutation.
-
-!!! warning "what `index` looks like inside `flush`, for a `SearchGraph`"
-    `LOG`'s `:add!` event for a `SearchGraph` fires *before* `connect_reverse_links!` runs
-    for `sp:ep` (`searchgraph/insertions.jl`) -- so `index.adj` for that exact range holds only the
-    *direct* links just computed, none of the reverse links other nodes will later add
-    into it. This is by design, not a bug to route around: [`direct_neighbors`](@ref)
-    captures exactly that direct-links-only slice, and [`build_searchgraph`](@ref)
-    reconnects every reverse link *once*, only after every staged vector and graph-indexed
-    object's adjacency entry has been replayed -- reconnecting on an already-complete
-    graph isn't safe (it isn't idempotent; it would duplicate reverse edges), which is
-    exactly why this format never saves reverse links in the first place.
-    `InvertedFile`/`BM25InvertedFile` have no such hazard -- their own `LOG` calls happen
-    only after all of a call's mutation is done, so [`invertedfile_objects`](@ref) can
-    read `sp:ep`'s objects straight out of `index.db` with nothing left pending.
-"""
-mutable struct CallbackLog <: SimilaritySearch.AbstractLog
-    flush::Function
-end
-
-function SimilaritySearch.LOG(log::CallbackLog, event::Symbol, index::SimilaritySearch.AbstractSearchIndex,
-                               ctx::SimilaritySearch.AbstractContext, sp::Integer, ep::Integer)
-    log.flush(index, sp, ep)
-end
-
-"""
-    FileLog(io::IO; dt::Float64=1.0, prompt::String="LOG")
-
-An `AbstractLog` backend that prints the exact same throttled status line
-`SimilaritySearch.jl`'s own `InformativeLog` does, but to a caller-given `io` instead of a
-hardcoded `stderr` -- an open file handle (e.g. `open(path, "a")`) or `stdout`/`stderr`
-work identically, since both are just `IO`. Purely informative, like `InformativeLog`
-itself: it never triggers any persistence of its own, unlike [`CallbackLog`](@ref), which
-is the mechanism responsible for incrementally saving the index/vectors/adjacency to
-RocksDB. The two are independent loggers fanned out together via `LogList` (see
-[`_engine_logger`](@ref)) -- adding a `FileLog` changes nothing about what gets persisted.
-"""
-mutable struct FileLog <: SimilaritySearch.AbstractLog
-    io::IO
-    dt::Float64
-    prompt::String
-    last::Ref{Float64}
-    lock::Threads.SpinLock
-end
-FileLog(io::IO; dt::Float64=1.0, prompt::String="LOG") = FileLog(io, dt, prompt, Ref(0.0), Threads.SpinLock())
-
-function SimilaritySearch.LOG(log::FileLog, event::Symbol, index::SimilaritySearch.AbstractSearchIndex,
-                               ctx::SimilaritySearch.AbstractContext, sp::Integer, ep::Integer)
-    trylock(log.lock) || return
-    try
-        now = time()
-        if log.last[] + log.dt < now
-            n = length(index)
-            mem = ceil(Int, Sys.total_memory() / 2^20)
-            maxrss = ceil(Int, Sys.maxrss() / 2^20)
-            println(log.io, log.prompt, " $event $(typeof(index)) sp=$sp ep=$ep n=$n mem=$(mem) max-rss=$(maxrss) $(Dates.now())")
-            flush(log.io)
-            log.last[] = now
-        end
-    finally
-        unlock(log.lock)
-    end
-end
 
 """
     direct_neighbors(index::SearchGraph, i::Integer) -> Vector{UInt32}
 
-Object `i`'s direct (not yet reverse-connected) neighbor list, read at exactly the
-moment `LOG` reports the range containing `i` -- i.e. before `connect_reverse_links!` has
-added anything else into it (see [`CallbackLog`](@ref)'s warning).
+Object `i`'s direct (not yet reverse-connected) neighbor list, read at exactly the moment
+`OBSERVE` reports the range containing `i` -- i.e. before `connect_reverse_links!` has added
+anything else into it.
+
+!!! warning "what `index` looks like inside a `CallbackLog` callback, for a `SearchGraph`"
+    A `SearchGraph`'s `:add!` event fires *before* `connect_reverse_links!` runs for `sp:ep`
+    (`searchgraph/insertions.jl`) -- so `index.adj` for that exact range holds only the
+    *direct* links just computed, none of the reverse links other nodes will later add into
+    it. This is by design, not a bug to route around: `direct_neighbors` captures exactly
+    that direct-links-only slice, and [`build_searchgraph`](@ref) reconnects every reverse
+    link *once*, only after every staged vector and graph-indexed object's adjacency entry
+    has been replayed -- reconnecting on an already-complete graph isn't safe (it isn't
+    idempotent; it would duplicate reverse edges), which is exactly why this format never
+    saves reverse links in the first place. `InvertedFile`/`BM25InvertedFile` have no such
+    hazard -- their own events fire only after all of a call's mutation is done, so
+    [`invertedfile_objects`](@ref) can read `sp:ep`'s objects straight out of `index.db`
+    with nothing left pending.
 """
 direct_neighbors(index::SearchGraph, i::Integer) = copy(neighbors(index.adj, i))
 
@@ -1002,19 +930,20 @@ function build_textinvertedfile(distance, profile::TextProfile, object_blocks)
     return index
 end
 
-# `on_change`, given to every `create_engine`/`restore_engine` method below, is an
-# optional `(index, sp, ep) -> nothing` callback -- typically a closure over an on-disk
-# store -- fired via a `CallbackLog` fanned out alongside the library's own default
-# `InformativeLog` (via `LogList`, so the existing console progress printing isn't lost).
-# `log_io`, also given to every `create_engine`/`restore_engine` method, is an optional
-# extra `IO` (an open file handle, or `stdout`/`stderr`) to *additionally* print the same
-# informative status line to via `FileLog` -- purely informative, like the default
-# `InformativeLog` it's fanned out alongside; it never changes what gets persisted.
-function _engine_logger(on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}=nothing)
-    loggers = SimilaritySearch.AbstractLog[InformativeLog()]
-    log_io === nothing || push!(loggers, FileLog(log_io))
-    on_change === nothing || push!(loggers, CallbackLog(on_change))
-    return length(loggers) == 1 ? loggers[1] : SimilaritySearch.LogList(loggers)
+# The two logging slots a context carries, built from the two keywords every
+# `create_engine`/`restore_engine` method below accepts. They are separate on purpose:
+# `log_io` can never change what gets persisted, and `on_change` can never be lost by
+# silencing the console.
+#
+# `on_change` is an optional `(index, sp, ep) -> nothing` callback -- typically a closure
+# over an on-disk store -- installed as a `CallbackLog` *observer*, fired on every `:add!`
+# event with exactly the range the library reports, with no batching or throttling.
+# `log_io` is an optional extra `IO` (an open file handle, or `stdout`/`stderr`) that gets
+# its own `InformativeLog` *reporter* alongside the default one on `stderr`.
+function _engine_logging(on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}=nothing)
+    reporters = log_io === nothing ? [InformativeLog()] : [InformativeLog(), InformativeLog(log_io)]
+    observers = on_change === nothing ? [] : [CallbackLog(on_change)]
+    (; reporters, observers)
 end
 
 # `hyperparameters_callback` on a `SearchGraphContext` drives `OptimizeParameters`'
@@ -1023,8 +952,8 @@ end
 # given at `create_engine` time (default 0.9) rather than running on the library's own
 # untuned defaults while it grows; `calibrate!` is a separate, explicit re-optimization
 # pass layered on top, not the sole writer of `engine.index.algo[]`.
-_searchgraph_context(minrecall::Nothing, logger) = SearchGraphContext(; hyperparameters_callback=nothing, logger)
-_searchgraph_context(minrecall::Real, logger) = SearchGraphContext(; hyperparameters_callback=OptimizeParameters(MinRecall(Float32(minrecall))), logger)
+_searchgraph_context(minrecall::Nothing, logging) = SearchGraphContext(; hyperparameters_callback=nothing, logging...)
+_searchgraph_context(minrecall::Real, logging) = SearchGraphContext(; hyperparameters_callback=OptimizeParameters(MinRecall(Float32(minrecall))), logging...)
 
 """
     create_engine(::Type{SearchGraph}; distance=SimilaritySearch.Dist.SqL2(), minrecall::Union{Nothing,Real}=0.9, on_change=nothing, log_io=nothing) -> SearchGraphEngine
@@ -1037,26 +966,26 @@ against `distance`. `minrecall` only means anything for a `SearchGraph`; it's ac
 regardless of index type. A `textmodel`, by contrast, is *rejected* rather than ignored on all
 three: a text model handed to an index of vectors is a caller mistake with no reading under
 which it does anything, and swallowing it silently is how a project ends up not being the kind
-its author thought it was. `on_change::Union{Nothing,Function}`, if given, is installed
-(via [`CallbackLog`](@ref)) as an `(index, sp, ep) -> nothing` callback fired on every
-`:add!` event a `push_item!`/`append_items!` call reports -- e.g. to persist the range
-`sp:ep` that was just inserted. `log_io::Union{Nothing,IO}`, if given, additionally prints the same
-throttled informative status line [`InformativeLog`](@ref) already prints to `stderr`
-to this `IO` too (via [`FileLog`](@ref)) -- an open file handle or `stdout`/`stderr`
-both work; purely informative, changes nothing about what gets persisted.
+its author thought it was. `on_change::Union{Nothing,Function}`, if given, is installed as a
+`SimilaritySearch.CallbackLog` observer: an `(index, sp, ep) -> nothing` callback fired on
+every `:add!` event a `push_item!`/`append_items!` call reports -- e.g. to persist the range
+`sp:ep` that was just inserted. `log_io::Union{Nothing,IO}`, if given, adds a second
+`InformativeLog` reporter writing the same throttled status line to this `IO` -- an open file
+handle or `stdout`/`stderr` both work; purely informative, and being a reporter rather than an
+observer it changes nothing about what gets persisted.
 """
 function create_engine(::Type{SearchGraph}; distance=SimilaritySearch.Dist.SqL2(), minrecall::Union{Nothing,Real}=0.9, textmodel=nothing, on_change::Union{Nothing,Function}=nothing, log_io::Union{Nothing,IO}=nothing)
     _reject_textmodel(SearchGraph, textmodel)
     mr = minrecall === nothing ? nothing : Float32(minrecall)
-    return SearchGraphEngine(SearchGraph(distance, VectorDatabase()), _searchgraph_context(mr, _engine_logger(on_change, log_io)), mr, OptBeamSearch(), ContextPool(SearchGraphContext()), Set{UInt32}(), ReadWriteLock())
+    return SearchGraphEngine(SearchGraph(distance, VectorDatabase()), _searchgraph_context(mr, _engine_logging(on_change, log_io)), mr, OptBeamSearch(), ContextPool(SearchGraphContext()), Set{UInt32}(), ReadWriteLock())
 end
 function create_engine(::Type{ExhaustiveSearch}; distance=SimilaritySearch.Dist.SqL2(), minrecall=nothing, textmodel=nothing, on_change::Union{Nothing,Function}=nothing, log_io::Union{Nothing,IO}=nothing)
     _reject_textmodel(ExhaustiveSearch, textmodel)
-    GenericEngine{ExhaustiveSearch}(ExhaustiveSearch(distance, VectorDatabase()), GenericContext(; logger=_engine_logger(on_change, log_io)), ContextPool(GenericContext()), Set{UInt32}(), ReadWriteLock())
+    GenericEngine{ExhaustiveSearch}(ExhaustiveSearch(distance, VectorDatabase()), GenericContext(; _engine_logging(on_change, log_io)...), ContextPool(GenericContext()), Set{UInt32}(), ReadWriteLock())
 end
 function create_engine(::Type{ParallelExhaustiveSearch}; distance=SimilaritySearch.Dist.SqL2(), minrecall=nothing, textmodel=nothing, on_change::Union{Nothing,Function}=nothing, log_io::Union{Nothing,IO}=nothing)
     _reject_textmodel(ParallelExhaustiveSearch, textmodel)
-    GenericEngine{ParallelExhaustiveSearch}(ParallelExhaustiveSearch(distance, VectorDatabase()), GenericContext(; logger=_engine_logger(on_change, log_io)), ContextPool(GenericContext()), Set{UInt32}(), ReadWriteLock())
+    GenericEngine{ParallelExhaustiveSearch}(ParallelExhaustiveSearch(distance, VectorDatabase()), GenericContext(; _engine_logging(on_change, log_io)...), ContextPool(GenericContext()), Set{UInt32}(), ReadWriteLock())
 end
 
 """
@@ -1095,7 +1024,7 @@ function create_engine(::Type{BM25InvertedFile}; distance=nothing, minrecall=not
     profile = _initial_profile(spec)
     index = profile === nothing ? nothing : BM25InvertedFile(profile.model.voc)
     BM25Engine(index, profile, _deferred_fit(spec), _derive_variants(profile), String[],
-               InvertedFileContext(; logger=_engine_logger(on_change, log_io)),
+               InvertedFileContext(; _engine_logging(on_change, log_io)...),
                ContextPool(InvertedFileContext()), Set{UInt32}(), ReadWriteLock())
 end
 
@@ -1106,7 +1035,7 @@ function create_engine(::Type{InvertedFile}; distance=SimilaritySearch.Dist.Norm
     profile = _initial_profile(spec)
     index = profile === nothing ? nothing : _new_textinvertedfile(profile, distance)
     InvertedFileEngine(index, profile, _deferred_fit(spec), _derive_variants(profile), distance, String[],
-                       InvertedFileContext(; logger=_engine_logger(on_change, log_io)),
+                       InvertedFileContext(; _engine_logging(on_change, log_io)...),
                        ContextPool(InvertedFileContext()), Set{UInt32}(), ReadWriteLock())
 end
 
@@ -1203,23 +1132,23 @@ restore_engine(state; on_change::Union{Nothing,Function}=nothing, log_io::Union{
 
 function restore_engine(::Type{SearchGraphEngine}, state; on_change::Union{Nothing,Function}=nothing, log_io::Union{Nothing,IO}=nothing)
     index = build_searchgraph(state.distance, state.vector_blocks, state.load_neighbors, state.graph_len)
-    return SearchGraphEngine(index, _searchgraph_context(state.minrecall, _engine_logger(on_change, log_io)), state.minrecall, state.opt_beamsearch, ContextPool(SearchGraphContext()), state.deleted_ids, ReadWriteLock())
+    return SearchGraphEngine(index, _searchgraph_context(state.minrecall, _engine_logging(on_change, log_io)), state.minrecall, state.opt_beamsearch, ContextPool(SearchGraphContext()), state.deleted_ids, ReadWriteLock())
 end
 
 function restore_engine(::Type{IndexType}, state; on_change::Union{Nothing,Function}=nothing, log_io::Union{Nothing,IO}=nothing) where {IndexType}
-    return GenericEngine{IndexType}(state.index, GenericContext(; logger=_engine_logger(on_change, log_io)), ContextPool(GenericContext()), state.deleted_ids, ReadWriteLock())
+    return GenericEngine{IndexType}(state.index, GenericContext(; _engine_logging(on_change, log_io)...), ContextPool(GenericContext()), state.deleted_ids, ReadWriteLock())
 end
 
 function restore_engine(::Type{BM25Engine}, state; on_change::Union{Nothing,Function}=nothing, log_io::Union{Nothing,IO}=nothing)
     profile = state.profile
     index = profile === nothing ? nothing : build_bm25invertedfile(profile.model.voc, state.object_blocks)
-    return BM25Engine(index, profile, state.fitspec, _derive_variants(profile), state.staged, InvertedFileContext(; logger=_engine_logger(on_change, log_io)), ContextPool(InvertedFileContext()), state.deleted_ids, ReadWriteLock())
+    return BM25Engine(index, profile, state.fitspec, _derive_variants(profile), state.staged, InvertedFileContext(; _engine_logging(on_change, log_io)...), ContextPool(InvertedFileContext()), state.deleted_ids, ReadWriteLock())
 end
 
 function restore_engine(::Type{InvertedFileEngine}, state; on_change::Union{Nothing,Function}=nothing, log_io::Union{Nothing,IO}=nothing)
     profile = state.profile
     index = profile === nothing ? nothing : build_textinvertedfile(state.distance, profile, state.object_blocks)
-    return InvertedFileEngine(index, profile, state.fitspec, _derive_variants(profile), state.distance, state.staged, InvertedFileContext(; logger=_engine_logger(on_change, log_io)), ContextPool(InvertedFileContext()), state.deleted_ids, ReadWriteLock())
+    return InvertedFileEngine(index, profile, state.fitspec, _derive_variants(profile), state.distance, state.staged, InvertedFileContext(; _engine_logging(on_change, log_io)...), ContextPool(InvertedFileContext()), state.deleted_ids, ReadWriteLock())
 end
 
 is_text_index(::AbstractSearchEngine) = false

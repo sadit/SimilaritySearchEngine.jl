@@ -271,7 +271,7 @@ share a keyspace with the handful of other, small engine fields.
 
 Unlike a `SearchGraph`, an inverted file's posting lists have no direct/reverse-link
 split to worry about -- `push_item!` fully finalizes each object's contribution before
-`LOG` even fires (see `IndexEngine.CallbackLog`'s docstring), so what's saved here is
+`LOG` even fires (see `SimilaritySearch.CallbackLog`'s docstring), so what's saved here is
 simply every object ever indexed, in insertion order; reloading rebuilds the whole index
 by replaying them through the library's own `push_item!` again (see
 `IndexEngine.build_bm25invertedfile`/`build_textinvertedfile`) rather than trying to persist

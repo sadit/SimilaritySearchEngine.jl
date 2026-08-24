@@ -84,7 +84,7 @@ layout plus the live `Project.ProjectManager`/`IndexEngine.AbstractSearchEngine`
 single CLI command, plus the `Persistence.EngineStore` (a RocksDB column family shared
 with `project.db`, see `Persistence.open_engine_store`) that engine mutations persist
 into field-by-field, and `pending_flush` -- a flag a `GenericEngine`'s
-`IndexEngine.CallbackLog` callback sets (see [`create_project`](@ref)) that this module
+`SimilaritySearch.CallbackLog` callback sets (see [`create_project`](@ref)) that this module
 checks and clears from *outside* the engine's own insertion call, once it's known safe to
 do so (see [`_maybe_flush_index!`](@ref); unused for `SearchGraphEngine`/`BM25Engine`/
 `InvertedFileEngine`, which each persist their index incrementally by themselves -- see
@@ -109,7 +109,7 @@ end
 
 Persists `handle.engine.index` if (and only if) `handle.pending_flush[]` is set, then
 clears the flag. Callers must only call this from a point where the just-finished mutation
-is fully done -- in particular, *not* from inside an `IndexEngine.CallbackLog` callback
+is fully done -- in particular, *not* from inside an `SimilaritySearch.CallbackLog` callback
 itself. Right after an `IndexEngine.add_item!`/`index!` call returns to this
 module is always safe. A no-op for `SearchGraphEngine`/`BM25Engine`/`InvertedFileEngine`:
 each has its own dedicated incremental `on_change` (see [`_searchgraph_on_change`](@ref)/
@@ -145,7 +145,7 @@ adjacency and `:graph_len` genuinely need to wait for `SimilaritySearch.index!` 
 compute them, which is exactly what makes it safe to do this synchronously, right inside
 the callback (unlike the whole-graph save every other engine kind uses, see
 [`_maybe_flush_index!`](@ref)): this is exactly the direct-links-only slice
-`IndexEngine.CallbackLog` hands over at that point, and reconstruction
+`SimilaritySearch.CallbackLog` hands over at that point, and reconstruction
 (`IndexEngine.build_searchgraph`, used by [`open_project`](@ref)) reconnects every reverse
 link itself, once, up to the restored `:graph_len`, after replaying every staged vector
 and looking up every graph-indexed object's saved adjacency.
@@ -170,7 +170,7 @@ never the whole (growing) index as one value. Safe to do synchronously, right in
 callback (unlike the whole-index save `GenericEngine` uses, see
 [`_maybe_flush_index!`](@ref)): an inverted file's `LOG` only fires after a call's
 mutation is fully done, so there's no partial-state hazard here the way there is for a
-`SearchGraph` (see `IndexEngine.CallbackLog`'s docstring). Reconstruction
+`SearchGraph` (see `SimilaritySearch.CallbackLog`'s docstring). Reconstruction
 (`IndexEngine.build_bm25invertedfile`/`build_textinvertedfile`, used by [`open_project`](@ref))
 rebuilds the whole index by replaying every saved object back through the library's own
 insertion -- see `Persistence.InvertedFileObjectStore`'s docstring for the scaling
@@ -443,7 +443,7 @@ and the "Performance" note below); for a text project, every batch's raw text is
 directly to its own `Persistence.StagedTextStore` -- both happen right here, at stage
 time, not via `on_change`, since an item is already durable-worthy the moment it's staged,
 long before any graph-linking/encoding happens. Once an [`index!`](@ref index!(::EmbeddedEngine))
-call actually encodes/indexes a text project's backlog, `IndexEngine.CallbackLog` persists
+call actually encodes/indexes a text project's backlog, `SimilaritySearch.CallbackLog` persists
 each newly-encoded object incrementally (see [`_invertedfile_on_change`](@ref)).
 `GenericEngine` instead flags a pending whole-index save that happens right after each
 `add_item!` call returns (see [`_maybe_flush_index!`](@ref)).

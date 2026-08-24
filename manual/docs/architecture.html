@@ -399,7 +399,7 @@ ul.task-list li input[type="checkbox"] {
 </section>
 <section id="incremental-adjacencyposting-list-persistence-different-shapes-by-necessity" class="level3">
 <h3 class="anchored" data-anchor-id="incremental-adjacencyposting-list-persistence-different-shapes-by-necessity">Incremental adjacency/posting-list persistence: different shapes, by necessity</h3>
-<p>The graph/posting-list structure itself is the other expensive, ever-growing part, so it is never saved as a single value either. Its incremental format is driven by <code>IndexEngine.CallbackLog</code>, an <code>AbstractLog</code> backend that fires a <code>flush(index, sp, ep)</code> callback on every <code>:add!</code> event a mutating call reports — <code>SimilaritySearch.jl</code> standardizes every index kind’s <code>LOG</code> calls onto this one event name for a real structural mutation, regardless of which entry point triggered it, so <code>CallbackLog</code> never has to branch on the event itself. What <em>does</em> differ by index kind is the <em>shape</em> of what gets saved, and <em>when</em> this callback fires relative to <code>append_items!</code>.</p>
+<p>The graph/posting-list structure itself is the other expensive, ever-growing part, so it is never saved as a single value either. Its incremental format is driven by <code>SimilaritySearch.CallbackLog</code>, an <em>observer</em> that fires a <code>flush(index, sp, ep)</code> callback on every <code>:add!</code> event a mutating call reports — <code>SimilaritySearch.jl</code> standardizes every index kind’s structural events onto this one name, regardless of which entry point triggered it, and the observation channel carries nothing else, so <code>CallbackLog</code> never has to branch on the event itself. What <em>does</em> differ by index kind is the <em>shape</em> of what gets saved, and <em>when</em> this callback fires relative to <code>append_items!</code>.</p>
 <div class="cell" data-layout-align="default">
 <div class="cell-output-display">
 <div>
@@ -466,11 +466,10 @@ ul.task-list li input[type="checkbox"] {
 </section>
 <section id="logging-informative-output-and-persistence-are-independent" class="level2">
 <h2 class="anchored" data-anchor-id="logging-informative-output-and-persistence-are-independent">Logging: informative output and persistence are independent</h2>
-<p>Every engine’s context installs a logger (<code>ctx.logger</code>), fanned out via <code>LogList</code> when more than one backend is active:</p>
+<p>Every engine’s context carries <strong>two</strong> logging slots, and that split is what makes the independence structural instead of a convention to remember. This engine used to hand-roll it — one slot holding three backends of two different kinds, with a comment explaining which of them could affect persistence — until <code>SimilaritySearch.jl</code> grew the distinction itself.</p>
 <ul>
-<li><strong><code>InformativeLog</code></strong> (from <code>SimilaritySearch.jl</code> itself) — always on, prints a throttled status line to <code>stderr</code>. Purely informative.</li>
-<li><strong><code>FileLog</code></strong> — the same throttled status line, but to any caller-given <code>IO</code> (an open file handle, or <code>stdout</code>/<code>stderr</code>) instead of a hardcoded <code>stderr</code>. Also purely informative: adding one changes nothing about what gets persisted.</li>
-<li><strong><code>CallbackLog</code></strong> — the mechanism described above: forwards every report, untouched by its own throttling, to whatever <code>on_change</code> closure <code>embedded.jl</code> installed (the actual persistence trigger).</li>
+<li><strong><code>ctx.reporters</code></strong> — where progress goes to be <em>read</em>. Always at least one <code>InformativeLog</code> printing a throttled status line to <code>stderr</code>; a <code>log_io</code> adds a second one writing the same line to any caller-given <code>IO</code> (an open file handle, or <code>stdout</code>/<code>stderr</code>). Purely informative, and it cannot be anything else: a reporter is only ever handed a message.</li>
+<li><strong><code>ctx.observers</code></strong> — what <em>reacts</em> to a structural change. A <code>CallbackLog</code> here forwards every <code>:add!</code> report, untouched by any throttling, to whatever <code>on_change</code> closure <code>embedded.jl</code> installed. This is the actual persistence trigger.</li>
 </ul>
 <div class="cell" data-layout-align="default">
 <div class="cell-output-display">
@@ -478,17 +477,18 @@ ul.task-list li input[type="checkbox"] {
 <p></p><figure class="figure"><p></p>
 <div>
 <pre class="mermaid mermaid-js">flowchart LR
-    Event["LOG :add! event&lt;br/&gt;(from push_item!/append_items!)"] --&gt; LogList
-    LogList --&gt; InformativeLog["InformativeLog&lt;br/&gt;→ stderr, throttled"]
-    LogList --&gt; FileLog["FileLog&lt;br/&gt;→ any IO, throttled&lt;br/&gt;(optional)"]
-    LogList --&gt; CallbackLog["CallbackLog&lt;br/&gt;→ on_change(index, sp, ep)&lt;br/&gt;(persistence trigger)"]
+    Mutation["push_item! / append_items!"] --&gt; INFORM["INFORM&lt;br/&gt;(ctx.reporters)"]
+    Mutation --&gt; OBSERVE["OBSERVE :add!&lt;br/&gt;(ctx.observers)"]
+    INFORM --&gt; Stderr["InformativeLog&lt;br/&gt;→ stderr, throttled"]
+    INFORM --&gt; FileIO["InformativeLog(log_io)&lt;br/&gt;→ any IO, throttled&lt;br/&gt;(optional)"]
+    OBSERVE --&gt; CallbackLog["CallbackLog&lt;br/&gt;→ on_change(index, sp, ep)&lt;br/&gt;(persistence trigger)"]
 </pre>
 </div>
 <p></p></figure><p></p>
 </div>
 </div>
 </div>
-<p><code>FileLog</code>/<code>InformativeLog</code> and <code>CallbackLog</code> are independent by construction: removing either informative logger changes nothing about persistence, and vice versa.</p>
+<p>The two channels cannot interfere. Silencing the console is <code>reporters=[]</code>, and persistence continues untouched; conversely no observer can be lost by turning output down, because turning output down does not reach that slot.</p>
 </section>
 <section id="soft-deletes" class="level2">
 <h2 class="anchored" data-anchor-id="soft-deletes">Soft deletes</h2>
