@@ -126,7 +126,7 @@ scratch on *every* call (wasteful -- `T`'s own scratch buffers, beam state,
 visited-vertices, per-batch cost counters, are sized by `maxbatches`/similar and
 non-trivial to allocate, so a high query rate would reallocate them constantly).
 
-`template` is never mutated -- it's read-only, existing only to be [`deepcopy`](@ref)'d
+`template` is never mutated -- it's read-only, existing only to be `deepcopy`'d
 into a new private worker when [`checkout!`](@ref) finds `available` empty. Every
 returned worker goes back into `available` via [`checkin!`](@ref) for the next caller to
 reuse instead of allocating again, so the pool grows lazily to (and then stays at) however
@@ -146,7 +146,7 @@ ContextPool(template::T) where {T} = ContextPool{T}(template, T[], ReentrantLock
 
 Hands back a `T` context exclusively owned by the caller until returned via
 [`checkin!`](@ref) -- an existing idle one if `pool.available` has one, otherwise a fresh
-[`deepcopy`](@ref) of `pool.template`.
+`deepcopy` of `pool.template`.
 """
 function checkout!(pool::ContextPool{T}) where {T}
     lock(pool.lock) do
@@ -762,7 +762,7 @@ Range `sp:ep`'s raw indexed objects (`index.db` -- bags-of-words for a `BM25Inve
 Unlike [`direct_neighbors`](@ref)'s `SearchGraph` counterpart, there's no
 before/after-`connect_reverse_links!` timing to worry about here -- `push_item!`/
 `append_items!` for an inverted file fully finalize an object's contribution to the
-posting lists *before* `LOG` fires at all (see [`CallbackLog`](@ref)'s docstring), so this
+posting lists *before* `LOG` fires at all (see `SimilaritySearch.CallbackLog`'s docstring), so this
 can be read at any point after the report, not just at exactly that moment.
 
 `database(index, i)` for a sparse-vector-backed index hands back a `Special.Sparse.
@@ -778,7 +778,7 @@ but not directly re-insertable (confirmed empirically, two different ways it bre
   `AbstractVector`), so it gets (mis)treated as literal pre-tokenized input instead of an
   already-computed bag. `BM25InvertedFile` needs a genuine `BOW` (`Dict{UInt32,Int32}`)
   instead, which the generic method's `pairiterator(::Dict) = d` accepts directly. Hence
-  [`_materialize`](@ref) dispatches on the *target index type*, not just the view.
+  `_materialize` dispatches on the *target index type*, not just the view.
 """
 invertedfile_objects(index::AbstractInvertedFile, sp::Integer, ep::Integer) = [_materialize(index, database(index, i)) for i in sp:ep]
 
@@ -1057,7 +1057,7 @@ engine instance exists to call this on).
 
 None of `SearchGraphEngine`/`BM25Engine`/`InvertedFileEngine` has a plain `:index` field
 here -- unlike `GenericEngine`, none of the three ever saves its index as a single value.
-`SearchGraphEngine` includes `distance` instead (see [`CallbackLog`](@ref)/
+`SearchGraphEngine` includes `distance` instead (see `SimilaritySearch.CallbackLog`/
 [`direct_neighbors`](@ref)/[`build_searchgraph`](@ref)); the
 two text engines include `profile`/`fitspec` (plus `distance` for `InvertedFileEngine`)
 instead (see [`invertedfile_objects`](@ref)/[`build_bm25invertedfile`](@ref)/
@@ -1337,7 +1337,7 @@ meaning the text engines' [`index!`](@ref index!(::BM25Engine, ::AbstractVector)
 give it: "do the expensive part explicitly, now." Unlike those, this is *idempotent* and
 can be called any number of times: `SimilaritySearch.index!(idx, ctx)` itself already
 starts from `length(idx) + 1` (the current graph-indexed count) up through
-`length(database(idx))` (everything staged so far, see [`insert_dense!`](@ref)), so
+`length(database(idx))` (everything staged so far, see `insert_dense!`), so
 calling this repeatedly as more vectors accumulate only ever processes the backlog, never
 redoing already-indexed work, and calling it with nothing new staged is a cheap no-op.
 
@@ -1368,7 +1368,7 @@ index!(engine::GenericEngine) = engine
     add_item!(engine::AbstractSearchEngine, item)
 
 Adds a single item to the index. Thread-safe wrapper.
-For a `SearchGraphEngine`, this only *stages* `item` (see [`insert_dense!`](@ref)) -- it
+For a `SearchGraphEngine`, this only *stages* `item` (see `insert_dense!`) -- it
 does not become searchable until an explicit [`index!`](@ref index!(::SearchGraphEngine))
 call. `BM25Engine`/`InvertedFileEngine` have the exact same split: `item` is raw text,
 staged into `engine.staged` -- always allowed, whether or not the engine has been trained
