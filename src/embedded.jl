@@ -115,7 +115,7 @@ end
 """
     _maybe_flush_index!(handle::EmbeddedEngine)
 
-Persists `handle.engine.index` if (and only if) `handle.pending_flush[]` is set, then
+Persists `handle.engine.backend.index` if (and only if) `handle.pending_flush[]` is set, then
 clears the flag. Callers must only call this from a point where the just-finished mutation
 is fully done -- in particular, *not* from inside an `SimilaritySearch.CallbackLog` callback
 itself. Right after an `IndexEngine.add_item!`/`index!` call returns to this
@@ -127,7 +127,7 @@ each has its own dedicated incremental `on_change` (see [`_searchgraph_on_change
 function _maybe_flush_index!(handle::EmbeddedEngine)
     if handle.pending_flush[]
         handle.pending_flush[] = false
-        Persistence.save_field!(handle.store, :index, handle.engine.index)
+        Persistence.save_field!(handle.store, :index, handle.engine.backend.index)
     end
 end
 
@@ -298,19 +298,25 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
     pending_flush = Ref(false)
     dense_vectors = Ref{Union{Nothing,MMapMatrixDatabase}}(nothing)
 
+    # `kind` and `backend` are symbols, not Julia types (see `IndexEngine.backend_tag`): the
+    # on-disk format no longer names the types in `index_engine.jl`, so renaming one is a rename
+    # rather than a migration.
     kind = Persistence.load_field(store, :kind, nothing)
+    backend = Persistence.load_field(store, :backend, nothing)
     engine = if kind === nothing
+        # Never saved: create the same default project `create_project` would have, and save it,
+        # mirroring `Server._reload_one_dataset!`'s own create-if-absent fallback.
         on_change = _searchgraph_on_change(store, Persistence.open_adjacency_store(project.db))
         engine = IndexEngine.create_engine(SearchGraph;
             distance=IndexEngine.default_distance(SearchGraph), minrecall=0.9,
             textmodel=nothing, on_change, log_io=nothing)
         Persistence.save_fields!(store, IndexEngine.snapshot_state(engine))
         engine
-    elseif kind === IndexEngine.SearchGraphEngine
+    elseif kind === :dense && backend === :graph
         dense_vectors[] = Persistence.open_dense_vectors(dir; read_only)
         adj_store = Persistence.open_adjacency_store(project.db)
         state = (
-            kind=kind,
+            kind=kind, backend=backend,
             distance=Persistence.load_field(store, :distance, nothing),
             vector_blocks=Persistence.load_dense_vector_blocks(dense_vectors[]),
             load_neighbors=(i -> Persistence.load_neighbors(adj_store, i)),
@@ -320,23 +326,33 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
             deleted_ids=Persistence.load_field(store, :deleted_ids, nothing),
         )
         IndexEngine.restore_engine(state; on_change=_searchgraph_on_change(store, adj_store), log_io=nothing)
-    elseif kind === IndexEngine.BM25Engine
-        obj_store = Persistence.open_invertedfile_object_store(project.db)
-        staged_store = Persistence.open_staged_text_store(project.db)
+    elseif kind === :dense
+        # The exact backends are the one kind whose whole index is a single saved value, so they
+        # are also the one kind that still needs `pending_flush` (see `_maybe_flush_index!`).
+        on_change = (_, __, ___) -> (pending_flush[] = true)
         state = (
-            kind=kind,
-            profile=Persistence.load_field(store, :profile, nothing),
-            fitspec=Persistence.load_field(store, :fitspec, nothing),
+            kind=kind, backend=backend,
+            index=Persistence.load_field(store, :index, nothing),
+            deleted_ids=Persistence.load_field(store, :deleted_ids, nothing),
+        )
+        IndexEngine.restore_engine(state; on_change, log_io=nothing)
+    elseif kind === :sparse
+        obj_store = Persistence.open_invertedfile_object_store(project.db)
+        state = (
+            kind=kind, backend=backend,
+            distance=Persistence.load_field(store, :distance, nothing),
+            dimension=Persistence.load_field(store, :dimension, nothing),
             object_blocks=Persistence.load_object_blocks(obj_store),
-            staged=vcat(String[], Persistence.load_staged_text_blocks(staged_store)...),
             deleted_ids=Persistence.load_field(store, :deleted_ids, nothing),
         )
         IndexEngine.restore_engine(state; on_change=_invertedfile_on_change(obj_store), log_io=nothing)
-    elseif kind === IndexEngine.InvertedFileEngine
+    elseif kind === :text
+        # One branch for both text backends: which inverted file to rebuild is `state.backend`'s
+        # to say, and `restore_engine` says it. That is the same collapse `FullTextEngine` is.
         obj_store = Persistence.open_invertedfile_object_store(project.db)
         staged_store = Persistence.open_staged_text_store(project.db)
         state = (
-            kind=kind,
+            kind=kind, backend=backend,
             profile=Persistence.load_field(store, :profile, nothing),
             fitspec=Persistence.load_field(store, :fitspec, nothing),
             distance=Persistence.load_field(store, :distance, nothing),
@@ -346,11 +362,11 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
         )
         IndexEngine.restore_engine(state; on_change=_invertedfile_on_change(obj_store), log_io=nothing)
     else
-        on_change = (_, __, ___) -> (pending_flush[] = true)
-        common = (index=Persistence.load_field(store, :index, nothing), deleted_ids=Persistence.load_field(store, :deleted_ids, nothing))
-        extra = NamedTuple{IndexEngine.extra_state_fields(kind)}(map(f -> Persistence.load_field(store, f), IndexEngine.extra_state_fields(kind)))
-        state = (kind=kind, common..., extra...)
-        IndexEngine.restore_engine(state; on_change, log_io=nothing)
+        error("""
+            this project records kind $(repr(kind)), which this version does not know how to \
+            restore -- it reads :dense, :sparse and :text. A project written before the engine \
+            kinds were restructured stored a Julia type there instead of a symbol, and has to be \
+            rebuilt rather than reopened.""")
     end
     return EmbeddedEngine(workdir, dataset, dir, project, engine, store, pending_flush, schema_version, dense_vectors)
 end
@@ -369,8 +385,9 @@ kind, already persisted immediately by whichever call changed it (`delete_item!`
 """
 function close_project!(handle::EmbeddedEngine)
     handle.pending_flush[] = false
-    if !(handle.engine isa Union{IndexEngine.SearchGraphEngine, IndexEngine.BM25Engine, IndexEngine.InvertedFileEngine})
-        Persistence.save_field!(handle.store, :index, handle.engine.index)
+    if !(handle.engine isa Union{IndexEngine.DenseEngine{IndexEngine.GraphBackend},
+                                 IndexEngine.SparseEngine, IndexEngine.FullTextEngine})
+        Persistence.save_field!(handle.store, :index, handle.engine.backend.index)
     end
     handle.dense_vectors[] === nothing || close(handle.dense_vectors[])
     Project.close_project(handle.project)
@@ -408,9 +425,9 @@ against `db`; there is never a backlog for this to catch up.
 """
 function index!(handle::EmbeddedEngine)
     engine = handle.engine
-    if engine isa IndexEngine.SearchGraphEngine
+    if engine isa IndexEngine.DenseEngine{IndexEngine.GraphBackend}
         IndexEngine.index!(engine)
-    elseif IndexEngine.is_text_index(engine)
+    elseif IndexEngine.payload_kind(engine) === :text
         # `:fitspec`/`:distance` were already written by create_project's full snapshot_state
         # save, and neither ever changes afterwards -- only `:profile` can go from nothing to a
         # fitted model, and only once, so that is the only field this has to write back.
@@ -481,21 +498,23 @@ controls the batching.
 # A project indexes one kind of thing, and the item type says which. Checked per item rather
 # than once per batch so a heterogeneous `Vector{AbstractItem}` is caught on the offending
 # element instead of on whatever happened to be first.
-_reject_item(engine, item) = error(
-    "this project indexes $(IndexEngine.is_text_index(engine) ? "text" : "vectors"), " *
-    "so it takes $(IndexEngine.is_text_index(engine) ? "TextItem" : "DenseItem")s; got a $(typeof(item))" *
-    (item.doc_id === nothing ? "" : " (doc_id $(item.doc_id))"))
+# Which item a project takes is `payload_kind` spelled the other way round, so it is derived
+# rather than restated: a fourth engine kind would otherwise need remembering here too.
+const _ITEM_KIND = Dict(Schema.DenseItem => :dense, Schema.SparseItem => :sparse,
+                        Schema.TextItem => :text)
+const _KIND_ITEM = Dict(v => k for (k, v) in _ITEM_KIND)
 
-_check_item(engine, item::Schema.TextItem) =
-    IndexEngine.is_text_index(engine) || _reject_item(engine, item)
-_check_item(engine, item::Schema.DenseItem) =
-    IndexEngine.is_text_index(engine) && _reject_item(engine, item)
+_check_item(engine, item::Schema.AbstractItem) =
+    _ITEM_KIND[typeof(item)] === IndexEngine.payload_kind(engine) || error(
+        "this project indexes $(IndexEngine.payload_kind(engine)), so it takes " *
+        "$(nameof(_KIND_ITEM[IndexEngine.payload_kind(engine)]))s; got a $(typeof(item))" *
+        (item.doc_id === nothing ? "" : " (doc_id $(item.doc_id))"))
 
 function append_items!(handle::EmbeddedEngine, items::AbstractVector{<:Schema.AbstractItem})
     engine = handle.engine
     project = handle.project
-    is_text = IndexEngine.is_text_index(engine)
-    is_dense_graph = engine isa IndexEngine.SearchGraphEngine
+    is_text = IndexEngine.payload_kind(engine) === :text
+    is_dense_graph = engine isa IndexEngine.DenseEngine{IndexEngine.GraphBackend}
     staged_vectors = Vector{Float32}[]
     staged_texts = String[]
     text_sp = is_text ? _current_size(engine) + 1 : 0
@@ -549,17 +568,17 @@ append_items!(handle::EmbeddedEngine, item::Schema.AbstractItem) = append_items!
     _current_size(engine::IndexEngine.AbstractSearchEngine) -> Int
 
 The count that determines the next item's `_id`: for a `SearchGraphEngine`, the number of
-*staged* vectors (`length(database(engine.index))`, i.e. `engine.index.db`'s own count),
+*staged* vectors (`length(database(engine.backend.index))`, i.e. `engine.backend.index.db`'s own count),
 and for a `BM25Engine`/`InvertedFileEngine`, the number of *staged* texts
 (`length(engine.staged)`) -- since [`append_items!`](@ref) only stages for any of these
-three, `length(engine.index)` itself (the encoded/indexed count) would lag behind and hand
+three, `length(engine.backend.index)` itself (the encoded/indexed count) would lag behind and hand
 out the wrong, already-taken `_id`s. `GenericEngine` (`ExhaustiveSearch`/
 `ParallelExhaustiveSearch`) is the one engine kind that still indexes synchronously on
-`add_item!`, so `length(engine.index)` already reflects the item just added there.
+`add_item!`, so `length(engine.backend.index)` already reflects the item just added there.
 """
-_current_size(engine::IndexEngine.SearchGraphEngine) = length(SimilaritySearch.database(engine.index))
-_current_size(engine::Union{IndexEngine.BM25Engine, IndexEngine.InvertedFileEngine}) = length(engine.staged)
-_current_size(engine::IndexEngine.AbstractSearchEngine) = length(engine.index)
+_current_size(engine::IndexEngine.DenseEngine{IndexEngine.GraphBackend}) = length(SimilaritySearch.database(engine.backend.index))
+_current_size(engine::IndexEngine.FullTextEngine) = length(engine.staged)
+_current_size(engine::IndexEngine.AbstractSearchEngine) = length(engine.backend.index)
 
 function _search_with_filter(engine::IndexEngine.AbstractSearchEngine, project::Project.ProjectManager, query, k::Int, predicate; minrecall)
     overfetch = max(k * 5, k + 20)
@@ -643,7 +662,7 @@ Getting `k` *live* results back is a paging concern for a layer above this one (
 server walking successive windows via a cursor), not something this function does itself.
 
 `minrecall`, for a `SearchGraphEngine`, searches at (approximately) that target recall
-using a calibrated `BeamSearch` from `engine.opt_beamsearch` instead of its current
+using a calibrated `BeamSearch` from `engine.backend.opt_beamsearch` instead of its current
 default (see [`IndexEngine.search_live`](@ref)) -- if that table is still empty, this
 triggers a one-off `calibrate!` over `IndexEngine.DEFAULT_MINRECALL_LEVELS` and persists
 the resulting `opt_beamsearch` so that calibration isn't silently repeated on every future
@@ -655,11 +674,11 @@ tuple this replaced.
 """
 function search(handle::EmbeddedEngine, vector, k::Int=10; filter=nothing, minrecall=nothing)
     query = convert(Vector{Float32}, vector)
-    needs_save = minrecall !== nothing && handle.engine isa IndexEngine.SearchGraphEngine && isempty(handle.engine.opt_beamsearch)
+    needs_save = minrecall !== nothing && handle.engine isa IndexEngine.DenseEngine{IndexEngine.GraphBackend} && isempty(handle.engine.backend.opt_beamsearch)
     res_knn = filter === nothing ?
         IndexEngine.search_live(handle.engine, query, k; bs_override=nothing, minrecall, policy=nothing) :
         _search_with_filter(handle.engine, handle.project, query, k, filter; minrecall)
-    needs_save && Persistence.save_field!(handle.store, :opt_beamsearch, handle.engine.opt_beamsearch)
+    needs_save && Persistence.save_field!(handle.store, :opt_beamsearch, handle.engine.backend.opt_beamsearch)
     return _hydrate_results(handle.project, res_knn)
 end
 
@@ -726,7 +745,7 @@ Errors for a project whose text engine has not been trained yet, and for a dense
 """
 function ftexplain(handle::EmbeddedEngine, text::AbstractString; policy::QueryPolicy=QueryPolicy())
     engine = handle.engine
-    IndexEngine.is_text_index(engine) ||
+    IndexEngine.payload_kind(engine) === :text ||
         error("ftexplain is only meaningful for a text project (BM25InvertedFile/InvertedFile); this one is $(typeof(engine))")
     return TextSearch.explain(IndexEngine.resolve_query(engine, text, policy).resolution)
 end
@@ -826,10 +845,11 @@ stops at the first one rather than reporting a neighbour that does not exist.
 """
 function allknn(handle::EmbeddedEngine; k::Int=10)
     engine = handle.engine
-    IndexEngine.is_text_index(engine) && error("allknn requires a dense (vector) index, but this project is a text index")
-    length(engine.index) == 0 && error("allknn requires a non-empty dense index")
+    IndexEngine.payload_kind(engine) === :dense ||
+        error("allknn requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
+    length(engine.backend.index) == 0 && error("allknn requires a non-empty dense index")
 
-    ids, dists = SimilaritySearch.allknn(engine.index, engine.ctx, k)
+    ids, dists = SimilaritySearch.allknn(engine.backend.index, engine.backend.ctx, k)
     n = size(ids, 2)
     results = KnnRow[]
     for i in 1:n
@@ -865,9 +885,10 @@ it. `assign[i]` is a position in `centers`, so item `i`'s center is `centers[ass
 """
 function fft(handle::EmbeddedEngine, k::Integer; start::Int=0, verbose::Bool=false)
     engine = handle.engine
-    IndexEngine.is_text_index(engine) && error("fft requires a dense (vector) index, but this project is a text index")
-    length(engine.index) == 0 && error("fft requires a non-empty dense index")
-    r = SimilaritySearch.fft(SimilaritySearch.distance(engine.index), SimilaritySearch.database(engine.index), k; start, verbose)
+    IndexEngine.payload_kind(engine) === :dense ||
+        error("fft requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
+    length(engine.backend.index) == 0 && error("fft requires a non-empty dense index")
+    r = SimilaritySearch.fft(SimilaritySearch.distance(engine.backend.index), SimilaritySearch.database(engine.backend.index), k; start, verbose)
     FFTResult(Int32.(r.centers), Int32.(r.assign), Float32.(r.assigndist),
               Float32(r.covering), Float32(r.separation),
               Int(r.costdists), Int(r.costblocks))
@@ -887,9 +908,10 @@ Returns up to `k` `(i, j, dist)` tuples, ascending by distance -- `i`/`j` are in
 """
 function closestpairs(handle::EmbeddedEngine; k::Int=1, min_k::Int=max(k, 8))
     engine = handle.engine
-    IndexEngine.is_text_index(engine) && error("closestpairs requires a dense (vector) index, but this project is a text index")
-    length(engine.index) == 0 && error("closestpairs requires a non-empty dense index")
-    SimilaritySearch.closestpairs(engine.index, engine.ctx; k, min_k)
+    IndexEngine.payload_kind(engine) === :dense ||
+        error("closestpairs requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
+    length(engine.backend.index) == 0 && error("closestpairs requires a non-empty dense index")
+    SimilaritySearch.closestpairs(engine.backend.index, engine.backend.ctx; k, min_k)
 end
 
 """
@@ -914,7 +936,8 @@ own internal `_id` (in `idxA`), `j` is `B`'s own position (1-based, in `B`'s own
 """
 function bichromatic_kclosestpairs(handle::EmbeddedEngine, B; k::Int=1, min_k::Int=max(k, 8))
     engine = handle.engine
-    IndexEngine.is_text_index(engine) && error("bichromatic_kclosestpairs requires a dense (vector) index, but this project is a text index")
-    length(engine.index) == 0 && error("bichromatic_kclosestpairs requires a non-empty dense index")
-    SimilaritySearch.bichromatic_kclosestpairs(engine.index, engine.ctx, B; k, min_k)
+    IndexEngine.payload_kind(engine) === :dense ||
+        error("bichromatic_kclosestpairs requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
+    length(engine.backend.index) == 0 && error("bichromatic_kclosestpairs requires a non-empty dense index")
+    SimilaritySearch.bichromatic_kclosestpairs(engine.backend.index, engine.backend.ctx, B; k, min_k)
 end

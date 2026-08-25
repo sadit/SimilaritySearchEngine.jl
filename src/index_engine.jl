@@ -9,14 +9,15 @@ using Base.Threads
 using SparseArrays: SparseVector
 using Dates: Dates
 
-export AbstractSearchEngine, SearchGraphEngine, GenericEngine, BM25Engine, InvertedFileEngine
+export AbstractSearchEngine, DenseEngine, SparseEngine, FullTextEngine
+export GraphBackend, ExactBackend, SparseBackend, TextBackend, backend_tag, payload_kind
 export ReadWriteLock, read_lock, write_lock
 export ContextPool, checkout!, checkin!
-export create_engine, restore_engine, snapshot_state, extra_state_fields, add_item!, index!, search_live, mark_deleted!, is_text_index
+export create_engine, create_sparse_engine, restore_engine, snapshot_state, extra_state_fields, add_item!, index!, search_live, mark_deleted!
 export stored_payload
 export calibrate!, current_beamsearch, OptBeamSearch, DEFAULT_MINRECALL_LEVELS
 export direct_neighbors, apply_searchgraph_vectors!, build_searchgraph
-export invertedfile_objects, build_bm25invertedfile, build_textinvertedfile
+export invertedfile_objects, build_bm25invertedfile, build_textinvertedfile, build_sparseinvertedfile
 export text_profile, text_vocabulary, resolve_query, query_pipeline
 export AbstractTextModelSpec, BaseProfile, FitFromCorpus, DefaultProfile
 export DEFAULT_PROFILE_NICKNAMES, default_profile_path, train_profile
@@ -500,177 +501,179 @@ validate_textmodel(IndexType::Type, textmodel) =
                                     _reject_textmodel(IndexType, textmodel)
 
 """
-    SearchGraphEngine
+    GraphBackend
+    ExactBackend{IndexType}
+    SparseBackend
+    TextBackend
 
-Dense engine backed by a `SearchGraph`. The only engine kind with a `BeamSearch` to
-autotune, hence the only one carrying a `minrecall` target and an [`OptBeamSearch`](@ref)
-table.
+The index a project searches through, with the context it searches with and whatever else that
+particular index kind needs to be driven.
 
-# Fields
-- `index::SearchGraph`
-- `ctx::SearchGraphContext`: reusable search/insertion context.
-- `minrecall::Union{Nothing, Float32}`: the `MinRecall` target `BeamSearch` autotunes
-  toward as the graph grows (`nothing` disables that autotuning; given to `ctx` itself, via
-  `OptimizeParameters`, at construction time). Set once at `create_engine` time and carried
-  through `restore_engine` so a reopened project keeps growing toward the same target
-  instead of silently drifting to a different one.
-- `opt_beamsearch::OptBeamSearch`: per-recall-level calibrated `BeamSearch`es, populated by
-  [`calibrate!`](@ref) and consulted by [`search_live`](@ref) when a caller asks for a
-  specific `minrecall` at query time -- refreshed by `calibrate!` since the right
-  hyperparameters for a given recall level drift as the indexed data itself changes.
-- `search_ctx_pool::ContextPool`: one private, plain `SearchGraphContext`
-  per concurrent [`search_live`](@ref) call (see [`ContextPool`](@ref)) -- never `ctx`
-  itself, which is reserved for insertion. Left unparameterized since `SearchGraphContext`
-  itself is parametric (`SearchGraphContext{KnnType,VSType}`) and the concrete
-  instantiation is an internal detail, not something worth pinning down in the field type.
-- `deleted_ids::Set{UInt32}`: `UInt32` across every engine kind (see [`AbstractSearchEngine`](@ref))
-  so the type doesn't depend on which concrete index kind is behind it.
-- `lock::ReadWriteLock`
+Four of them because there are four ways to hold an index, not because there are four kinds of
+project: [`DenseEngine`](@ref) is parameterized by which dense backend it has, and
+[`FullTextEngine`](@ref) holds a `TextBackend` whose `kind` says which library inverted file is
+underneath. The engine is the data it takes; the backend is the index and the distance. Keeping
+them apart is what lets a project of sparse vectors exist at all -- before this, an inverted
+file and its distance were reachable only through a text engine, and so only by a caller who
+had text.
+
+- `GraphBackend` carries `minrecall`/`opt_beamsearch`, and it is the only one that does. A beam
+  is a `SearchGraph`'s to tune; putting that state on the engine would give every exact and
+  every inverted-file project two fields it can only ever leave empty.
+- `ExactBackend{IndexType}` covers `ExhaustiveSearch` and `ParallelExhaustiveSearch`, which
+  differ in nothing this module has to know about.
+- `SparseBackend` records the `dimension` it was created with, because an `InvertedFile` is a
+  fixed array of posting lists: the dimension is structural, not descriptive, and every item
+  appended has to agree with it.
+- `TextBackend`'s `index` is `nothing` until the engine has a profile to build it from, and its
+  `kind` is `BM25InvertedFile` or `TextInvertedFile` -- which, with `distance`, is the whole of
+  what used to be the difference between two separate engine types.
 """
-mutable struct SearchGraphEngine <: AbstractSearchEngine
+mutable struct GraphBackend
     index::SearchGraph
     ctx::SearchGraphContext
     minrecall::Union{Nothing, Float32}
     opt_beamsearch::OptBeamSearch
-    search_ctx_pool::ContextPool
-    deleted_ids::Set{UInt32}
-    lock::ReadWriteLock
 end
 
-"""
-    GenericEngine{IndexType}
-
-Dense engine for an index kind with no engine-specific state of its own --
-`ExhaustiveSearch`/`ParallelExhaustiveSearch` today, and any future dense index kind that
-doesn't warrant a dedicated engine type.
-
-# Fields
-- `index::IndexType`
-- `ctx::Any`: reusable insertion context.
-- `search_ctx_pool::ContextPool`: one private context per concurrent [`search_live`](@ref)
-  call (see [`ContextPool`](@ref)) -- never `ctx` itself, which is reserved for insertion.
-- `deleted_ids::Set{UInt32}`: `UInt32` across every engine kind (see [`AbstractSearchEngine`](@ref)).
-- `lock::ReadWriteLock`
-"""
-mutable struct GenericEngine{IndexType} <: AbstractSearchEngine
+mutable struct ExactBackend{IndexType}
     index::IndexType
-    ctx::Any
-    search_ctx_pool::ContextPool
-    deleted_ids::Set{UInt32}
-    lock::ReadWriteLock
+    ctx::GenericContext
 end
 
-"""
-    BM25Engine
-
-Text engine backed by a `BM25InvertedFile`, scored via raw bags-of-words
-(`bagofwords`/`bm25score`). Created from a [`BaseProfile`](@ref) -- trained immediately --
-or from a [`FitFromCorpus`](@ref), in which case it stays untrained (`index === nothing`,
-`profile === nothing`) until the first [`index!`](@ref index!(::BM25Engine)) call fits a
-profile from what's staged; a `BM25InvertedFile` needs a `Vocabulary` to be constructed at
-all. Exactly like `SearchGraphEngine`, `add_item!`/`append_items!` only ever *stage* raw text
-into `staged`; [`index!`](@ref index!(::BM25Engine)) is the explicit step that trains (when
-it has to) and encodes/indexes the backlog.
-
-# Fields
-- `index::Union{Nothing, BM25InvertedFile}`
-- `profile::Union{Nothing, TextProfile}`: this engine's whole text model -- vocabulary and
-  weights (`profile.model`) plus the corpus-produced artifacts (stopword set, lemma map,
-  query-expansion network) and the lineage saying how it was produced. One field replaces
-  the `voc`/`model` pair the pre-`TextSearch` 1.1 shape carried, which is the point of the
-  type: an artifact has exactly one home, and the `TextConfig` the tokenizer runs
-  (`gettextconfig(profile)`) is *derived* from it, so an index cannot end up tokenizing
-  documents through a different lemma map than the one it saves. `index === nothing` if and
-  only if this is `nothing`.
-- `fitspec::Union{Nothing, DeferredFit}`: the recipe for the deferred fit (policy,
-  weighting, pruning, stopword threshold) -- consulted only by the [`index!`](@ref
-  index!(::BM25Engine)) call that has to fit `profile`, and never again once one exists;
-  `gettextconfig(profile)` is the authority from that point on, since it additionally carries
-  whichever artifacts the profile applies. `nothing` for an engine created from a
-  [`BaseProfile`](@ref), which has no fit to defer. Kept after the fit rather than cleared:
-  it is what the profile was made from, and a reopened project should be able to say so
-  without re-deriving it from the lineage.
-- `staged::Vector{String}`: every raw text ever staged via `add_item!`/`append_items!`, in
-  insertion order, whether or not it has been encoded into `index` yet -- the text-engine
-  counterpart of `SearchGraphEngine.index.db`. `index!` catches up the range
-  `(engine.index === nothing ? 0 : length(engine.index))+1:length(staged)`.
-- `ctx::InvertedFileContext`: built eagerly at `create_engine` time -- `InvertedFileContext`
-  needs no vocabulary/index to exist, so there's no reason to leave this `nothing` until
-  [`index!`](@ref index!(::BM25Engine)) the way `index`/`profile` must be. Reserved for
-  insertion; never shared with a concurrent [`search_live`](@ref) call, which gets its own
-  from `search_ctx_pool` instead.
-- `search_ctx_pool::ContextPool`: one private context per concurrent
-  [`search_live`](@ref) call (see [`ContextPool`](@ref)). Left unparameterized since
-  `InvertedFileContext` itself is parametric (`InvertedFileContext{A,B}`).
-- `deleted_ids::Set{UInt32}`: `UInt32` across every engine kind (see [`AbstractSearchEngine`](@ref)).
-- `lock::ReadWriteLock`
-"""
-mutable struct BM25Engine <: AbstractSearchEngine
-    index::Union{Nothing, BM25InvertedFile}
-    profile::Union{Nothing, TextProfile}
-    fitspec::Union{Nothing, DeferredFit}
-    staged::Vector{String}
+mutable struct SparseBackend
+    index::InvertedFile
     ctx::InvertedFileContext
-    search_ctx_pool::ContextPool
-    deleted_ids::Set{UInt32}
-    lock::ReadWriteLock
-end
-
-"""
-    InvertedFileEngine
-
-Text engine backed by a `TextSearch.TextInvertedFile` -- a `VectorModel` paired with a
-`SimilaritySearch.InvertedFile`, so text is vectorized into `SparseVector`s on the way in
-and on the way out by the library rather than by this package, and it can be built against
-any `PreMetric` `distance`, not just the cosine default. It replaces the hand-rolled
-`InvertedFile` + separate `model` field this engine carried before `TextSearch` 1.1
-published the pairing as a type; the two are the same construction, and letting the library
-own it is what keeps document and query vectorization from drifting apart.
-
-Created from a [`BaseProfile`](@ref) -- trained immediately -- or from a
-[`FitFromCorpus`](@ref), in which case it stays untrained (`index === nothing`,
-`profile === nothing`) until the first [`index!`](@ref index!(::InvertedFileEngine)) call fits
-a profile from what's staged. Exactly like `SearchGraphEngine`, `add_item!`/`append_items!`
-only ever *stage* raw text into `staged`.
-
-# Fields
-- `index::Union{Nothing, TextInvertedFile}`
-- `profile::Union{Nothing, TextProfile}`: as on [`BM25Engine`](@ref) -- vocabulary,
-  weights, artifacts and lineage in one value. `index.model` is this profile's own
-  `VectorModel`, not a second copy of it.
-- `fitspec::Union{Nothing, DeferredFit}`: as on [`BM25Engine`](@ref) -- the recipe for the
-  deferred fit, unused once `profile` exists, `nothing` when there was never one to defer.
-- `distance::SimilaritySearch.PreMetric`: the distance chosen at `create_engine` time --
-  remembered here since the real index can't be built until a vocabulary exists to size
-  its posting-list array.
-- `staged::Vector{String}`: every raw text ever staged via `add_item!`/`append_items!`, in
-  insertion order, whether or not it has been encoded into `index` yet -- the text-engine
-  counterpart of `SearchGraphEngine.index.db`. `index!` catches up the range
-  `(engine.index === nothing ? 0 : length(engine.index))+1:length(staged)`.
-- `ctx::InvertedFileContext`: built eagerly at `create_engine` time -- `InvertedFileContext`
-  needs no vocabulary/index to exist, so there's no reason to leave this `nothing` until
-  [`index!`](@ref index!(::InvertedFileEngine)) the way `index`/`profile` must be. Reserved
-  for insertion; never shared with a concurrent [`search_live`](@ref) call, which gets its
-  own from `search_ctx_pool` instead.
-- `search_ctx_pool::ContextPool`: one private context per concurrent
-  [`search_live`](@ref) call (see [`ContextPool`](@ref)). Left unparameterized since
-  `InvertedFileContext` itself is parametric (`InvertedFileContext{A,B}`).
-- `deleted_ids::Set{UInt32}`: `UInt32` across every engine kind (see [`AbstractSearchEngine`](@ref))
-  -- matches `InvertedFile`'s own posting lists (`AdjList{UInt32}`), which key ids by
-  `UInt32` too.
-- `lock::ReadWriteLock`
-"""
-mutable struct InvertedFileEngine <: AbstractSearchEngine
-    index::Union{Nothing, TextInvertedFile}
-    profile::Union{Nothing, TextProfile}
-    fitspec::Union{Nothing, DeferredFit}
     distance::SimilaritySearch.PreMetric
-    staged::Vector{String}
+    dimension::Int
+end
+
+mutable struct TextBackend
+    index::Union{Nothing, AbstractInvertedFile}
     ctx::InvertedFileContext
+    kind::Type
+    distance::Union{Nothing, SimilaritySearch.PreMetric}
+end
+
+"""
+    DenseEngine{B}
+
+A project of dense vectors: it takes [`DenseItem`](@ref Schema.DenseItem)s, and `B` says which
+dense index holds them -- [`GraphBackend`](@ref) for an approximate, self-tuning `SearchGraph`,
+`ExactBackend` for a brute-force scan.
+
+This replaced a `SearchGraphEngine` and a `GenericEngine{IndexType}`, which split dense
+projects by *index kind* at the level where a caller chooses. The kind of data is what a caller
+knows; which index holds it is a backend decision, and one that can now change without the
+project becoming a different type of thing.
+
+Only `GraphBackend` has a `BeamSearch` to calibrate, so [`calibrate!`](@ref),
+[`current_beamsearch`](@ref) and `minrecall`-driven search require that backend rather than
+being defined-but-inert on the other.
+
+# Fields
+- `backend::B`: the index, its context, and the backend's own state.
+- `search_ctx_pool::ContextPool`: one private context per concurrent [`search_live`](@ref) call
+  (see [`ContextPool`](@ref)). The backend's own `ctx` is reserved for insertion.
+- `deleted_ids::Set{UInt32}`: logically deleted document ids -- `UInt32` across every engine
+  kind, matching the id type search results come back as.
+- `lock::ReadWriteLock`: see its docstring for why a reader/writer lock and not a mutex.
+"""
+mutable struct DenseEngine{B} <: AbstractSearchEngine
+    backend::B
     search_ctx_pool::ContextPool
     deleted_ids::Set{UInt32}
     lock::ReadWriteLock
 end
+
+"""
+    SparseEngine
+
+A project of sparse vectors: it takes [`SparseItem`](@ref Schema.SparseItem)s and indexes them
+in a `SimilaritySearch.InvertedFile` under any distance that reads a sparse vector -- cosine
+over the weights, or one of `Dist.Sets.*` over the nonzero positions.
+
+New with this restructuring, and the point of it. An inverted file and its distance used to be
+reachable only through a text engine, which meant a caller holding sparse vectors had to
+pretend to have text: fit a profile it did not want, stage strings it did not have. This is the
+layer that was implied and missing -- vocabulary-free, no profile, no staged text.
+
+Which is also why BM25 is not one of its distances. `BM25InvertedFile` holds a `Vocabulary` and
+scores from `getndocs`/`avgdoclen`; BM25 is not a metric over sparse vectors but a scoring rule
+over a corpus, so it belongs to [`FullTextEngine`](@ref), which has the corpus statistics.
+Sparse in, sparse out, and nothing here knows what a token is.
+
+# Fields
+- `backend::SparseBackend`: the inverted file, its context, the distance and the dimension.
+- `search_ctx_pool`, `deleted_ids`, `lock`: as on [`DenseEngine`](@ref).
+"""
+mutable struct SparseEngine <: AbstractSearchEngine
+    backend::SparseBackend
+    search_ctx_pool::ContextPool
+    deleted_ids::Set{UInt32}
+    lock::ReadWriteLock
+end
+
+"""
+    FullTextEngine
+
+A project of text: it takes [`TextItem`](@ref Schema.TextItem)s, holds the text model that turns
+them into something an inverted file can index, and searches through whichever inverted file its
+backend names.
+
+This replaced `BM25Engine` and `InvertedFileEngine`, which were near-duplicates -- the same
+staged text, the same profile, the same deferred fit -- differing in which library index they
+built and how a query was encoded against it. Both of those are the backend's business now (see
+[`GraphBackend`](@ref) for the family), so the scheme a caller wants (BM25, tf-idf, a set
+similarity) is a field rather than a type.
+
+Untrained (`backend.index === nothing`, `profile === nothing`) until either a
+[`BaseProfile`](@ref)/[`DefaultProfile`](@ref) supplies a profile at creation or the first
+[`index!`](@ref index!(::FullTextEngine)) call produces one. `add_item!`/`append_items!` only
+ever *stage* raw text; `index!` is the explicit step that trains, when it has to, and
+encodes/indexes the backlog.
+
+# Fields
+- `backend::TextBackend`: the inverted file (or `nothing`), its context, which kind it is, and
+  the distance for the kinds that take one.
+- `profile::Union{Nothing, TextProfile}`: the whole text model -- vocabulary and weights plus the
+  corpus-produced artifacts and the lineage. One field, and the `TextConfig` the tokenizer runs
+  is derived from it, so an index cannot end up tokenizing documents through a different lemma
+  map than the one it saves. `backend.index === nothing` if and only if this is `nothing`.
+- `fitspec::Union{Nothing, DeferredFit}`: what the deferred training does, consulted only by the
+  `index!` call that has to produce a profile and never again. `nothing` for a project created
+  from a [`BaseProfile`](@ref), which has nothing to defer.
+- `staged::Vector{String}`: every raw text ever staged, in insertion order -- the text-engine
+  counterpart of a dense backend's `.db`. `index!` catches up the range
+  `(index === nothing ? 0 : length(index))+1:length(staged)`.
+- `search_ctx_pool`, `deleted_ids`, `lock`: as on [`DenseEngine`](@ref).
+"""
+mutable struct FullTextEngine <: AbstractSearchEngine
+    backend::TextBackend
+    profile::Union{Nothing, TextProfile}
+    fitspec::Union{Nothing, DeferredFit}
+    staged::Vector{String}
+    search_ctx_pool::ContextPool
+    deleted_ids::Set{UInt32}
+    lock::ReadWriteLock
+end
+
+"""
+    payload_kind(engine::AbstractSearchEngine) -> Symbol
+
+What this project indexes: `:dense`, `:sparse` or `:text`.
+
+Replaces an `is_text_index` predicate that a dozen guards used as a stand-in for "not dense".
+With two engine kinds that reading happened to hold; with three it is simply false -- a
+`SparseEngine` is neither text nor dense -- so a guard meaning "this needs raw vectors" now says
+`payload_kind(engine) === :dense` rather than `!is_text_index(engine)`.
+
+It also names the item type a project accepts: `:dense` takes `DenseItem`s, `:sparse` takes
+`SparseItem`s, `:text` takes `TextItem`s.
+"""
+payload_kind(::DenseEngine) = :dense
+payload_kind(::SparseEngine) = :sparse
+payload_kind(::FullTextEngine) = :text
 
 
 """
@@ -786,7 +789,7 @@ has not been trained yet -- see [`BM25Engine`](@ref)). `text_vocabulary` is the 
 the vocabulary inside it, which is what `bagofwords`/`token2id`/[`resolve_query`](@ref) all
 work against.
 """
-text_profile(engine::Union{BM25Engine, InvertedFileEngine}) = engine.profile
+text_profile(engine::FullTextEngine) = engine.profile
 text_profile(::AbstractSearchEngine) = nothing
 text_vocabulary(engine::AbstractSearchEngine) = (p = text_profile(engine); p === nothing ? nothing : p.model.voc)
 
@@ -902,6 +905,26 @@ function build_bm25invertedfile(profile::TextProfile, object_blocks)
 end
 
 """
+    build_sparseinvertedfile(distance, dimension, object_blocks) -> InvertedFile
+
+Rebuilds a [`SparseEngine`](@ref)'s inverted file by replaying every saved sparse vector through
+the library's own `push_item!`, in order -- see [`build_bm25invertedfile`](@ref) for the same
+rebuild-by-reinsertion approach and its scaling caveat.
+
+`dimension` comes from the saved state rather than from the vectors: an empty project has none
+to read it off, and one whose blocks happen to hold no nonzero in the last position would
+otherwise come back a different shape than it was created with.
+"""
+function build_sparseinvertedfile(distance, dimension::Integer, object_blocks)
+    index = InvertedFile(Int(dimension), distance)
+    ctx = InvertedFileContext()
+    for block in object_blocks, obj in block
+        push_item!(index, ctx, obj)
+    end
+    return index
+end
+
+"""
     build_textinvertedfile(distance, profile::TextProfile, object_blocks) -> TextInvertedFile
 
 Rebuilds a `TextInvertedFile` against `distance` and `profile`'s `VectorModel` by replaying
@@ -944,7 +967,7 @@ end
 # construction/growth -- every `SearchGraphEngine` gets one from an explicit `minrecall`
 # given at `create_engine` time (default 0.9) rather than running on the library's own
 # untuned defaults while it grows; `calibrate!` is a separate, explicit re-optimization
-# pass layered on top, not the sole writer of `engine.index.algo[]`.
+# pass layered on top, not the sole writer of `engine.backend.index.algo[]`.
 _searchgraph_context(minrecall::Nothing, logging) = SearchGraphContext(; hyperparameters_callback=nothing, logging...)
 _searchgraph_context(minrecall::Real, logging) = SearchGraphContext(; hyperparameters_callback=OptimizeParameters(MinRecall(Float32(minrecall))), logging...)
 
@@ -995,16 +1018,27 @@ observer it changes nothing about what gets persisted.
 function create_engine(::Type{SearchGraph}; distance, minrecall::Union{Nothing,Real}, textmodel, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
     _reject_textmodel(SearchGraph, textmodel)
     mr = minrecall === nothing ? nothing : Float32(minrecall)
-    return SearchGraphEngine(SearchGraph(distance, VectorDatabase()), _searchgraph_context(mr, _engine_logging(on_change, log_io)), mr, OptBeamSearch(), ContextPool(SearchGraphContext()), Set{UInt32}(), ReadWriteLock())
+    backend = GraphBackend(SearchGraph(distance, VectorDatabase()),
+                           _searchgraph_context(mr, _engine_logging(on_change, log_io)),
+                           mr, OptBeamSearch())
+    DenseEngine(backend, ContextPool(SearchGraphContext()), Set{UInt32}(), ReadWriteLock())
 end
-function create_engine(::Type{ExhaustiveSearch}; distance, minrecall, textmodel, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
-    _reject_textmodel(ExhaustiveSearch, textmodel)
-    GenericEngine{ExhaustiveSearch}(ExhaustiveSearch(distance, VectorDatabase()), GenericContext(; _engine_logging(on_change, log_io)...), ContextPool(GenericContext()), Set{UInt32}(), ReadWriteLock())
+
+# `minrecall` is accepted and ignored on the exact backends: they have no beam to tune, and
+# taking the same keyword set for every index kind is what lets `create_project` pass one bundle
+# down without knowing which backend it is talking to.
+function _create_exact_engine(IndexType::Type, distance, textmodel,
+                              on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
+    _reject_textmodel(IndexType, textmodel)
+    backend = ExactBackend(IndexType(distance, VectorDatabase()),
+                           GenericContext(; _engine_logging(on_change, log_io)...))
+    DenseEngine(backend, ContextPool(GenericContext()), Set{UInt32}(), ReadWriteLock())
 end
-function create_engine(::Type{ParallelExhaustiveSearch}; distance, minrecall, textmodel, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
-    _reject_textmodel(ParallelExhaustiveSearch, textmodel)
-    GenericEngine{ParallelExhaustiveSearch}(ParallelExhaustiveSearch(distance, VectorDatabase()), GenericContext(; _engine_logging(on_change, log_io)...), ContextPool(GenericContext()), Set{UInt32}(), ReadWriteLock())
-end
+
+create_engine(::Type{ExhaustiveSearch}; distance, minrecall, textmodel, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}) =
+    _create_exact_engine(ExhaustiveSearch, distance, textmodel, on_change, log_io)
+create_engine(::Type{ParallelExhaustiveSearch}; distance, minrecall, textmodel, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}) =
+    _create_exact_engine(ParallelExhaustiveSearch, distance, textmodel, on_change, log_io)
 
 """
     create_engine(::Type{BM25InvertedFile}; textmodel, distance, minrecall, on_change, log_io) -> BM25Engine
@@ -1035,29 +1069,71 @@ held is out-of-vocabulary and silently dropped from then on. Nothing about a pro
 behaviour later reveals that this choice was made by omission, which is exactly why it cannot
 be.
 """
-function create_engine(::Type{BM25InvertedFile}; distance, minrecall,
-                       textmodel::Union{Nothing,AbstractTextModelSpec},
-                       on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
-    spec = _require_textmodel(BM25InvertedFile, textmodel)
+# One body for all three selectors, because which inverted file to build stopped being a
+# difference between engine types when it became a field on the backend. `InvertedFile` and
+# `TextInvertedFile` name the same backend; the former is kept because it is what a caller
+# reaching for "a weighted inverted file" writes.
+function _create_text_engine(selector::Type, distance, textmodel,
+                             on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
+    spec = _require_textmodel(selector, textmodel)
+    kind = selector === BM25InvertedFile ? BM25InvertedFile : TextInvertedFile
+    dist = kind === BM25InvertedFile ? nothing : distance
     profile = _initial_profile(spec)
-    index = profile === nothing ? nothing : _text_index(profile, BM25InvertedFile, nothing)
-    BM25Engine(index, profile, _deferred_fit(spec), String[],
-               InvertedFileContext(; _engine_logging(on_change, log_io)...),
-               ContextPool(InvertedFileContext()), Set{UInt32}(), ReadWriteLock())
+    index = profile === nothing ? nothing : _text_index(profile, kind, dist)
+    backend = TextBackend(index, InvertedFileContext(; _engine_logging(on_change, log_io)...),
+                          kind, dist)
+    FullTextEngine(backend, profile, _deferred_fit(spec), String[],
+                   ContextPool(InvertedFileContext()), Set{UInt32}(), ReadWriteLock())
 end
 
-function create_engine(::Type{InvertedFile}; distance, minrecall,
-                       textmodel::Union{Nothing,AbstractTextModelSpec},
-                       on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
-    spec = _require_textmodel(InvertedFile, textmodel)
-    profile = _initial_profile(spec)
-    index = profile === nothing ? nothing : _text_index(profile, TextInvertedFile, distance)
-    InvertedFileEngine(index, profile, _deferred_fit(spec), distance, String[],
-                       InvertedFileContext(; _engine_logging(on_change, log_io)...),
-                       ContextPool(InvertedFileContext()), Set{UInt32}(), ReadWriteLock())
+create_engine(::Type{BM25InvertedFile}; distance, minrecall, textmodel::Union{Nothing,AbstractTextModelSpec}, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}) =
+    _create_text_engine(BM25InvertedFile, distance, textmodel, on_change, log_io)
+create_engine(::Type{InvertedFile}; distance, minrecall, textmodel::Union{Nothing,AbstractTextModelSpec}, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}) =
+    _create_text_engine(InvertedFile, distance, textmodel, on_change, log_io)
+create_engine(::Type{TextInvertedFile}; distance, minrecall, textmodel::Union{Nothing,AbstractTextModelSpec}, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}) =
+    _create_text_engine(TextInvertedFile, distance, textmodel, on_change, log_io)
+
+"""
+    create_engine(::Type{InvertedFile}; distance, dimension, on_change, log_io) -> SparseEngine
+
+Creates a project of sparse vectors -- a `SimilaritySearch.InvertedFile` under `distance`, with
+no vocabulary, no profile and no staged text. See [`SparseEngine`](@ref).
+
+`dimension` is required and structural: an inverted file is a fixed array of posting lists, so
+it has to be sized before the first item, and every [`SparseItem`](@ref Schema.SparseItem)
+appended must agree with it. It is not inferred from the first item on purpose -- a project
+whose dimension depends on which item happened to arrive first is a project whose second batch
+can fail for reasons the caller never stated.
+
+This shares an index type with the text engine's weighted backend, which is why it is reached
+through `create_sparse_engine` rather than by dispatching on `InvertedFile`: the same library
+index serves two different kinds of project, and the kind is the caller's to name.
+"""
+function create_sparse_engine(; distance, dimension::Integer,
+                              on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
+    dimension >= 1 || throw(ArgumentError("dimension must be at least 1; got $dimension"))
+    ctx = InvertedFileContext(; _engine_logging(on_change, log_io)...)
+    backend = SparseBackend(InvertedFile(Int(dimension), distance), ctx, distance, Int(dimension))
+    SparseEngine(backend, ContextPool(InvertedFileContext()), Set{UInt32}(), ReadWriteLock())
 end
 
-create_engine(::Type{TextInvertedFile}; kwargs...) = create_engine(InvertedFile; kwargs...)
+"""
+    backend_tag(backend) -> Symbol
+
+Which backend a saved project had, as a symbol.
+
+A symbol and not a type, and that is the whole reason `kind` is one too. The previous shape
+persisted Julia types -- `BM25Engine`, `ExhaustiveSearch` -- into the project's own store, which
+tied the on-disk format to the names in this file: this restructuring renamed every one of those
+types, and any project written under the old names became unreadable by construction. Symbols
+cut that tie. A rename is now a rename, and `restore_engine` maps a symbol it does not
+recognise to an error naming the ones it does, rather than to a `MethodError` about a type the
+reader has never heard of.
+"""
+backend_tag(::GraphBackend) = :graph
+backend_tag(b::ExactBackend) = b.index isa ParallelExhaustiveSearch ? :parallel_exhaustive : :exhaustive
+backend_tag(::SparseBackend) = :inverted_file
+backend_tag(b::TextBackend) = b.kind === BM25InvertedFile ? :bm25 : :text_inverted_file
 
 """
     snapshot_state(engine::AbstractSearchEngine) -> NamedTuple
@@ -1095,29 +1171,35 @@ this design avoids. A caller restoring one of these three assembles `staged`/`ve
 into the `state` NamedTuple by hand from that dedicated store (see [`restore_engine`](@ref)'s
 docstring) rather than getting it from `snapshot_state`.
 """
-snapshot_state(engine::SearchGraphEngine) =
-    (kind=SearchGraphEngine, distance=engine.index.dist, minrecall=engine.minrecall, opt_beamsearch=engine.opt_beamsearch, deleted_ids=engine.deleted_ids)
-snapshot_state(engine::GenericEngine{IndexType}) where {IndexType} =
-    (kind=IndexType, index=engine.index, deleted_ids=engine.deleted_ids)
-snapshot_state(engine::BM25Engine) =
-    (kind=BM25Engine, profile=engine.profile, fitspec=engine.fitspec, deleted_ids=engine.deleted_ids)
-snapshot_state(engine::InvertedFileEngine) =
-    (kind=InvertedFileEngine, profile=engine.profile, fitspec=engine.fitspec, distance=engine.distance, deleted_ids=engine.deleted_ids)
+
+snapshot_state(engine::DenseEngine{GraphBackend}) =
+    (kind=:dense, backend=:graph, distance=engine.backend.index.dist,
+     minrecall=engine.backend.minrecall, opt_beamsearch=engine.backend.opt_beamsearch,
+     deleted_ids=engine.deleted_ids)
+snapshot_state(engine::DenseEngine{<:ExactBackend}) =
+    (kind=:dense, backend=backend_tag(engine.backend), index=engine.backend.index,
+     deleted_ids=engine.deleted_ids)
+snapshot_state(engine::SparseEngine) =
+    (kind=:sparse, backend=:inverted_file, distance=engine.backend.distance,
+     dimension=engine.backend.dimension, deleted_ids=engine.deleted_ids)
+snapshot_state(engine::FullTextEngine) =
+    (kind=:text, backend=backend_tag(engine.backend), profile=engine.profile,
+     fitspec=engine.fitspec, distance=engine.backend.distance, deleted_ids=engine.deleted_ids)
 
 """
     extra_state_fields(kind::Type) -> Tuple{Vararg{Symbol}}
 
-The field names [`snapshot_state`](@ref) includes for `kind` *beyond* `:deleted_ids`
-(every kind has that one) and `:index` (only `GenericEngine`'s wrapped index types have
-that as a plain field) -- the static, per-kind list a loader needs before an engine
-instance exists to call `snapshot_state` on. The default (empty) applies to
-`GenericEngine`'s wrapped index types (`ExhaustiveSearch`, `ParallelExhaustiveSearch`,
-...). `SearchGraphEngine`/`BM25Engine`/`InvertedFileEngine` are deliberately not covered
-here -- none of them has a plain `:index` field to read back this way at all (see
-`snapshot_state`'s docstring); loading any of them always needs its own dedicated
-distance/vocabulary + insertion-block-sequence path instead.
+The field names [`snapshot_state`](@ref) includes for a saved project *beyond* `:kind`,
+`:backend`, `:deleted_ids` and `:index` -- the static list a loader needs before an engine
+instance exists to call `snapshot_state` on.
+
+Only the exact dense backends are covered, and they need nothing: their whole index is a single
+`:index` field. Every other backend needs its own dedicated path instead -- a graph's
+distance/minrecall/beam plus its replayed insertion blocks, a sparse project's
+distance/dimension, a text project's profile and objects -- because none of them has a plain
+`:index` field to read back at all (see `snapshot_state`'s docstring).
 """
-extra_state_fields(::Type) = ()
+extra_state_fields(::Symbol) = ()
 
 """
     restore_engine(state; on_change, log_io) -> AbstractSearchEngine
@@ -1146,31 +1228,53 @@ None of `SearchGraphEngine`/`BM25Engine`/`InvertedFileEngine`'s `state` carries 
 - `InvertedFileEngine`: `profile`, `fitspec`, `distance`, `object_blocks`, `staged`
   likewise -- see [`build_textinvertedfile`](@ref).
 """
-restore_engine(state; on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}) = restore_engine(state.kind, state; on_change, log_io)
+restore_engine(state; on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}) = restore_engine(Val(state.kind), state; on_change, log_io)
 
-function restore_engine(::Type{SearchGraphEngine}, state; on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
-    index = build_searchgraph(state.distance, state.vector_blocks, state.load_neighbors, state.graph_len)
-    return SearchGraphEngine(index, _searchgraph_context(state.minrecall, _engine_logging(on_change, log_io)), state.minrecall, state.opt_beamsearch, ContextPool(SearchGraphContext()), state.deleted_ids, ReadWriteLock())
+# Dispatch is on `Val(state.kind)` because `kind` is a symbol now rather than a Julia type (see
+# [`backend_tag`](@ref)): the same dispatch, without the on-disk format naming the types in this
+# file. An unrecognised kind lands on the fallback below, with a message naming the ones that
+# exist -- which is what a project written by another version deserves instead of a `MethodError`
+# about `Val{:whatever}`.
+function restore_engine(::Val{:dense}, state; on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
+    if state.backend === :graph
+        index = build_searchgraph(state.distance, state.vector_blocks, state.load_neighbors, state.graph_len)
+        backend = GraphBackend(index, _searchgraph_context(state.minrecall, _engine_logging(on_change, log_io)),
+                               state.minrecall, state.opt_beamsearch)
+        return DenseEngine(backend, ContextPool(SearchGraphContext()), state.deleted_ids, ReadWriteLock())
+    end
+    state.backend in (:exhaustive, :parallel_exhaustive) ||
+        error("unknown dense backend $(repr(state.backend)); expected :graph, :exhaustive or :parallel_exhaustive")
+    backend = ExactBackend(state.index, GenericContext(; _engine_logging(on_change, log_io)...))
+    DenseEngine(backend, ContextPool(GenericContext()), state.deleted_ids, ReadWriteLock())
 end
 
-function restore_engine(::Type{IndexType}, state; on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}) where {IndexType}
-    return GenericEngine{IndexType}(state.index, GenericContext(; _engine_logging(on_change, log_io)...), ContextPool(GenericContext()), state.deleted_ids, ReadWriteLock())
+function restore_engine(::Val{:sparse}, state; on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
+    ctx = InvertedFileContext(; _engine_logging(on_change, log_io)...)
+    index = build_sparseinvertedfile(state.distance, state.dimension, state.object_blocks)
+    backend = SparseBackend(index, ctx, state.distance, state.dimension)
+    SparseEngine(backend, ContextPool(InvertedFileContext()), state.deleted_ids, ReadWriteLock())
 end
 
-function restore_engine(::Type{BM25Engine}, state; on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
+function restore_engine(::Val{:text}, state; on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
     profile = state.profile
-    index = profile === nothing ? nothing : build_bm25invertedfile(profile, state.object_blocks)
-    return BM25Engine(index, profile, state.fitspec, state.staged, InvertedFileContext(; _engine_logging(on_change, log_io)...), ContextPool(InvertedFileContext()), state.deleted_ids, ReadWriteLock())
+    kind = state.backend === :bm25 ? BM25InvertedFile :
+           state.backend === :text_inverted_file ? TextInvertedFile :
+           error("unknown text backend $(repr(state.backend)); expected :bm25 or :text_inverted_file")
+    index = profile === nothing ? nothing :
+            kind === BM25InvertedFile ? build_bm25invertedfile(profile, state.object_blocks) :
+                                        build_textinvertedfile(state.distance, profile, state.object_blocks)
+    backend = TextBackend(index, InvertedFileContext(; _engine_logging(on_change, log_io)...),
+                          kind, state.distance)
+    FullTextEngine(backend, profile, state.fitspec, state.staged,
+                   ContextPool(InvertedFileContext()), state.deleted_ids, ReadWriteLock())
 end
 
-function restore_engine(::Type{InvertedFileEngine}, state; on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
-    profile = state.profile
-    index = profile === nothing ? nothing : build_textinvertedfile(state.distance, profile, state.object_blocks)
-    return InvertedFileEngine(index, profile, state.fitspec, state.distance, state.staged, InvertedFileContext(; _engine_logging(on_change, log_io)...), ContextPool(InvertedFileContext()), state.deleted_ids, ReadWriteLock())
-end
+restore_engine(::Val{K}, state; on_change, log_io) where {K} =
+    error("unknown project kind $(repr(K)); this version restores :dense, :sparse and :text. A " *
+          "project written before the engine kinds were restructured records a Julia type there " *
+          "instead of a symbol, and cannot be read by this version.")
 
-is_text_index(::AbstractSearchEngine) = false
-is_text_index(::Union{BM25Engine, InvertedFileEngine}) = true
+
 
 """
     index!(engine::BM25Engine)
@@ -1179,8 +1283,8 @@ is_text_index(::Union{BM25Engine, InvertedFileEngine}) = true
 Catches up encoding/indexing over whatever's been staged into `engine.staged` since the
 last call (or since creation) -- the exact same contract as
 [`index!`](@ref index!(::SearchGraphEngine)): idempotent, safe to call any number of
-times, only ever processes the backlog (`(engine.index === nothing ? 0 :
-length(engine.index))+1:length(engine.staged)`), and a no-op when nothing new is staged.
+times, only ever processes the backlog (`(engine.backend.index === nothing ? 0 :
+length(engine.backend.index))+1:length(engine.staged)`), and a no-op when nothing new is staged.
 
 If this engine was created from a [`FitFromCorpus`](@ref), the first call additionally runs
 that fit (see [`fit_profile`](@ref)) over *every* text staged so far (`engine.staged`, not
@@ -1207,45 +1311,29 @@ has no `index!` method of its own.
 Errors if `engine.staged` is completely empty (nothing has ever been staged) -- mirrors
 `index!(engine::SearchGraphEngine)`'s empty-`.db` error.
 """
-function index!(engine::BM25Engine)
+function index!(engine::FullTextEngine)
     write_lock(engine.lock) do
         n = length(engine.staged)
-        n == 0 && error("BM25Engine has nothing staged yet -- add_item!/append_items! at least one item before calling index!")
-        already = engine.index === nothing ? 0 : length(engine.index)
+        n == 0 && error("this text project has nothing staged yet -- add_item!/append_items! at least one item before calling index!")
+        already = engine.backend.index === nothing ? 0 : length(engine.backend.index)
         if engine.profile === nothing
             profile = train_profile(engine.fitspec, engine.staged)
             engine.profile = profile
-            engine.index = _text_index(profile, BM25InvertedFile, nothing)
+            engine.backend.index = _text_index(profile, engine.backend.kind, engine.backend.distance)
         end
-        voc = engine.profile.model.voc
         for i in already+1:n
-            push_item!(engine.index, engine.ctx, bagofwords(voc, engine.staged[i]))
+            # The staged text goes in as text, whichever backend this is. Both take it and both
+            # encode it their own way -- `BM25InvertedFile` into the bag its scorer reads,
+            # `TextInvertedFile` into a weighted vector through the profile's model -- which is
+            # why one loop serves both and why neither encoding is spelled out here. This module
+            # used to do the encoding, in two methods that differed in nothing else.
+            push_item!(engine.backend.index, engine.backend.ctx, engine.staged[i])
         end
     end
     return engine
 end
 
-function index!(engine::InvertedFileEngine)
-    write_lock(engine.lock) do
-        n = length(engine.staged)
-        n == 0 && error("InvertedFileEngine has nothing staged yet -- add_item!/append_items! at least one item before calling index!")
-        already = engine.index === nothing ? 0 : length(engine.index)
-        if engine.profile === nothing
-            profile = train_profile(engine.fitspec, engine.staged)
-            engine.profile = profile
-            engine.index = _text_index(profile, TextInvertedFile, engine.distance)
-        end
-        for i in already+1:n
-            # A raw BOW does not score against a NormCosine (or any other) InvertedFile --
-            # it needs a real weighted SparseVector. Handing the text straight to
-            # `TextInvertedFile` is what produces one: its `AbstractString` overload of
-            # `push_item!` vectorizes through its own `model`, which is this profile's, so
-            # documents and queries can only ever be encoded by the same model.
-            push_item!(engine.index, engine.ctx, engine.staged[i])
-        end
-    end
-    return engine
-end
+# (the weighted text path merged into `index!(::FullTextEngine)` above)
 
 """
     current_beamsearch(engine::AbstractSearchEngine) -> Union{Nothing, BeamSearch}
@@ -1256,7 +1344,7 @@ aren't dense at all). This is `SimilaritySearch.jl`'s own `BeamSearch()` default
 `calibrate!` has been called at least once (or until the growth autotuner has had a chance
 to run), since construction no longer installs a calibrated `BeamSearch` synchronously.
 """
-current_beamsearch(engine::SearchGraphEngine) = read_lock(() -> engine.index.algo[], engine.lock)
+current_beamsearch(engine::DenseEngine{GraphBackend}) = read_lock(() -> engine.backend.index.algo[], engine.lock)
 current_beamsearch(::AbstractSearchEngine) = nothing
 
 """
@@ -1264,8 +1352,8 @@ current_beamsearch(::AbstractSearchEngine) = nothing
 
 Runs `SimilaritySearch.jl`'s real `optimize_index!` hyperparameter sweep (PLAN.md §5.6 —
 a `SearchModels`-driven stochastic search over `BeamSearchSpace`, not a hand-rolled one)
-against `engine.index` once per recall level in `levels`, storing each resulting
-`BeamSearch` into `engine.opt_beamsearch[level]` (and returning that table) so
+against `engine.backend.index` once per recall level in `levels`, storing each resulting
+`BeamSearch` into `engine.backend.opt_beamsearch[level]` (and returning that table) so
 [`search_live`](@ref) can later serve a per-request `minrecall` from calibrated
 hyperparameters instead of a single one-size-fits-all default. Only defined for a
 `SearchGraphEngine`; errors for any other engine kind, which has no `BeamSearch` to
@@ -1282,38 +1370,38 @@ accurate -- the right hyperparameters for a given recall level drift as the inde
   ground-truth query set (PLAN.md §5.6's "supplied ... set") instead of an internally
   sampled one.
 """
-function calibrate!(engine::SearchGraphEngine; levels=DEFAULT_MINRECALL_LEVELS, numqueries::Int=64, ksearch::Int=10, queries=nothing)
+function calibrate!(engine::DenseEngine{GraphBackend}; levels=DEFAULT_MINRECALL_LEVELS, numqueries::Int=64, ksearch::Int=10, queries=nothing)
     Q = queries === nothing ? nothing : VectorDatabase([convert(Vector{Float32}, q) for q in queries])
     target_levels = levels isa Real ? Float32[levels] : Float32.(levels)
 
     write_lock(engine.lock) do
         for r in target_levels
-            optimize_index!(engine.index, engine.ctx, MinRecall(r); queries=Q, numqueries, ksearch)
-            engine.opt_beamsearch[r] = engine.index.algo[]
+            optimize_index!(engine.backend.index, engine.backend.ctx, MinRecall(r); queries=Q, numqueries, ksearch)
+            engine.backend.opt_beamsearch[r] = engine.backend.index.algo[]
         end
     end
 
-    return engine.opt_beamsearch
+    return engine.backend.opt_beamsearch
 end
-calibrate!(::AbstractSearchEngine; kwargs...) = error("calibrate! only applies to a SearchGraphEngine (approximate dense) index")
+calibrate!(::AbstractSearchEngine; kwargs...) = error("calibrate! only applies to a dense project on a SearchGraph backend -- nothing else has a BeamSearch to tune")
 
 """
     _nearest_beamsearch(engine::SearchGraphEngine, minrecall::Real) -> BeamSearch
 
 The `BeamSearch` calibrated for `minrecall` (see [`calibrate!`](@ref)), auto-calibrating
-[`DEFAULT_MINRECALL_LEVELS`](@ref) first if `engine.opt_beamsearch` is still empty. An
+[`DEFAULT_MINRECALL_LEVELS`](@ref) first if `engine.backend.opt_beamsearch` is still empty. An
 exact match is used if present; otherwise the closest calibrated level *at or below*
 `minrecall` is used, falling back to the lowest calibrated level available if `minrecall`
 sits below all of them.
 """
-function _nearest_beamsearch(engine::SearchGraphEngine, minrecall::Real)
-    isempty(engine.opt_beamsearch) && calibrate!(engine)
+function _nearest_beamsearch(engine::DenseEngine{GraphBackend}, minrecall::Real)
+    isempty(engine.backend.opt_beamsearch) && calibrate!(engine)
     target = Float32(minrecall)
-    haskey(engine.opt_beamsearch, target) && return engine.opt_beamsearch[target]
-    levels = keys(engine.opt_beamsearch)
+    haskey(engine.backend.opt_beamsearch, target) && return engine.backend.opt_beamsearch[target]
+    levels = keys(engine.backend.opt_beamsearch)
     below = Iterators.filter(<=(target), levels)
     key = isempty(below) ? minimum(levels) : maximum(below)
-    return engine.opt_beamsearch[key]
+    return engine.backend.opt_beamsearch[key]
 end
 
 """
@@ -1347,7 +1435,7 @@ insert_dense!(index, ctx, item) = push_item!(index, ctx, item)
 """
     index!(engine::SearchGraphEngine)
 
-Catches up the graph structure over whatever's been staged into `engine.index.db` since
+Catches up the graph structure over whatever's been staged into `engine.backend.index.db` since
 the last call (or since creation) -- extends `SimilaritySearch.index!` with the same
 meaning the text engines' [`index!`](@ref index!(::BM25Engine, ::AbstractVector)) methods
 give it: "do the expensive part explicitly, now." Unlike those, this is *idempotent* and
@@ -1358,7 +1446,7 @@ calling this repeatedly as more vectors accumulate only ever processes the backl
 redoing already-indexed work, and calling it with nothing new staged is a cheap no-op.
 
 `add_item!`/`append_items!` on a `SearchGraphEngine` only ever stage raw vectors into
-`engine.index.db` -- they do *not* make new items searchable by themselves anymore (unlike
+`engine.backend.index.db` -- they do *not* make new items searchable by themselves anymore (unlike
 `GenericEngine`/`BM25Engine`/`InvertedFileEngine`, which still index synchronously on every
 `add_item!`). Call this explicitly -- interactively, on a schedule, whatever fits the
 caller -- to actually build graph connections for the backlog; [`search_live`](@ref) only
@@ -1366,19 +1454,20 @@ ever sees items this has processed. This is also what unlocks batch-shaped inser
 staging is cheap and safe to do many times in a row without paying graph-construction cost
 until the caller actually wants it.
 
-Errors if `engine.index.db` is completely empty (nothing has ever been staged) -- mirrors
+Errors if `engine.backend.index.db` is completely empty (nothing has ever been staged) -- mirrors
 `SimilaritySearch.index!`'s own `@assert n > 0`.
 """
-function index!(engine::SearchGraphEngine)
+function index!(engine::DenseEngine{GraphBackend})
     write_lock(engine.lock) do
-        n = length(database(engine.index))
+        n = length(database(engine.backend.index))
         n == 0 && error("SearchGraphEngine has nothing staged yet -- add_item!/append_items! at least one vector before calling index!")
-        SimilaritySearch.index!(engine.index, engine.ctx)
+        SimilaritySearch.index!(engine.backend.index, engine.backend.ctx)
     end
     return engine
 end
 
-index!(engine::GenericEngine) = engine
+index!(engine::DenseEngine{<:ExactBackend}) = engine
+index!(engine::SparseEngine) = engine
 
 """
     add_item!(engine::AbstractSearchEngine, item)
@@ -1393,13 +1482,22 @@ yet -- and does not get encoded/indexed until an explicit
 (`ExhaustiveSearch`/`ParallelExhaustiveSearch`) is the one engine kind that still indexes
 synchronously, with no staging step at all.
 """
-function add_item!(engine::Union{SearchGraphEngine, GenericEngine}, item)
+function add_item!(engine::DenseEngine, item)
     write_lock(engine.lock) do
-        insert_dense!(engine.index, engine.ctx, item)
+        insert_dense!(engine.backend.index, engine.backend.ctx, item)
     end
 end
 
-function add_item!(engine::Union{BM25Engine, InvertedFileEngine}, item)
+# An inverted file indexes on the push, so a sparse project has no staging split to speak of --
+# like the exact dense backends and unlike the text engines, whose split exists because text
+# cannot be encoded before a vocabulary exists. `index!` below is correspondingly a no-op.
+function add_item!(engine::SparseEngine, item)
+    write_lock(engine.lock) do
+        push_item!(engine.backend.index, engine.backend.ctx, item)
+    end
+end
+
+function add_item!(engine::FullTextEngine, item)
     write_lock(engine.lock) do
         push!(engine.staged, String(item))
     end
@@ -1422,15 +1520,26 @@ engine's `staged` (every paragraph ever staged, in insertion order, which *is* i
 fresh `Vector{Float32}` rather than handed out as a view, because the view aliases the index's
 live storage and the caller has no way to know that.
 """
-function stored_payload(engine::Union{BM25Engine, InvertedFileEngine}, id::Integer)
+function stored_payload(engine::FullTextEngine, id::Integer)
     1 <= id <= length(engine.staged) || return nothing
     engine.staged[id]
 end
 
-function stored_payload(engine::Union{SearchGraphEngine, GenericEngine}, id::Integer)
-    db = database(engine.index)
+function stored_payload(engine::DenseEngine, id::Integer)
+    db = database(engine.backend.index)
     1 <= id <= length(db) || return nothing
     convert(Vector{Float32}, db[id])
+end
+
+# Materialized into a real `SparseVector` rather than handed out as the view `database` returns:
+# that view aliases the inverted file's own packed storage, and a caller has no way to know it.
+function stored_payload(engine::SparseEngine, id::Integer)
+    db = database(engine.backend.index)
+    1 <= id <= length(db) || return nothing
+    v = db[id]
+    SparseVector{Float32,Int32}(engine.backend.dimension,
+                                convert(Vector{Int32}, collect(v.nzind)),
+                                convert(Vector{Float32}, collect(v.nzval)))
 end
 
 """
@@ -1453,10 +1562,10 @@ where the profile-taking constructor put it.
 
 Errors if `engine` has no profile yet -- nothing indexed, so no vocabulary to resolve against.
 """
-function resolve_query(engine::Union{BM25Engine, InvertedFileEngine}, text::AbstractString, policy::QueryPolicy)
+function resolve_query(engine::FullTextEngine, text::AbstractString, policy::QueryPolicy)
     engine.profile === nothing && error("this text engine has not been trained yet -- index! at least one staged item, or create it with a profile, before resolving a query")
     voc = engine.profile.model.voc
-    TextSearch.query_tokens(voc, text, engine.index.query; policy)
+    TextSearch.query_tokens(voc, text, engine.backend.index.query; policy)
 end
 
 """
@@ -1475,12 +1584,12 @@ above this one, which is also where such a policy belongs.
 # Keyword Arguments
 - `bs_override::Union{Nothing, BeamSearch}`: an ad hoc `BeamSearch` configuration to
   search with for this call only (PLAN.md §3/§7's per-request `beamsearch_overrides`),
-  instead of `engine.index.algo[]`'s calibrated default. Only meaningful for a
+  instead of `engine.backend.index.algo[]`'s calibrated default. Only meaningful for a
   `SearchGraphEngine` — accepted and ignored on every other engine kind, which has no
   `BeamSearch` to override in the first place. Takes priority over `minrecall` below.
 - `minrecall::Union{Nothing, Real}`: search at (approximately) this target recall instead
-  of `engine.index.algo[]`'s current default, by looking up the matching calibrated
-  `BeamSearch` in `engine.opt_beamsearch` (see [`calibrate!`](@ref)/[`_nearest_beamsearch`](@ref)
+  of `engine.backend.index.algo[]`'s current default, by looking up the matching calibrated
+  `BeamSearch` in `engine.backend.opt_beamsearch` (see [`calibrate!`](@ref)/[`_nearest_beamsearch`](@ref)
   — auto-calibrating [`DEFAULT_MINRECALL_LEVELS`](@ref) first if that table is still empty).
   Only meaningful for a `SearchGraphEngine`; accepted and ignored on every other engine
   kind, which has no calibrated `BeamSearch` table to consult.
@@ -1508,17 +1617,17 @@ above this one, which is also where such a policy belongs.
     *before* the read lock is acquired, not nested inside it.
 
     That guarantees the *index data* (`index.adj`/`index.db`) tolerates concurrent reads,
-    but not by itself enough: `engine.ctx` is a *mutable, reused* scratch context (beam
+    but not by itself enough: `engine.backend.ctx` is a *mutable, reused* scratch context (beam
     buffers, visited-vertices state, per-batch cost counters, ...), and two concurrent
     searches sharing that same object corrupt each other's scratch space -- confirmed
     directly, a segfault inside `SearchGraph`'s own `beamsearch_inner_beam` from two
     threads racing on shared visited-vertices state via a shared `ctx`. So every
     `search_live` method borrows a private context from [`ContextPool`](@ref) via
-    [`checkout!`](@ref)/[`checkin!`](@ref) instead of reusing `engine.ctx` (which stays
+    [`checkout!`](@ref)/[`checkin!`](@ref) instead of reusing `engine.backend.ctx` (which stays
     reserved for insertion, itself already exclusive via `write_lock`, so sharing it
     *there* is fine) or allocating a brand-new context on every single call.
 """
-function search_live(engine::SearchGraphEngine, query, k::Int; bs_override, minrecall, policy)
+function search_live(engine::DenseEngine{GraphBackend}, query, k::Int; bs_override, minrecall, policy)
     # Resolved (and, if needed, `calibrate!`'s own write lock acquired) *before* taking our
     # own read lock below -- see `ReadWriteLock`'s deadlock warning for why this can't be
     # nested inside the `read_lock` block instead.
@@ -1530,10 +1639,10 @@ function search_live(engine::SearchGraphEngine, query, k::Int; bs_override, minr
             snap = copy(ctx.costdists)
             res = knnqueue(KnnSorted, max(k, 1))
             if bs !== nothing
-                vstate = SimilaritySearch.getvstate(length(engine.index), ctx)
-                search(bs, engine.index, ctx, query, res, engine.index.hints, vstate)
+                vstate = SimilaritySearch.getvstate(length(engine.backend.index), ctx)
+                search(bs, engine.backend.index, ctx, query, res, engine.backend.index.hints, vstate)
             else
-                search(engine.index, ctx, query, res)
+                search(engine.backend.index, ctx, query, res)
             end
             evals = SimilaritySearch.distance_evaluations(ctx, snap)
             return _collect_live(engine, res, evals)
@@ -1543,13 +1652,13 @@ function search_live(engine::SearchGraphEngine, query, k::Int; bs_override, minr
     end
 end
 
-function search_live(engine::GenericEngine, query, k::Int; bs_override, minrecall, policy)
+function search_live(engine::Union{DenseEngine{<:ExactBackend}, SparseEngine}, query, k::Int; bs_override, minrecall, policy)
     read_lock(engine.lock) do
         ctx = checkout!(engine.search_ctx_pool)
         try
             snap = copy(ctx.costdists)
             res = knnqueue(KnnSorted, max(k, 1))
-            search(engine.index, ctx, query, res)
+            search(engine.backend.index, ctx, query, res)
             evals = SimilaritySearch.distance_evaluations(ctx, snap)
             return _collect_live(engine, res, evals)
         finally
@@ -1558,7 +1667,7 @@ function search_live(engine::GenericEngine, query, k::Int; bs_override, minrecal
     end
 end
 
-function search_live(engine::BM25Engine, query, k::Int; bs_override, minrecall, policy::QueryPolicy)
+function search_live(engine::FullTextEngine, query, k::Int; bs_override, minrecall, policy::QueryPolicy)
     read_lock(engine.lock) do
         profile = engine.profile
         profile === nothing && return (id=Int32[], dist=Float32[], deleted=Bool[], distance_evaluations=0)
@@ -1570,7 +1679,7 @@ function search_live(engine::BM25Engine, query, k::Int; bs_override, minrecall, 
             # call while the variant map and the expansion network stay on the index, derived
             # once by the profile-taking constructor. This module used to do all four steps
             # itself, and keep a second variant map, only to be able to vary the policy.
-            search(engine.index, ctx, query, res; policy)
+            search(engine.backend.index, ctx, query, res; policy)
             evals = SimilaritySearch.distance_evaluations(ctx, snap)
             return _collect_live(engine, res, evals)
         finally
@@ -1579,26 +1688,7 @@ function search_live(engine::BM25Engine, query, k::Int; bs_override, minrecall, 
     end
 end
 
-function search_live(engine::InvertedFileEngine, query, k::Int; bs_override, minrecall, policy::QueryPolicy)
-    read_lock(engine.lock) do
-        profile = engine.profile
-        profile === nothing && return (id=Int32[], dist=Float32[], deleted=Bool[], distance_evaluations=0)
-        ctx = checkout!(engine.search_ctx_pool)
-        try
-            snap = copy(ctx.costdists)
-            res = knnqueue(KnnSorted, max(k, 1))
-            # As on `BM25Engine` above. The representation a set distance forces -- a
-            # presence-only bag rather than a weighted vector -- is the library's choice to
-            # make too; this module was mirroring its `is_set_distance` with a `parentmodule`
-            # check of its own.
-            search(engine.index, ctx, query, res; policy)
-            evals = SimilaritySearch.distance_evaluations(ctx, snap)
-            return _collect_live(engine, res, evals)
-        finally
-            checkin!(engine.search_ctx_pool, ctx)
-        end
-    end
-end
+# (the weighted text path merged into `search_live(::FullTextEngine)` above)
 
 function _collect_live(engine::AbstractSearchEngine, res, evals)
     ids = view(res.ids, res.sp:res.ep)

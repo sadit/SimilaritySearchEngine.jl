@@ -545,14 +545,14 @@ const ACCENT_ITEMS = vcat(
             h = create_project(workdir, "tif_ds"; index_type=TextInvertedFile, textmodel=FitFromCorpus())
             append_items!(h, text_items(items))
             index!(h)
-            @test h.engine isa SimilaritySearchEngine.IndexEngine.InvertedFileEngine
-            @test h.engine.index isa TextInvertedFile
+            @test h.engine isa SimilaritySearchEngine.IndexEngine.FullTextEngine
+            @test h.engine.backend.index isa TextInvertedFile
             before = [r.doc_id for r in ftsearch(h, items[3]["text"], 3)]
             @test before[1] == "frankenstein_3"
             close_project!(h)
 
             h2 = open_project(workdir, "tif_ds")
-            @test h2.engine.index isa TextInvertedFile
+            @test h2.engine.backend.index isa TextInvertedFile
             @test [r.doc_id for r in ftsearch(h2, items[3]["text"], 3)] == before
             close_project!(h2)
         end
