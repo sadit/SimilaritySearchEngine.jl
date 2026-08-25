@@ -590,13 +590,6 @@ it has to) and encodes/indexes the backlog.
   [`BaseProfile`](@ref), which has no fit to defer. Kept after the fit rather than cleared:
   it is what the profile was made from, and a reopened project should be able to say so
   without re-deriving it from the lineage.
-- `variants::Union{Nothing, Dict{String,Vector{String}}}`: the orthographic variant map
-  [`resolve_query`](@ref) bridges a query with, derived from the vocabulary the moment
-  `profile` is set rather than per query -- it is a pure function of that (frozen)
-  vocabulary, and deriving it costs ~0.24s over a half-million-token vocabulary, which is
-  not a per-search cost worth paying. Deriving it up front also keeps [`search_live`](@ref)
-  free of any write to the engine, so it stays safe under a plain read lock. `nothing`
-  exactly while `profile` is.
 - `staged::Vector{String}`: every raw text ever staged via `add_item!`/`append_items!`, in
   insertion order, whether or not it has been encoded into `index` yet -- the text-engine
   counterpart of `SearchGraphEngine.index.db`. `index!` catches up the range
@@ -616,7 +609,6 @@ mutable struct BM25Engine <: AbstractSearchEngine
     index::Union{Nothing, BM25InvertedFile}
     profile::Union{Nothing, TextProfile}
     fitspec::Union{Nothing, DeferredFit}
-    variants::Union{Nothing, Dict{String,Vector{String}}}
     staged::Vector{String}
     ctx::InvertedFileContext
     search_ctx_pool::ContextPool
@@ -648,7 +640,6 @@ only ever *stage* raw text into `staged`.
   `VectorModel`, not a second copy of it.
 - `fitspec::Union{Nothing, DeferredFit}`: as on [`BM25Engine`](@ref) -- the recipe for the
   deferred fit, unused once `profile` exists, `nothing` when there was never one to defer.
-- `variants::Union{Nothing, Dict{String,Vector{String}}}`: as on [`BM25Engine`](@ref).
 - `distance::SimilaritySearch.PreMetric`: the distance chosen at `create_engine` time --
   remembered here since the real index can't be built until a vocabulary exists to size
   its posting-list array.
@@ -673,7 +664,6 @@ mutable struct InvertedFileEngine <: AbstractSearchEngine
     index::Union{Nothing, TextInvertedFile}
     profile::Union{Nothing, TextProfile}
     fitspec::Union{Nothing, DeferredFit}
-    variants::Union{Nothing, Dict{String,Vector{String}}}
     distance::SimilaritySearch.PreMetric
     staged::Vector{String}
     ctx::InvertedFileContext
@@ -873,24 +863,27 @@ function train_profile(spec::DefaultProfile, corpus; verbose::Bool=false)
     TextSearch.refit_profile(base, _sample(corpus, spec.max_documents); verbose)
 end
 
-# The variant map cached on a text engine (see `BM25Engine`'s `variants` field): derived once,
-# the instant a profile becomes known, never per query. `derive_variants` returns an empty map
-# immediately for any policy that already folds both case and diacritics -- the default
-# `TextConfig()` among them -- so this is free unless a profile deliberately preserves them.
-_derive_variants(profile::Nothing) = nothing
-_derive_variants(profile::TextProfile) = derive_variants(profile.model.voc)
+"""
+    _text_index(profile::TextProfile, kind::Type, distance) -> AbstractInvertedFile
 
-# An empty `QueryPipeline` on the index deliberately: policy is a per-query choice, and one
-# baked into the index would be all-or-nothing for every search against it. `search_live` builds
-# its own through [`query_pipeline`](@ref) and hands the finished query down, which is why the
-# index never has to consult this field. The `max(..., 1)` guard covers an empty vocabulary,
-# which `InvertedFile` cannot be sized zero for.
-_new_textinvertedfile(profile::TextProfile, distance) =
-    TextInvertedFile(profile.model, InvertedFile(max(vocsize(profile.model.voc), 1), distance),
-                     TextSearch.QueryPipeline())
+The library index a trained text engine searches through, built from `profile` itself.
+
+Built from the profile rather than from `profile.model`/`.voc` because the profile-taking
+constructors assemble the index's `QueryPipeline` too -- deriving the variant map once and
+attaching the profile's expansion network if the profile applies it. That is state this module
+used to keep a second copy of, in a `variants` field it derived and cached itself. One map, in
+the index, is the whole reason that field is gone.
+
+`distance` is ignored for BM25, which scores through its own `bm25score` and has no metric to
+choose (see [`default_distance`](@ref)).
+""" 
+function _text_index(profile::TextProfile, kind::Type, distance)
+    kind === BM25InvertedFile && return BM25InvertedFile(profile)
+    TextInvertedFile(profile; dist=distance)
+end
 
 """
-    build_bm25invertedfile(voc::TextSearch.Vocabulary, object_blocks) -> BM25InvertedFile
+    build_bm25invertedfile(profile::TextProfile, object_blocks) -> BM25InvertedFile
 
 Rebuilds a `BM25InvertedFile` against a trained `voc` by replaying every saved raw object
 (as produced incrementally via [`invertedfile_objects`](@ref) and read back via
@@ -899,8 +892,8 @@ full rebuild-by-reinsertion, not an incremental deserialize (see
 `Persistence.InvertedFileObjectStore`'s docstring for why, and its documented scaling
 limits).
 """
-function build_bm25invertedfile(voc, object_blocks)
-    index = BM25InvertedFile(voc)
+function build_bm25invertedfile(profile::TextProfile, object_blocks)
+    index = BM25InvertedFile(profile)
     ctx = InvertedFileContext()
     for block in object_blocks, obj in block
         push_item!(index, ctx, obj)
@@ -922,7 +915,7 @@ replaying them must not re-run a vectorization that already happened, and would 
 to anyway.
 """
 function build_textinvertedfile(distance, profile::TextProfile, object_blocks)
-    index = _new_textinvertedfile(profile, distance)
+    index = TextInvertedFile(profile; dist=distance)
     ctx = InvertedFileContext()
     for block in object_blocks, obj in block
         push_item!(index, ctx, obj)
@@ -1047,8 +1040,8 @@ function create_engine(::Type{BM25InvertedFile}; distance, minrecall,
                        on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
     spec = _require_textmodel(BM25InvertedFile, textmodel)
     profile = _initial_profile(spec)
-    index = profile === nothing ? nothing : BM25InvertedFile(profile.model.voc)
-    BM25Engine(index, profile, _deferred_fit(spec), _derive_variants(profile), String[],
+    index = profile === nothing ? nothing : _text_index(profile, BM25InvertedFile, nothing)
+    BM25Engine(index, profile, _deferred_fit(spec), String[],
                InvertedFileContext(; _engine_logging(on_change, log_io)...),
                ContextPool(InvertedFileContext()), Set{UInt32}(), ReadWriteLock())
 end
@@ -1058,8 +1051,8 @@ function create_engine(::Type{InvertedFile}; distance, minrecall,
                        on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
     spec = _require_textmodel(InvertedFile, textmodel)
     profile = _initial_profile(spec)
-    index = profile === nothing ? nothing : _new_textinvertedfile(profile, distance)
-    InvertedFileEngine(index, profile, _deferred_fit(spec), _derive_variants(profile), distance, String[],
+    index = profile === nothing ? nothing : _text_index(profile, TextInvertedFile, distance)
+    InvertedFileEngine(index, profile, _deferred_fit(spec), distance, String[],
                        InvertedFileContext(; _engine_logging(on_change, log_io)...),
                        ContextPool(InvertedFileContext()), Set{UInt32}(), ReadWriteLock())
 end
@@ -1166,14 +1159,14 @@ end
 
 function restore_engine(::Type{BM25Engine}, state; on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
     profile = state.profile
-    index = profile === nothing ? nothing : build_bm25invertedfile(profile.model.voc, state.object_blocks)
-    return BM25Engine(index, profile, state.fitspec, _derive_variants(profile), state.staged, InvertedFileContext(; _engine_logging(on_change, log_io)...), ContextPool(InvertedFileContext()), state.deleted_ids, ReadWriteLock())
+    index = profile === nothing ? nothing : build_bm25invertedfile(profile, state.object_blocks)
+    return BM25Engine(index, profile, state.fitspec, state.staged, InvertedFileContext(; _engine_logging(on_change, log_io)...), ContextPool(InvertedFileContext()), state.deleted_ids, ReadWriteLock())
 end
 
 function restore_engine(::Type{InvertedFileEngine}, state; on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
     profile = state.profile
     index = profile === nothing ? nothing : build_textinvertedfile(state.distance, profile, state.object_blocks)
-    return InvertedFileEngine(index, profile, state.fitspec, _derive_variants(profile), state.distance, state.staged, InvertedFileContext(; _engine_logging(on_change, log_io)...), ContextPool(InvertedFileContext()), state.deleted_ids, ReadWriteLock())
+    return InvertedFileEngine(index, profile, state.fitspec, state.distance, state.staged, InvertedFileContext(; _engine_logging(on_change, log_io)...), ContextPool(InvertedFileContext()), state.deleted_ids, ReadWriteLock())
 end
 
 is_text_index(::AbstractSearchEngine) = false
@@ -1222,8 +1215,7 @@ function index!(engine::BM25Engine)
         if engine.profile === nothing
             profile = train_profile(engine.fitspec, engine.staged)
             engine.profile = profile
-            engine.variants = _derive_variants(profile)
-            engine.index = BM25InvertedFile(profile.model.voc)
+            engine.index = _text_index(profile, BM25InvertedFile, nothing)
         end
         voc = engine.profile.model.voc
         for i in already+1:n
@@ -1241,8 +1233,7 @@ function index!(engine::InvertedFileEngine)
         if engine.profile === nothing
             profile = train_profile(engine.fitspec, engine.staged)
             engine.profile = profile
-            engine.variants = _derive_variants(profile)
-            engine.index = _new_textinvertedfile(profile, engine.distance)
+            engine.index = _text_index(profile, TextInvertedFile, engine.distance)
         end
         for i in already+1:n
             # A raw BOW does not score against a NormCosine (or any other) InvertedFile --
@@ -1443,75 +1434,30 @@ function stored_payload(engine::Union{SearchGraphEngine, GenericEngine}, id::Int
 end
 
 """
-    query_pipeline(engine, policy::QueryPolicy) -> TextSearch.QueryPipeline
-
-How this engine should treat a query, as the one value `TextSearch` takes for it: the caller's
-`policy`, this engine's cached variant map, and the profile's expansion network with its
-distances.
-
-Built per call rather than once per index, because `policy` is per call: correcting and
-expanding are guesses about what a person meant, so the same project has to be able to answer
-both ways. The index itself therefore carries an empty pipeline and every
-search assembles its own.
-
-The network is included only when the profile *applies* it. A fitted profile carries a network
-without applying it -- computing an artifact and deciding to use it are different acts -- and
-`QueryPipeline` reads a network it is given as the request to expand with it.
-"""
-function query_pipeline(engine::Union{BM25Engine, InvertedFileEngine}, policy::QueryPolicy)
-    profile = engine.profile
-    profile === nothing && error("this text engine has not been trained yet -- index! at least one staged item, or create it with a profile, before building a query")
-    expansion = (profile.applied.query_expansion && !isempty(profile.query_expansion)) ?
-                profile.query_expansion : nothing
-    TextSearch.QueryPipeline(;
-        policy,
-        # `variants` is only read when correction is on; withholding it under `:off` keeps the
-        # candidate group empty and makes the resolution a pass-through of what was typed
-        variants = policy.correction === :off ? nothing : engine.variants,
-        expansion,
-        distances = expansion === nothing ? nothing : profile.query_expansion_distances)
-end
-
-"""
     resolve_query(engine, text::AbstractString, policy::QueryPolicy) -> TextSearch.ResolvedQuery
 
-Runs `text` through `TextSearch`'s query pipeline under this engine's
-[`query_pipeline`](@ref): tokenized by the profile's own `TextConfig` -- the same normalization,
-lemma and stopword stages every indexed document went through -- then corrected against the
-vocabulary and widened by the expansion network, as `policy` allows.
+Runs `text` through the library's query pipeline -- the one living on this engine's index --
+under `policy`, and hands back both what to search for and what correction did to each spelling
+that was typed.
 
-The result carries both halves a caller needs: `terms`, what to actually search for, and
-`resolution`, what correction did to each spelling that was typed. The second is not
-bookkeeping: correcting a query is a substitution the person who typed it is owed a report of,
-which is what `TextSearch.explain(rq.resolution)` renders and what `QueryPolicy(correction=:off)`
+Exists for [`ftexplain`](@ref SimilaritySearchEngine.ftexplain), and for nothing else: [`search_live`](@ref) does not call it,
+because `TextSearch`'s own `search` takes the same `policy` keyword and resolves the query
+itself. Correcting a query is a substitution the person who typed it is owed a report of, which
+is what `TextSearch.explain(rq.resolution)` renders and what `QueryPolicy(correction=:off)`
 undoes.
 
-This used to be assembled here -- tokenize, `resolve_query_tokens`, rebuild the term list,
-restrict the network to `expansion_sources`, weight the neighbours. `TextSearch` published all of
-it as `query_tokens`/`querybow`/`queryvector`, routed through both of its inverted files, so this
-is now the library's implementation with this engine's profile and cache wired into it. Two
-behaviours moved with it and are worth naming, because both were deliberate here and are
-deliberate there:
-
-- **Typed terms are deduplicated.** A query of `"casa casa casa"` searches `casa` once. This
-  module used to preserve multiplicity out of concern for term frequency; the concern does not
-  survive contact with the scorers. `bm25score` reads only which ids the query holds, never their
-  counts, and `queryvector` weights the words a person meant once each. A query is a set of
-  intents, not a document.
-- **Expansion contributions are not deduplicated**, and that asymmetry is the point: a neighbour
-  reachable from two query tokens contributes twice, and `queryvector` sums the contributions
-  while `querybow` collapses them.
+This module used to assemble the pipeline here: tokenize, resolve, rebuild the term list,
+restrict the network to `expansion_sources`, weight the neighbours -- and cache its own variant
+map to afford it. All of that is `query_tokens` now, and the map lives once, inside the index,
+where the profile-taking constructor put it.
 
 Errors if `engine` has no profile yet -- nothing indexed, so no vocabulary to resolve against.
 """
-resolve_query(engine::Union{BM25Engine, InvertedFileEngine}, text::AbstractString, policy::QueryPolicy) =
-    TextSearch.query_tokens(engine.profile.model.voc, text, query_pipeline(engine, policy))
-
-# Whether `dist` makes an inverted file score token membership rather than weighted vectors, in
-# which case a query is a presence-only bag and not a vector. `TextInvertedFile` branches on
-# exactly this in its own `search`; mirrored here because this module builds the query itself,
-# per call, to honour a per-call `QueryPolicy` that an index-level pipeline cannot express.
-_is_set_distance(dist) = parentmodule(typeof(dist)) === SimilaritySearch.Dist.Sets
+function resolve_query(engine::Union{BM25Engine, InvertedFileEngine}, text::AbstractString, policy::QueryPolicy)
+    engine.profile === nothing && error("this text engine has not been trained yet -- index! at least one staged item, or create it with a profile, before resolving a query")
+    voc = engine.profile.model.voc
+    TextSearch.query_tokens(voc, text, engine.index.query; policy)
+end
 
 """
     search_live(engine::AbstractSearchEngine, query, k::Int; bs_override, minrecall, policy) -> (id=..., dist=..., deleted=...)
@@ -1616,16 +1562,15 @@ function search_live(engine::BM25Engine, query, k::Int; bs_override, minrecall, 
     read_lock(engine.lock) do
         profile = engine.profile
         profile === nothing && return (id=Int32[], dist=Float32[], deleted=Bool[], distance_evaluations=0)
-        voc = profile.model.voc
-        # presence only, and not a shortcut: BM25 scores from which ids the query holds, never
-        # from their counts (see `bm25score`), so a weighted query bag would be carried through
-        # the whole search and then ignored
-        bow = TextSearch.querybow(voc, resolve_query(engine, query, policy))
         ctx = checkout!(engine.search_ctx_pool)
         try
             snap = copy(ctx.costdists)
             res = knnqueue(KnnSorted, max(k, 1))
-            search(engine.index, ctx, bow, res)
+            # The library resolves, corrects, expands and encodes. `policy` travels with the
+            # call while the variant map and the expansion network stay on the index, derived
+            # once by the profile-taking constructor. This module used to do all four steps
+            # itself, and keep a second variant map, only to be able to vary the policy.
+            search(engine.index, ctx, query, res; policy)
             evals = SimilaritySearch.distance_evaluations(ctx, snap)
             return _collect_live(engine, res, evals)
         finally
@@ -1638,17 +1583,15 @@ function search_live(engine::InvertedFileEngine, query, k::Int; bs_override, min
     read_lock(engine.lock) do
         profile = engine.profile
         profile === nothing && return (id=Int32[], dist=Float32[], deleted=Bool[], distance_evaluations=0)
-        voc = profile.model.voc
-        rq = resolve_query(engine, query, policy)
-        # The representation decides what to do with the pipeline's weights: a set distance
-        # scores membership and ignores them, a vector distance applies them and normalizes.
-        q = _is_set_distance(engine.distance) ? TextSearch.querybow(voc, rq) :
-                                                TextSearch.queryvector(profile.model, rq)
         ctx = checkout!(engine.search_ctx_pool)
         try
             snap = copy(ctx.costdists)
             res = knnqueue(KnnSorted, max(k, 1))
-            search(engine.index, ctx, q, res)
+            # As on `BM25Engine` above. The representation a set distance forces -- a
+            # presence-only bag rather than a weighted vector -- is the library's choice to
+            # make too; this module was mirroring its `is_set_distance` with a `parentmodule`
+            # check of its own.
+            search(engine.index, ctx, query, res; policy)
             evals = SimilaritySearch.distance_evaluations(ctx, snap)
             return _collect_live(engine, res, evals)
         finally
