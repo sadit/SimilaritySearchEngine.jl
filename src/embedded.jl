@@ -189,13 +189,40 @@ _invertedfile_on_change(obj_store::Persistence.InvertedFileObjectStore) =
     (index, sp, ep) -> Persistence.append_objects!(obj_store, sp, IndexEngine.invertedfile_objects(index, sp, ep))
 
 """
-    create_project(workdir, dataset; index_type=SearchGraph, textmodel=nothing, distance=nothing, minrecall=0.9, schema_version=1) -> EmbeddedEngine
+    create_project(workdir, dataset; engine=DenseEngine, backend=nothing, distance=nothing,
+                   minrecall=0.9, dimension=nothing, textmodel=nothing, schema_version=1) -> EmbeddedEngine
 
 Creates a brand-new project directly on disk at `<workdir>/<dataset>`, with no HTTP server or
 CLI subprocess involved -- the same on-disk layout `similarity-search build` already produces,
 so a project created this way can later be inspected/rebuilt/dumped by the CLI, or reopened by
-[`open_project`](@ref). `distance`, left at its default `nothing`, defers to whichever default
-`IndexEngine.create_engine` picks for `index_type` (e.g. `SqL2()` for a `SearchGraph`,
+[`open_project`](@ref).
+
+Two keywords say what the project *is*, and they are separate on purpose:
+
+- `engine` is what it holds -- `DenseEngine` (dense vectors, the default), `SparseEngine`
+  (sparse vectors you encoded) or `FullTextEngine` (text this package encodes). It also fixes
+  the item type [`append_items!`](@ref) will accept: `DenseItem`, `SparseItem`, `TextItem`.
+- `backend` is the index that holds it, defaulting to that engine's own
+  (`IndexEngine.default_backend`): a `SearchGraph`, an `InvertedFile`, a `BM25InvertedFile`.
+  `IndexEngine.BACKENDS` is the table of legal pairings, and an illegal one is refused here
+  with a message naming the alternatives rather than failing later on a `MethodError`.
+
+So `create_project(workdir, "ds")` is a dense project on a self-tuning `SearchGraph`, and every
+other shape is one or two keywords away:
+
+```julia
+create_project(w, ds; engine=DenseEngine,    backend=ExhaustiveSearch)
+create_project(w, ds; engine=SparseEngine,   dimension=50_000)
+create_project(w, ds; engine=FullTextEngine, backend=TextInvertedFile,
+                      textmodel=DefaultProfile(:es))
+```
+
+`dimension` is required for a sparse project and refused for any other. An `InvertedFile` is a
+fixed array of posting lists, so its size is structural rather than descriptive: it has to be
+known before the first item, and every `SparseItem` appended has to agree with it.
+
+`distance`, left at its default `nothing`, defers to whichever default
+`IndexEngine.default_distance` names for the chosen backend (`SqL2()` for the dense ones,
 `NormCosine()` for an `InvertedFile`) instead of this function imposing one blanket default
 across every index kind. `minrecall` is the target recall a `DenseEngine{GraphBackend}` autotunes
 `BeamSearch` toward as it grows (see `IndexEngine.DenseEngine{GraphBackend}`); it must be given here,
@@ -219,10 +246,12 @@ forms, in the order worth preferring them:
   corpus, delegated whole to `TextSearch.fit_profile`. Bounded in cost and thin in vocabulary,
   so terms appended later that the sample never held are dropped from then on.
 
-Passing a `textmodel` to a *dense* project is an error rather than an ignored keyword: there is
-no reading under which it does anything, and swallowing it silently is how a project ends up
-not being the kind its author thought it was. The spec is persisted with the project and
-restored verbatim by [`open_project`](@ref).
+Passing a `textmodel` to a *dense or sparse* project is an error rather than an ignored keyword:
+there is no reading under which it does anything, and swallowing it silently is how a project
+ends up not being the kind its author thought it was. That check is the engine's rather than the
+backend's, because `InvertedFile` is a legal backend for both a sparse and a text project, so the
+backend alone cannot answer it. The spec is persisted with the project and restored verbatim by
+[`open_project`](@ref).
 
 `schema_version` is stamped onto every `Schema.MetadataRecord` [`append_items!`](@ref)
 writes for this project's lifetime (not persisted/restored itself -- like `minrecall`
@@ -234,15 +263,14 @@ own interpretation of it.
 The engine's index itself is persisted incrementally as it grows, not rewritten wholesale
 on every `append_items!` call: for a `SearchGraph`, every [`index!`](@ref index!(::EmbeddedEngine))
 call saves just the direct-links-only block it just built (see
-[`_searchgraph_on_change`](@ref)); for a `BM25InvertedFile`/`InvertedFile` project, every
-`index!` call likewise saves just the newly-encoded objects it just indexed (see
-[`_invertedfile_on_change`](@ref)) -- both engine kinds have a staging split
-([`append_items!`](@ref) itself durably stages raw vectors/text right away, see that
-function's docstring). Only `DenseEngine{<:ExactBackend}` (`ExhaustiveSearch`/`ParallelExhaustiveSearch`,
-no staging split at all) instead flags a pending whole-index save that happens right after
-each `add_item!` call returns (see [`_maybe_flush_index!`](@ref)); [`close_project!`](@ref)
-forces one final flush of that so nothing recent is lost -- the other two kinds never have
-anything left to flush there, since each block is already durable the instant it's saved.
+[`_searchgraph_on_change`](@ref)); for the inverted-file backends -- a text project's and a
+sparse project's alike -- every insertion likewise saves just the newly-encoded objects it just
+indexed (see [`_invertedfile_on_change`](@ref)). Only an exact dense backend
+(`ExhaustiveSearch`/`ParallelExhaustiveSearch`) instead flags a pending whole-index save that
+happens right after each `add_item!` call returns (see [`_maybe_flush_index!`](@ref));
+[`close_project!`](@ref) forces one final flush of that so nothing recent is lost -- every other
+backend never has anything left to flush there, since each block is already durable the instant
+it is saved.
 """
 function create_project(workdir::String, dataset::String;
                         engine::Type=DenseEngine, backend::Union{Nothing,Type}=nothing,

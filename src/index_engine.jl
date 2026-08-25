@@ -447,7 +447,7 @@ Base.show(io::IO, s::DefaultProfile) = print(io, "DefaultProfile(:", s.language,
 """
     is_text_index_type(::Type) -> Bool
 
-Whether an `index_type` names one of the text index kinds -- the ones that take a
+Whether a backend type is one of the text ones -- the ones that take a
 [`AbstractTextModelSpec`](@ref) and reject nothing else. `InvertedFile` and
 `TextInvertedFile` both name the weighted engine (see [`FullTextEngine`](@ref)).
 """
@@ -487,11 +487,15 @@ function _reject_textmodel(IndexType::Type, textmodel)
 end
 
 """
-    validate_textmodel(index_type::Type, textmodel) -> Union{Nothing, AbstractTextModelSpec}
+    validate_textmodel(backend::Type, textmodel) -> Union{Nothing, AbstractTextModelSpec}
 
-Checks `textmodel` against `index_type` -- required for a text index kind, refused for a dense
-one -- and hands back the spec (or `nothing` for a dense kind). Raises the same errors
-[`create_engine`](@ref) would.
+Checks `textmodel` against a *backend* -- required for a text one, refused for a dense one --
+and hands back the spec (or `nothing`). Raises the same errors [`create_engine`](@ref) would.
+
+A backend and not an engine, which is a real limit worth naming: `InvertedFile` is legal under
+both `SparseEngine` and `FullTextEngine`, so this cannot tell a sparse project from a text one.
+`create_project` therefore checks the sparse case itself, against the engine the caller named,
+and only delegates here for a text project.
 
 Split out so a caller can run the check *before* committing to anything: `create_project`
 opens the project's RocksDB directory before it ever reaches `create_engine`, so letting the
@@ -1040,9 +1044,9 @@ function validate_backend(engine::Type, backend::Type)
 end
 
 """
-    default_distance(index_type::Type) -> PreMetric
+    default_distance(backend::Type) -> PreMetric
 
-The distance an index kind is built with when the caller does not name one.
+The distance a backend is built with when the caller does not name one.
 
 It lives here, as a function of the index kind, because the alternative is what this package
 had: a default on `create_engine` *and* a `distance=nothing` sentinel on `create_project`,
