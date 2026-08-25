@@ -186,9 +186,11 @@ load_neighbors(store::AdjacencyStore, object_id::Integer) = get(store.dict, stri
 # Dense vector persistence for SearchGraph -- NOT a RocksDB column family (unlike every
 # other store in this module): a dedicated `SimilaritySearch.MMapMatrixDatabase` file
 # alongside the project's RocksDB directory. Vectors are fixed-dimension dense Float32
-# data, exactly what MMapMatrixDatabase is for -- its own append-only counter/growth/fsync
-# discipline already gives durable, in-order, crash-safe storage (see its own docstring)
-# with no need for the batch-keying scheme AdjacencyStore/InvertedFileObjectStore use, and
+# data, exactly what MMapMatrixDatabase is for -- its append-only counter/growth discipline
+# gives in-order, crash-safe storage (see its own docstring) with no need for the
+# batch-keying scheme AdjacencyStore/InvertedFileObjectStore use; durability itself is
+# opt-in on that type (see its docstring's "Durability" section) and is arranged by
+# `embedded.jl`'s `append_items!`, which flushes it right after every staged batch. And
 # `getindex` on a memory-mapped file is far cheaper than a RocksDB point read (confirmed
 # empirically against `VectorDatabase`/`BlockMatrixDatabase` in SimilaritySearch.jl's own
 # test suite). This replaces the previous RocksDB-backed `DenseVectorStore`/`DENSE_DB_CF`.

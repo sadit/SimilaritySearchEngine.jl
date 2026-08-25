@@ -166,6 +166,36 @@ const ACCENT_ITEMS = vcat(
         end
     end
 
+    @testset "dense dataset: a staged-but-not-yet-indexed backlog survives close + reopen" begin
+        mktempworkdir() do workdir
+            items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:20]]
+            indexed, backlog = items[1:12], items[13:20]
+
+            # The dense counterpart of the text test below, and it earns its own case because
+            # its durability comes from somewhere else entirely: staged vectors live in a
+            # `MMapMatrixDatabase`, whose persistence is opt-in -- `push_item!`/`append_items!`
+            # advance the in-memory count and write the mapped bytes without msyncing them or
+            # persisting the advanced header. `append_items!` flushing once per batch is what
+            # makes this survive, and nothing else in this suite would notice if it stopped.
+            h = create_project(workdir, "dense_backlog_ds")
+            append_items!(h, dense_items(indexed))
+            index!(h)
+            append_items!(h, dense_items(backlog))   # staged, deliberately left un-indexed
+            close_project!(h)
+
+            h2 = open_project(workdir, "dense_backlog_ds")
+            # the backlog is not searchable yet -- what comes back is the indexed prefix
+            ids_before = [r.doc_id for r in search(h2, backlog[1]["vector"], 5)]
+            @test !(backlog[1]["doc_id"] in ids_before)
+
+            index!(h2)
+            hit = search(h2, backlog[1]["vector"], 3)
+            @test hit[1].doc_id == backlog[1]["doc_id"]
+            @test hit[1].distance ≈ 0.0 atol=1e-6
+            close_project!(h2)
+        end
+    end
+
     @testset "text dataset: a staged-but-not-yet-indexed backlog survives close + reopen" begin
         mktempworkdir() do workdir
             items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:20]]

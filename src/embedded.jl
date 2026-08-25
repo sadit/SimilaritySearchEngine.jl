@@ -459,10 +459,12 @@ each newly-encoded object incrementally (see [`_invertedfile_on_change`](@ref)).
 # Performance: batch size matters a lot for a `SearchGraph` (dense) project
 
 Every call here does *one* `SimilaritySearch.append_items!` call into the project's
-`MMapMatrixDatabase` for its whole batch of staged vectors -- and that type flushes and
-`fsync`s once per `append_items!` call (never per individual vector), so the number of
-calls to *this* function a caller makes (not the total vector count) is what drives
-wall-clock time. Confirmed empirically, 200,000 128-dim vectors written as one project's
+`MMapMatrixDatabase` for its whole batch of staged vectors, followed by *one*
+`SimilaritySearch.flush` of it (durability is opt-in on that type now -- see its docstring's
+"Durability" section -- and staying durable right away, as documented above, is this
+function's job to arrange, not the database's). So the number of calls to *this* function a
+caller makes (not the total vector count) is what drives wall-clock time, exactly as before:
+confirmed empirically, 200,000 128-dim vectors written as one project's
 dense store: one 200,000-item call (1 fsync) took ~0.10s; the same total split into calls
 of 1,000 items (200 fsyncs) took ~0.14s; split into calls of 100 items (2,000 fsyncs) took
 ~0.31s; split into calls of 10 items (20,000 fsyncs) took ~2.1s. Calling this function once
@@ -517,6 +519,10 @@ function append_items!(handle::EmbeddedEngine, items::AbstractVector{<:Schema.Ab
             handle.dense_vectors[] = MMapMatrixDatabase(Persistence.dense_vectors_path(handle.dir), length(staged_vectors[1]), Float32)
         end
         SimilaritySearch.append_items!(handle.dense_vectors[], staged_vectors)
+        # `MMapMatrixDatabase` no longer msyncs/fsyncs on its own (see its docstring's
+        # "Durability" section) -- making a staged batch durable right away, which is the
+        # contract this function documents, is this module's job now.
+        SimilaritySearch.flush(handle.dense_vectors[])
     end
 
     if is_text && !isempty(staged_texts)
