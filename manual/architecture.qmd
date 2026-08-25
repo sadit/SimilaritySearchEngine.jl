@@ -54,78 +54,119 @@ straight from `Project`, never indexed.
 
 ## Engine type hierarchy
 
-Every index kind (`SearchGraph`, `ExhaustiveSearch`/`ParallelExhaustiveSearch`,
-`BM25InvertedFile`, `InvertedFile`) gets its own concrete engine struct, each carrying only
-the state that kind actually needs. There is no enum tag or string name anywhere in this
-hierarchy — the concrete Julia type itself is what `add_item!`, `search_live`,
-`restore_engine`, and every other generic function dispatch on.
+A project is two decisions, and the hierarchy keeps them apart: an **engine** says what the
+project holds, and a **backend** says which index holds it.
+
+```{julia}
+#| eval: false
+create_project(w, ds)                                              # dense vectors, SearchGraph
+create_project(w, ds; engine=DenseEngine, backend=ExhaustiveSearch)
+create_project(w, ds; engine=SparseEngine, dimension=50_000)
+create_project(w, ds; engine=FullTextEngine, backend=BM25InvertedFile,
+                      textmodel=DefaultProfile(:es))
+```
+
+Three engines, because there are three kinds of thing a caller can hand over — a dense vector,
+a sparse vector, a string — and each needs a different amount of machinery to accept it. Four
+backends, because there are four ways to hold an index and they carry different state. There is
+still no enum tag anywhere: the concrete Julia type is what `add_item!`, `search_live` and every
+other generic function dispatch on, and `DenseEngine{B}` dispatches on its backend too.
 
 ```{mermaid}
 classDiagram
     class AbstractSearchEngine {
         <<abstract>>
     }
-    class SearchGraphEngine {
+    class DenseEngine~B~ {
+        backend: B
+        search_ctx_pool: ContextPool
+        deleted_ids: Set~UInt32~
+        lock: ReadWriteLock
+    }
+    class SparseEngine {
+        backend: SparseBackend
+        search_ctx_pool: ContextPool
+        deleted_ids: Set~UInt32~
+        lock: ReadWriteLock
+    }
+    class FullTextEngine {
+        backend: TextBackend
+        profile: Union~Nothing, TextProfile~
+        fitspec: Union~Nothing, DeferredFit~
+        staged: Vector~String~
+        search_ctx_pool: ContextPool
+        deleted_ids: Set~UInt32~
+        lock: ReadWriteLock
+    }
+    class GraphBackend {
         index: SearchGraph
         ctx: SearchGraphContext
         minrecall: Union~Nothing, Float32~
         opt_beamsearch: OptBeamSearch
-        search_ctx_pool: ContextPool
-        deleted_ids: Set~UInt32~
-        lock: ReadWriteLock
     }
-    class GenericEngine~IndexType~ {
+    class ExactBackend~IndexType~ {
         index: IndexType
-        ctx: Any
-        search_ctx_pool: ContextPool
-        deleted_ids: Set~UInt32~
-        lock: ReadWriteLock
+        ctx: GenericContext
     }
-    class BM25Engine {
-        index: Union~Nothing, BM25InvertedFile~
-        profile: Union~Nothing, TextProfile~
-        textconfig: TextConfig
-        variants: Union~Nothing, Dict~
-        staged: Vector~String~
+    class SparseBackend {
+        index: InvertedFile
         ctx: InvertedFileContext
-        search_ctx_pool: ContextPool
-        deleted_ids: Set~UInt32~
-        lock: ReadWriteLock
-    }
-    class InvertedFileEngine {
-        index: Union~Nothing, TextInvertedFile~
-        profile: Union~Nothing, TextProfile~
-        textconfig: TextConfig
-        variants: Union~Nothing, Dict~
         distance: PreMetric
-        staged: Vector~String~
-        ctx: InvertedFileContext
-        search_ctx_pool: ContextPool
-        deleted_ids: Set~UInt32~
-        lock: ReadWriteLock
+        dimension: Int
     }
-    AbstractSearchEngine <|-- SearchGraphEngine
-    AbstractSearchEngine <|-- GenericEngine
-    AbstractSearchEngine <|-- BM25Engine
-    AbstractSearchEngine <|-- InvertedFileEngine
+    class TextBackend {
+        index: Union~Nothing, AbstractInvertedFile~
+        ctx: InvertedFileContext
+        kind: Type
+        distance: Union~Nothing, PreMetric~
+    }
+    AbstractSearchEngine <|-- DenseEngine
+    AbstractSearchEngine <|-- SparseEngine
+    AbstractSearchEngine <|-- FullTextEngine
+    DenseEngine *-- GraphBackend
+    DenseEngine *-- ExactBackend
+    SparseEngine *-- SparseBackend
+    FullTextEngine *-- TextBackend
 ```
 
 A few design choices worth calling out:
 
-- `GenericEngine{IndexType}` covers `ExhaustiveSearch`/`ParallelExhaustiveSearch` (and any
-  future dense index with no engine-specific state) with a single struct parameterized by
-  the wrapped index type, instead of one struct per index kind.
-- `minrecall`/`opt_beamsearch` only exist on `SearchGraphEngine` — only a `SearchGraph`
-  autotunes a `BeamSearch` toward a target recall.
-- `BM25Engine` and `InvertedFileEngine` each carry their whole text model in one field,
+- **The split exists because of `SparseEngine`.** Before it, the hierarchy was one struct per
+  index kind — a `SearchGraphEngine`, a `GenericEngine{IndexType}`, a `BM25Engine`, an
+  `InvertedFileEngine` — which sorted projects by the thing a caller is least likely to know and
+  most likely to change. It also left a hole: an `InvertedFile` and its distance were reachable
+  only *through* a text engine, so a caller who already held sparse vectors had to pretend to
+  have text — fit a profile it did not want, stage strings it did not have. `SparseEngine` is
+  that missing layer, and separating the two decisions is what made it expressible.
+- **`payload_kind(engine)`** returns `:dense`, `:sparse` or `:text`, and is what guards ask
+  instead of the `is_text_index` predicate they used to. With two kinds, "not text" meant
+  "dense"; with three that reading is simply false.
+- **`BACKENDS`** is the table of legal pairings, read three ways — to default a backend, to
+  check one, and to name the alternatives in the error when a check fails. `InvertedFile`
+  appears under both `SparseEngine` and `FullTextEngine` on purpose: the same library index
+  serves sparse vectors a caller encoded and text this package encodes, and `engine` is what
+  says which. Three methods instead of one table would drift; the table cannot.
+- **BM25 is not one of `SparseEngine`'s distances**, which is the one asymmetry worth
+  explaining. `BM25InvertedFile` holds a `Vocabulary` and scores from `getndocs`/`avgdoclen`:
+  BM25 is a scoring rule over a corpus, not a metric over sparse vectors. So it stays with
+  `FullTextEngine`, which has the corpus statistics, and `SparseEngine` takes the distances that
+  read a vector — cosine over the weights, or one of `Dist.Sets.*` over the nonzero positions.
+- `minrecall`/`opt_beamsearch` live on `GraphBackend` and nowhere else — only a `SearchGraph`
+  autotunes a `BeamSearch` toward a target recall. On the engine they would be two fields every
+  exact and every inverted-file project could only ever leave empty.
+- `SparseBackend` records the `dimension` it was created with, and `create_project` requires it
+  for a sparse project. An `InvertedFile` is a fixed array of posting lists: the dimension is
+  structural, not descriptive, so it has to be known before the first item and every item
+  appended has to agree with it.
+- `FullTextEngine` carries its whole text model in one field,
   `profile::Union{Nothing, TextProfile}` — vocabulary and weights (`profile.model`) plus the
   corpus-produced artifacts (stopword set, lemma map, query-expansion network) and the
-  lineage saying how it was produced. That replaces the `voc`/`model` pair they carried
-  before `TextSearch` 1.1 published `TextProfile`, and the reason to prefer it is
-  structural: an artifact has exactly one home, and the `TextConfig` the tokenizer runs is
-  *derived* from the profile, so an index cannot end up tokenizing documents through a
-  different lemma map than the one it saves.
-- A text engine is created from an `AbstractTextModelSpec`: three answers to "where does the
+  lineage saying how it was produced. That replaced a `voc`/`model` pair carried before
+  `TextSearch` 1.1 published `TextProfile`, and the reason to prefer it is structural: an
+  artifact has exactly one home, and the `TextConfig` the tokenizer runs is *derived* from the
+  profile, so an index cannot end up tokenizing documents through a different lemma map than
+  the one it saves.
+- A text project is created from an `AbstractTextModelSpec`: three answers to "where does the
   vocabulary come from", not variations on one setting. `BaseProfile(profile)` trains it at
   creation. `DefaultProfile(:es)` and `FitFromCorpus(textconfig; …)` leave it untrained and
   store the recipe in `fitspec`, for the first `index!` call to carry out — the first by loading
@@ -141,51 +182,54 @@ A few design choices worth calling out:
   library does. What delegation costs is that a fit is now the *full* pipeline — LSI, expansion
   network, lemma clustering — with no cheap variant, which is why `FitFromCorpus` caps its
   sample at `max_documents` and why the recommended path avoids fitting altogether.
-- `create_engine` **requires** the spec and refuses `nothing`, and the dense kinds refuse a
-  spec rather than ignoring one. Both directions are deliberate. The fit-from-corpus form
-  freezes the vocabulary at the first `index!` call, so every term a later batch introduces
-  is dropped from then on — nothing about the project's behaviour afterwards distinguishes
-  "I chose this" from "I never said", which is exactly why it cannot be a default. In the
-  other direction, a text model handed to an index of vectors has no reading under which it
-  does anything, so swallowing it is how a project ends up not being the kind its author
+- `create_project` **requires** the spec for a text project and refuses `nothing`, and the other
+  two kinds refuse a spec rather than ignoring one. Both directions are deliberate. The
+  fit-from-corpus form freezes the vocabulary at the first `index!` call, so every term a later
+  batch introduces is dropped from then on — nothing about the project's behaviour afterwards
+  distinguishes "I chose this" from "I never said", which is exactly why it cannot be a default.
+  In the other direction, a text model handed to an index of vectors has no reading under which
+  it does anything, so swallowing it is how a project ends up not being the kind its author
   thought it was. Each spec is a type carrying its *own* options, so an option that only
   means something on one path cannot be handed to the other — the same reason this hierarchy
   discriminates on concrete types instead of an enum tag.
-- `variants` caches the orthographic variant map a query is bridged with (`musica` →
-  `música`). It is a pure function of the frozen vocabulary, so it is derived once, the
-  moment `profile` is set, rather than per query — deriving it costs ~0.24s over a
-  half-million-token vocabulary, and doing it up front also keeps `search_live` free of any
-  write to the engine, so it stays safe under a plain read lock. It is not persisted:
-  reopening a project re-derives it from the restored vocabulary.
-- Every kind shares three fields regardless of what else it carries: `deleted_ids::Set{UInt32}`
+- **Query-side orthographic bridging is the library's too.** This engine used to derive and
+  cache a variant map itself (`musica` → `música`) in a `variants` field. `TextSearch` 1.1 builds
+  that map inside the index's own `QueryPipeline`, so the field is gone and a `QueryPolicy`
+  passed to `ftsearch` modifies how the existing map is *applied* rather than rebuilding it. One
+  map, in the index that owns it.
+- Every engine shares three fields regardless of what else it carries: `deleted_ids::Set{UInt32}`
   (logically deleted document ids — `UInt32` uniformly, matching the id type search
   results actually come back as), `lock::ReadWriteLock`, and `search_ctx_pool::ContextPool`
   (see below).
 
-## Staging vs. indexing: every engine kind has the split except exact search
+## Staging vs. indexing: a graph and a text project have the split, the rest index on insertion
 
-`append_items!`/`add_item!` only ever *stages* an item — for `SearchGraphEngine`,
-`BM25Engine`, and `InvertedFileEngine` alike; `search_live`/`ftsearch`/`allknn`/`fft`/
-`closestpairs`/`bichromatic_kclosestpairs` only ever see items an explicit `index!` call
-has actually processed, not merely staged. `GenericEngine`
-(`ExhaustiveSearch`/`ParallelExhaustiveSearch`) is the one exception: it always evaluates
-directly against `db`, so `append_items!`/`add_item!` indexes it synchronously and it has
-no `index!` method of its own.
+`append_items!`/`add_item!` only ever *stages* an item for a graph-backed dense project and for
+a text one; `search_live`/`ftsearch`/`allknn`/`fft`/`closestpairs`/`bichromatic_kclosestpairs`
+only ever see items an explicit `index!` call has actually processed, not merely staged.
+
+The other two backends have no split to speak of. An exact index (`ExhaustiveSearch`/
+`ParallelExhaustiveSearch`) always evaluates directly against `db`, and an `InvertedFile` builds
+its posting lists on insertion, so for both of them `append_items!` makes an item searchable
+immediately. `index!` is still defined for them, as a no-op: the same four lines —
+`create_project`, `append_items!`, `index!`, `search` — should mean the same thing for every kind
+of project, and a caller should not have to know which backends need the third one. The cost is a
+call that does nothing, which is the cheaper mistake; the alternative made switching a project
+from a graph to a brute-force scan a change to every script that fed it.
 
 `SimilaritySearch.jl`'s own `SearchGraph` separates *staging* raw vectors into its
 database from the (expensive) graph-connection work, and this package extends that same
-split to the two inverted-file text engines, which have no such native support of their
-own to lean on:
+split to the text backends, which have no such native support of their own to lean on:
 
-- `SearchGraphEngine`: `insert_dense!(index::SearchGraph, ctx, item) = push_item!(index.db, item)`
+- graph-backed dense: `insert_dense!(index::SearchGraph, ctx, item) = push_item!(index.db, item)`
   only ever appends `item` to `index.db` — cheap, and durable the instant it happens (see
   Persistence below), but `index.adj` (the graph itself) is untouched.
-  `IndexEngine.index!(engine::SearchGraphEngine)` is the explicit, idempotent step that
+  `IndexEngine.index!(engine::DenseEngine{GraphBackend})` is the explicit, idempotent step that
   actually builds graph connections for whatever has been staged since the last call (or
   since creation) — it delegates to `SimilaritySearch.index!(engine.index, engine.ctx)`,
   which itself only ever processes the backlog (`length(engine.index)+1:length(database(engine.index))`),
   so calling it repeatedly, or with nothing new staged, is a cheap no-op.
-- `BM25Engine`/`InvertedFileEngine`: `add_item!` just pushes raw text onto `engine.staged`
+- text: `add_item!` just pushes raw text onto `engine.staged`
   — the text-engine counterpart of `index.db`, since `TextSearch.jl`'s inverted-file types
   have no raw-item staging area of their own to reuse. `IndexEngine.index!(engine)` (no
   corpus argument) catches up the exact same backlog range
@@ -196,8 +240,7 @@ own to lean on:
   *first* call for a project created without a profile: since neither index kind can even be
   constructed without a `Vocabulary`, that call runs the engine's `fitspec` over what is staged
   so far and builds the real index against the resulting `TextProfile`, before running the same
-  backlog loop. Every later call is a plain catch-up, identical in shape to
-  `SearchGraphEngine`'s.
+  backlog loop. Every later call is a plain catch-up, identical in shape to the graph's.
 
   A project created from a `BaseProfile` skips that entirely, and the difference is not only
   when the work happens: a vocabulary fitted from a sample of the first batch is frozen there,
@@ -209,14 +252,14 @@ This decouples *when* an item becomes durable (immediately, on `append_items!`) 
 *when* it becomes searchable (only after an explicit `index!`), so a caller controls when
 the expensive graph-connection/encoding cost is paid — once per big batch, on a schedule,
 or right before the next round of queries — instead of paying it synchronously on every
-single insert the way `GenericEngine` still does.
+single insert the way an exact or an inverted-file backend does.
 
 ## Concurrency model
 
-None of the four underlying index kinds tolerates a search running concurrently with an
+None of the underlying index kinds tolerates a search running concurrently with an
 insertion into the *same* index — a search reading `index.adj`/`index.db` while
 `add_item!` resizes/appends to those same arrays is exactly the kind of concurrent
-read-during-mutation none of them are built for. But all four *do* safely support running
+read-during-mutation none of them are built for. But all of them *do* safely support running
 multiple searches concurrently against the same index, since that is exactly what their
 own `searchbatch`/`allknn` parallel paths already rely on internally.
 
@@ -248,7 +291,7 @@ sequenceDiagram
 
 A read-to-write "upgrade" on the same logical operation would deadlock (the write lock
 waits for the reader count to hit zero, including the reader this same call is itself
-holding) — so a `SearchGraphEngine`'s `minrecall`-driven auto-`calibrate!` inside
+holding) — so a graph backend's `minrecall`-driven auto-`calibrate!` inside
 `search_live` is always resolved *before* the read lock is acquired, never nested inside
 it.
 
@@ -337,7 +380,7 @@ engine's vocabulary is first trained). A soft delete only ever rewrites `:delete
 
 ### Dense vectors: a memory-mapped file, not a RocksDB column family
 
-A `SearchGraphEngine`'s raw vectors are fixed-dimension `Float32` data — exactly what
+A graph-backed project's raw vectors are fixed-dimension `Float32` data — exactly what
 `SimilaritySearch.MMapMatrixDatabase` is for, and its own append-only counter/growth/fsync
 discipline already gives durable, in-order, crash-safe storage with no need for
 RocksDB's batch-keying scheme, at a much cheaper per-vector read than a RocksDB point
@@ -393,14 +436,17 @@ which can lag behind how many vectors are staged in `dense_vectors.mmapdb` if th
 closed between an `append_items!` and its follow-up `index!`) lets reloading resume
 exactly where indexing left off, over the same, already-fully-restored `.db`.
 
-`BM25InvertedFile`/`InvertedFile` have no direct/reverse-link hazard: their own `LOG` only
+The inverted-file backends — `BM25InvertedFile` and `TextInvertedFile` for a text project,
+`InvertedFile` for a sparse one — have no direct/reverse-link hazard: their own `LOG` only
 fires after a `push_item!` call's mutation is fully done, so `InvertedFileObjectStore`
 simply appends the raw encoded objects just inserted (`invertedfile_objects`) as a new
-block. `LOG` here fires from *inside* an `index!` call's backlog loop (see "Staging vs.
-indexing" above) rather than from `append_items!` directly — `append_items!` only ever
-writes to
-`StagedTextStore`, the raw-text counterpart of `dense_vectors.mmapdb`; `sparse_db`'s
-already-encoded blocks only grow once an `index!` call actually catches the backlog up.
+block. For a **text** project that `LOG` fires from *inside* an `index!` call's backlog loop
+(see "Staging vs. indexing" above) rather than from `append_items!` directly — `append_items!`
+only ever writes to `StagedTextStore`, the raw-text counterpart of `dense_vectors.mmapdb`, and
+`sparse_db`'s already-encoded blocks only grow once an `index!` call actually catches the
+backlog up. For a **sparse** project there is no such indirection and no `StagedTextStore` at
+all: the caller handed over the encoded vector itself, so the insertion *is* the encoding and
+the block is written on `append_items!`.
 Reloading `index` itself still rebuilds the whole thing by replaying every saved *encoded*
 object back through the library's own `push_item!` — a rebuild-by-reinsertion design, not
 a real on-disk posting-list format — while `staged` (every raw text ever staged, whether
@@ -411,12 +457,12 @@ whole rebuilt index have to fit in memory and reloading costs the full original 
 time again. It is *not* a design for billion-document corpora, which need genuinely
 disk-backed, paged-on-demand posting lists.
 
-`GenericEngine` (`ExhaustiveSearch`/`ParallelExhaustiveSearch`) has no incremental format
+An exact backend (`ExhaustiveSearch`/`ParallelExhaustiveSearch`) has no incremental format
 of its own — its `on_change` just flags `pending_flush[]`, and `embedded.jl` saves the
 *whole* index as a single `:index` value right after the triggering `add_item!` call
 returns. This is acceptable for these exact, in-memory-only index kinds, which have no
 adjacency or posting-list structure to split apart in the first place, and index
-synchronously on every `add_item!` same as the text engines.
+synchronously on every `add_item!`.
 
 ### Reopening a project
 
@@ -437,7 +483,7 @@ sequenceDiagram
     IE->>IE: add! each of the first graph_len objects' saved direct neighbors
     IE->>IE: connect_reverse_links! once, over 1:graph_len
     IE-->>Caller: reconstructed SearchGraph -- index.len[] = graph_len
-    Caller->>IE: restore_engine(state, on_change) → SearchGraphEngine
+    Caller->>IE: restore_engine(state, on_change) → DenseEngine{GraphBackend}
 ```
 
 `graph_len` can be `<= length(index.db)`: every staged vector is always fully restored
@@ -447,17 +493,22 @@ of them were ever graph-indexed before the project last closed — if it closed 
 searchable, waiting on a future `index!(handle)` call to catch it up, exactly as it was
 before closing.
 
-`restore_engine` dispatches on `state.kind` exactly the way `create_engine` dispatches on
-an index type. `IndexEngine.extra_state_fields(kind)` only covers `GenericEngine`'s
-wrapped index types (`ExhaustiveSearch`/`ParallelExhaustiveSearch`) — the static, per-kind
-list of extra `EngineStore` keys `open_project`'s generic fallback branch reads back
-before an engine instance exists to ask `snapshot_state` directly. `SearchGraphEngine`/
-`BM25Engine`/`InvertedFileEngine` are deliberately *not* covered by it: each needs its own
-dedicated combination of `EngineStore` fields (`:minrecall`/`:opt_beamsearch` for
-`SearchGraphEngine`; `:profile`/`:fitspec` for `BM25Engine`; those two plus
-`:distance` for `InvertedFileEngine`) *plus* its own dedicated block-store reads (`vector_blocks`/
-`load_neighbors`/`graph_len` for `SearchGraphEngine`; `object_blocks`/`staged` for the two
-text engines) assembled by hand, directly in `open_project`, rather than a generic
+`restore_engine` dispatches on `Val(state.kind)` — `:dense`, `:sparse` or `:text` — and each
+branch then reads `state.backend` to pick the index within that kind. Both are **symbols, not
+Julia types**, and that is what makes a saved project survive this file being rewritten: the
+previous shape persisted the type `BM25Engine` into the project's own store, so renaming the
+types (which this restructuring did to every one of them) made every existing project
+unreadable by construction. A symbol cuts that tie, and an unrecognised one maps to an error
+naming the ones the reader does know instead of a `MethodError` about a type it has never
+heard of.
+
+`IndexEngine.extra_state_fields` only covers the exact backends, and covers them with `()` —
+their whole index is a single `:index` field, so there is nothing extra to list. No other
+backend has such a field at all: each needs its own combination of `EngineStore` reads
+(`:minrecall`/`:opt_beamsearch` for a graph; `:distance`/`:dimension` for a sparse project;
+`:profile`/`:fitspec`/`:distance` for a text one) *plus* its own dedicated block-store reads
+(`vector_blocks`/`load_neighbors`/`graph_len` for a graph; `object_blocks`/`staged` for the
+inverted-file kinds), assembled by hand in `open_project` rather than driven by a generic
 per-kind field list.
 
 ## Logging: informative output and persistence are independent
@@ -511,7 +562,7 @@ neighbors at once; `fft` (Farthest-First-Traversal) picks `k` well-separated ite
 diverse sampling; `closestpairs` finds the `k` globally closest pairs within one project
 (near-duplicate/echo detection); `bichromatic_kclosestpairs` finds the `k` closest pairs
 between a project's own index and a second, unindexed collection of vectors. All four
-require a dense (`SearchGraphEngine`) project that's had `index!` run at least once — none
+require a graph-backed dense project that's had `index!` run at least once — none
 apply to a text project.
 
 ## Where this leaves `SimilaritySearchServer`

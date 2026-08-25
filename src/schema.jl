@@ -191,7 +191,7 @@ its `payload` -- the very text, dense vector or sparse vector that was indexed.
 `payload` is what a search result needs and what the dictionary-returning `fetch_items` could
 not give: `text` was a reserved key, stripped before anything reached the metadata store, so a
 hit came back with everything *about* the paragraph and not the paragraph. It is `nothing` only
-when the payload cannot be read back -- a `GenericEngine` whose id is out of range, or an
+when the payload cannot be read back -- a `DenseEngine{<:ExactBackend}` whose id is out of range, or an
 engine kind with no per-item storage to consult.
 """
 struct StoredItem

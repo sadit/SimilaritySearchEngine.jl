@@ -76,3 +76,52 @@ end
     end
     @test isempty(internal)
 end
+
+# A docstring separated from its definition by a blank line documents nothing: Julia parses it
+# as a bare string expression, the definition ends up undocumented, and every `@ref` pointing at
+# it fails to resolve. Nothing about that is visible in the source -- the docstring is right
+# there, above the right function, looking correct -- and it cost `snapshot_state`'s entire
+# docstring, found only because Documenter complained about links to a name it could not see.
+"""
+    detached_docstrings(path) -> Vector{Int}
+
+Line numbers in `path` where a `\"\"\"` block closes and the next non-empty line is a definition
+that the block therefore does not document.
+
+Line-based rather than parsed: `Meta.parseall` is what should catch this in principle, but a
+detached docstring is *valid* Julia -- a string, then a definition -- so the parse tree has
+nothing wrong with it to find.
+"""
+function detached_docstrings(path)
+    lines = split(read(path, String), "\n")
+    hits, indoc = Int[], false
+    for (i, ln) in enumerate(lines)
+        st = strip(ln)
+        (st == "\"\"\"" || (startswith(st, "\"\"\"") && !indoc && !endswith(st, "\"\"\""))) || continue
+        indoc = !indoc
+        indoc && continue                                    # this line opened one
+        i < length(lines) && isempty(strip(lines[i + 1])) || continue
+        after = something(findfirst(!isempty, strip.(lines[i+2:min(end, i + 6)])), 0)
+        after == 0 && continue                                # trailing blank lines: not a docstring
+        target = strip(lines[i + 1 + after])
+        occursin(r"^(function|macro|const|struct|mutable struct|abstract type|@)|^\w[\w!]*\(.*\)\s*=", target) &&
+            push!(hits, i)
+    end
+    hits
+end
+
+@testset "policy: every docstring is attached to what it documents" begin
+    src = normpath(joinpath(@__DIR__, "..", "src"))
+    detached = Tuple{String,Int}[]
+    for f in sort(readdir(src; join=true))
+        endswith(f, ".jl") || continue
+        append!(detached, ((basename(f), ln) for ln in detached_docstrings(f)))
+    end
+    if !isempty(detached)
+        println("docstrings detached from their definition by a blank line:")
+        for (file, ln) in detached
+            println("  ", file, ":", ln)
+        end
+    end
+    @test isempty(detached)
+end

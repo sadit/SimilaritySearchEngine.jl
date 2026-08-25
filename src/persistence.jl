@@ -39,7 +39,7 @@ numeric order -- iterating the column family directly (see `RocksDBDict`'s own "
 order is sorted key order") yields entries in the right sequence with no re-sorting after
 the fact. `EngineStore` still can't use this scheme for its own per-field keys, since it
 *does* share one column family across every engine struct field -- but nothing in this
-package currently needs an appending/growing field there (a `SearchGraphEngine`'s vectors
+package currently needs an appending/growing field there (a `DenseEngine{GraphBackend}`'s vectors
 now live in their own `MMapMatrixDatabase` file, see below, not RocksDB blocks), so that
 generic composite-key scheme has been removed rather than kept around unused.
 """
@@ -200,7 +200,7 @@ load_neighbors(store::AdjacencyStore, object_id::Integer) = get(store.dict, stri
     DENSE_VECTORS_FILENAME
 
 Filename (relative to a project's directory, alongside its RocksDB files) of the
-`SimilaritySearch.MMapMatrixDatabase` file backing a `SearchGraphEngine`'s dense vectors.
+`SimilaritySearch.MMapMatrixDatabase` file backing a `DenseEngine{GraphBackend}`'s dense vectors.
 """
 const DENSE_VECTORS_FILENAME = "dense_vectors.mmapdb"
 
@@ -266,7 +266,7 @@ const INVFILE_DB_CF = "sparse_db"
     InvertedFileObjectStore
 
 An append-only sequence of raw indexed objects (see `IndexEngine.invertedfile_objects`)
-for one `BM25Engine`/`InvertedFileEngine`, backed by its own RocksDB column family
+for one `FullTextEngine`, backed by its own RocksDB column family
 ([`INVFILE_DB_CF`](@ref)) -- kept separate from [`EngineStore`](@ref) for the same reason
 [`AdjacencyStore`](@ref) is: this can grow to one entry per indexed object, and shouldn't
 share a keyspace with the handful of other, small engine fields.
@@ -333,7 +333,7 @@ plain iteration over `store.dict` already comes back in ascending `sp` order (se
 load_object_blocks(store::InvertedFileObjectStore) = [objects for (_, objects) in store.dict]
 
 # ---------------------------------------------------------
-# Staged (raw, not-yet-encoded) text persistence for BM25Engine/InvertedFileEngine -- their
+# Staged (raw, not-yet-encoded) text persistence for FullTextEngine -- their
 # own RocksDB column family, holding what append_items! stages before any Vocabulary
 # exists to encode it against. Structurally identical to InvertedFileObjectStore (same
 # block-keyed-by-sp scheme, see _be_key) but a different concern: InvertedFileObjectStore
@@ -341,7 +341,7 @@ load_object_blocks(store::InvertedFileObjectStore) = [objects for (_, objects) i
 # CallbackLog once push_item! has fully indexed them; StagedTextStore holds plain raw
 # strings, written directly by embedded.jl's append_items! at stage time -- durable the
 # instant they're staged, before any Vocabulary/encoding work happens, the same treatment
-# append_items! already gives a SearchGraphEngine's raw vectors (see DENSE_VECTORS_FILENAME
+# append_items! already gives a DenseEngine{GraphBackend}'s raw vectors (see DENSE_VECTORS_FILENAME
 # above), just via RocksDB instead of an mmap file since text isn't fixed-size Float32 data.
 # ---------------------------------------------------------
 
@@ -358,12 +358,12 @@ const STAGED_TEXT_CF = "staged_text"
 """
     StagedTextStore
 
-An append-only sequence of raw, not-yet-encoded text blocks for one `BM25Engine`/
-`InvertedFileEngine`, backed by its own RocksDB column family ([`STAGED_TEXT_CF`](@ref)) --
-the text-engine counterpart of a `SearchGraphEngine`'s `dense_vectors.mmapdb`: every item
-`add_item!`/`append_items!` has ever staged (see `IndexEngine.BM25Engine`/
-`IndexEngine.InvertedFileEngine`'s `staged` field), whether or not
-`IndexEngine.index!(engine::IndexEngine.BM25Engine)` has caught it up into the real
+An append-only sequence of raw, not-yet-encoded text blocks for one `FullTextEngine`/
+`FullTextEngine`, backed by its own RocksDB column family ([`STAGED_TEXT_CF`](@ref)) --
+the text-engine counterpart of a `DenseEngine{GraphBackend}`'s `dense_vectors.mmapdb`: every item
+`add_item!`/`append_items!` has ever staged (see `IndexEngine.FullTextEngine`/
+`IndexEngine.FullTextEngine`'s `staged` field), whether or not
+`IndexEngine.index!(engine::IndexEngine.FullTextEngine)` has caught it up into the real
 `BM25InvertedFile`/`InvertedFile` yet.
 
 Keyed by each block's own starting position (`sp`, see [`_be_key`](@ref)) exactly like

@@ -8,7 +8,8 @@ by: Eric S. Téllez
 
 This tutorial walks through the embedded API end to end, using paragraphs from *Frankenstein*
 (bundled in this package's own test data) as a single running example: dense vector search
-with LSI-derived embeddings, full-text search with BM25 and TF-IDF, soft deletes, filtering,
+with LSI-derived embeddings, sparse vector search over vectors you encoded yourself, full-text
+search with BM25 and TF-IDF, soft deletes, filtering,
 calibrating for a target recall, closing/reopening a project, and the "expensive", whole-dataset
 operations (`allknn`, `fft`, `closestpairs`, `bichromatic_kclosestpairs`) that only make sense
 once you actually have a project's worth of data to run them against. For a shorter,
@@ -57,13 +58,14 @@ There's no `"vector"` key yet — that's the dense section's job, below.
 
 ## Dense vectors with LSI (SearchGraph)
 
-`create_project` makes a brand-new project directly on disk, at `<workdir>/<dataset>`. By
-default it builds a `SearchGraph` (an approximate, self-tuning index) autotuning toward
-`minrecall=0.9`:
+`create_project` makes a brand-new project directly on disk, at `<workdir>/<dataset>`. Two
+keywords say what it is: `engine` is what the project holds — `DenseEngine`, `SparseEngine` or
+`FullTextEngine` — and `backend` is the index that holds it. Both default, so
+`create_project(workdir, "frankenstein_dense")` means exactly the line below: a dense project on a
+`SearchGraph` (an approximate, self-tuning index) autotuning toward `minrecall=0.9`.
 
 ```julia
 using SimilaritySearchEngine
-using SimilaritySearch: SearchGraph
 
 workdir = mktempdir()
 h = create_project(workdir, "frankenstein_dense"; engine=DenseEngine, backend=SearchGraph, minrecall=0.9)
@@ -212,6 +214,91 @@ guarantee an identical internal graph topology to the one built live, so its bea
 can explore a slightly different candidate set — expect the same ballpark of hits (often
 exactly the same), not a bitwise-reproducible top-`k`, unless you calibrate and search
 with an explicit `minrecall` on both sides.
+
+## Sparse vectors you encoded yourself
+
+A dense project takes vectors you produced; a **sparse** project does too, and the difference is
+only in their shape. Reach for it when your encoder is sparse — a learned sparse retriever, a
+feature table, a bag of ids, an interaction matrix's row. Nothing in this path tokenizes anything:
+the engine has no vocabulary, no profile and no `TextConfig`, and it never sees a string.
+
+The encoding here is deliberately crude — hash each word into a fixed dimension and normalize —
+because its only job is to stand in for whatever your own encoder does:
+
+```julia
+using SimilaritySearch: Dist
+using SparseArrays: sparsevec
+
+const DIM = 1 << 16
+
+function bag(text)
+    counts = Dict{Int32,Float32}()
+    for w in split(lowercase(text), r"[^\p{L}\p{N}]+"; keepempty=false)
+        k = Int32(mod(hash(w), DIM) + 1)
+        counts[k] = get(counts, k, 0f0) + 1f0
+    end
+    ind = sort!(collect(keys(counts)))
+    val = Float32[counts[i] for i in ind]
+    sparsevec(ind, val ./ sqrt(sum(abs2, val)), DIM)   # NormCosine reads its inputs normalized
+end
+
+hs = create_project(workdir, "frankenstein_sparse";
+                    engine=SparseEngine, dimension=DIM, distance=Dist.NormCosine())
+
+append_items!(hs, [SparseItem(bag(it["text"]); doc_id=it["doc_id"], keywords=it["keywords"])
+                   for it in items])
+index!(hs)                       # a no-op here, and kept in the example on purpose -- see below
+
+hits = search(hs, bag("the monster and its creator"), 5)
+for r in hits
+    println(r.doc_id, " => distance ", round(r.distance; digits=4))
+end
+```
+
+```
+frankenstein_258 => distance 0.4673
+frankenstein_487 => distance 0.4848
+frankenstein_616 => distance 0.4848
+frankenstein_403 => distance 0.4893
+frankenstein_296 => distance 0.5149
+```
+
+Three things about that snippet are worth naming.
+
+**`dimension` is required, and only here.** An `InvertedFile` is a fixed array of posting lists,
+so its size is structural rather than descriptive: it has to be known before the first item, and
+every `SparseItem` appended has to agree with it. Passing `dimension` to a dense or a text project
+is an error rather than an ignored keyword.
+
+**`index!` does nothing, and the line stays anyway.** An inverted file builds its posting lists on
+insertion, so the items were searchable the moment `append_items!` returned. The call is a no-op
+kept so that `create_project` / `append_items!` / `index!` / `search` means the same thing for
+every kind of project — switching a project from a graph to an inverted file should not be a
+change to every script that feeds it.
+
+**The query is sparse too, and a dense one is refused:**
+
+```julia
+search(hs, rand(Float32, DIM), 5)
+# ERROR: a sparse project searches with a SparseVector{Float32,Int32}, not a Vector{Float32};
+#        build one with `sparsevec(indices, values, dimension)` over the same dimension the
+#        project was created with (65536)
+```
+
+That could have quietly sparsified instead. It does not, because a project whose items are
+`SparseItem`s has sparse queries by construction, so a dense one is a mistake worth naming — and
+sparsifying silently would turn a dimension mismatch into posting lists selected from whatever the
+values happened to be.
+
+Everything else behaves as the dense section showed: `fetch_items` hands the payload back as a
+`SparseVector{Float32,Int32}` (not densified on the way out), `filter` predicates, soft deletes and
+`close_project!`/`open_project` are all identical.
+
+`Dist.NormCosine()` is one choice of distance. Any distance that reads a sparse vector works —
+`Dist.Sets.Jaccard()` and its neighbours in `Dist.Sets.*` score over the *nonzero positions*
+instead of the weights, which is what you want when your vector is really a set. BM25 is not on
+that list: it scores from corpus statistics rather than from a vector, so it belongs to a text
+project, which is the next section.
 
 ## Full-text search with BM25
 

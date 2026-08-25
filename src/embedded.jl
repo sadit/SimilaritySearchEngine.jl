@@ -91,11 +91,11 @@ layout plus the live `Project.ProjectManager`/`IndexEngine.AbstractSearchEngine`
 `cli_handlers.jl`'s `_load_dataset_and_engine` already threads through separately for a
 single CLI command, plus the `Persistence.EngineStore` (a RocksDB column family shared
 with `project.db`, see `Persistence.open_engine_store`) that engine mutations persist
-into field-by-field, and `pending_flush` -- a flag a `GenericEngine`'s
+into field-by-field, and `pending_flush` -- a flag a `DenseEngine{<:ExactBackend}`'s
 `SimilaritySearch.CallbackLog` callback sets (see [`create_project`](@ref)) that this module
 checks and clears from *outside* the engine's own insertion call, once it's known safe to
-do so (see [`_maybe_flush_index!`](@ref); unused for `SearchGraphEngine`/`BM25Engine`/
-`InvertedFileEngine`, which each persist their index incrementally by themselves -- see
+do so (see [`_maybe_flush_index!`](@ref); unused by every backend that persists its index
+incrementally by itself, which is all of them except the exact ones -- see
 [`_searchgraph_on_change`](@ref)/[`_invertedfile_on_change`](@ref)) -- worth bundling here
 since an embedded-API caller makes many calls against the same open project instead of
 running once and exiting.
@@ -119,9 +119,9 @@ Persists `handle.engine.backend.index` if (and only if) `handle.pending_flush[]`
 clears the flag. Callers must only call this from a point where the just-finished mutation
 is fully done -- in particular, *not* from inside an `SimilaritySearch.CallbackLog` callback
 itself. Right after an `IndexEngine.add_item!`/`index!` call returns to this
-module is always safe. A no-op for `SearchGraphEngine`/`BM25Engine`/`InvertedFileEngine`:
+module is always safe. A no-op for `DenseEngine{GraphBackend}`/`FullTextEngine`:
 each has its own dedicated incremental `on_change` (see [`_searchgraph_on_change`](@ref)/
-[`_invertedfile_on_change`](@ref)) that never touches `pending_flush`; only `GenericEngine`
+[`_invertedfile_on_change`](@ref)) that never touches `pending_flush`; only `DenseEngine{<:ExactBackend}`
 (`ExhaustiveSearch`/`ParallelExhaustiveSearch`) still uses this whole-index path.
 """
 function _maybe_flush_index!(handle::EmbeddedEngine)
@@ -134,8 +134,8 @@ end
 """
     _searchgraph_on_change(store::Persistence.EngineStore, adj_store::Persistence.AdjacencyStore) -> Function
 
-The `on_change` callback for a `SearchGraphEngine`: fires from *inside*
-`IndexEngine.index!(engine::IndexEngine.SearchGraphEngine)` (never from `add_item!`/
+The `on_change` callback for a `DenseEngine{GraphBackend}`: fires from *inside*
+`IndexEngine.index!(engine::IndexEngine.DenseEngine{GraphBackend})` (never from `add_item!`/
 `append_items!` anymore -- see that function's docstring for why staging and indexing are
 now two separate steps), once per `sp:ep` range `SimilaritySearch.index!`'s own internal
 batching processes. Saves each object `i` in that range's own direct-links-only neighbor
@@ -170,12 +170,12 @@ end
 """
     _invertedfile_on_change(obj_store::Persistence.InvertedFileObjectStore) -> Function
 
-The `on_change` callback for a `BM25Engine`/`InvertedFileEngine`: on every
+The `on_change` callback for a `FullTextEngine`: on every
 `push_item!`/`append_items!` report for range `sp:ep`, saves *only* that range's raw
 indexed objects (bags-of-words or `SparseVector`s -- see `IndexEngine.invertedfile_objects`)
 as a new, never-again-rewritten block in `obj_store` (`Persistence.append_objects!`) --
 never the whole (growing) index as one value. Safe to do synchronously, right inside the
-callback (unlike the whole-index save `GenericEngine` uses, see
+callback (unlike the whole-index save `DenseEngine{<:ExactBackend}` uses, see
 [`_maybe_flush_index!`](@ref)): an inverted file's `LOG` only fires after a call's
 mutation is fully done, so there's no partial-state hazard here the way there is for a
 `SearchGraph` (see `SimilaritySearch.CallbackLog`'s docstring). Reconstruction
@@ -197,8 +197,8 @@ so a project created this way can later be inspected/rebuilt/dumped by the CLI, 
 [`open_project`](@ref). `distance`, left at its default `nothing`, defers to whichever default
 `IndexEngine.create_engine` picks for `index_type` (e.g. `SqL2()` for a `SearchGraph`,
 `NormCosine()` for an `InvertedFile`) instead of this function imposing one blanket default
-across every index kind. `minrecall` is the target recall a `SearchGraphEngine` autotunes
-`BeamSearch` toward as it grows (see `IndexEngine.SearchGraphEngine`); it must be given here,
+across every index kind. `minrecall` is the target recall a `DenseEngine{GraphBackend}` autotunes
+`BeamSearch` toward as it grows (see `IndexEngine.DenseEngine{GraphBackend}`); it must be given here,
 at creation, since it's carried on the engine and restored verbatim by [`open_project`](@ref)
 rather than re-derived later -- `calibrate!` remains available afterwards as a separate,
 explicit re-optimization pass. Ignored for index types with no `BeamSearch` to autotune.
@@ -238,7 +238,7 @@ call saves just the direct-links-only block it just built (see
 `index!` call likewise saves just the newly-encoded objects it just indexed (see
 [`_invertedfile_on_change`](@ref)) -- both engine kinds have a staging split
 ([`append_items!`](@ref) itself durably stages raw vectors/text right away, see that
-function's docstring). Only `GenericEngine` (`ExhaustiveSearch`/`ParallelExhaustiveSearch`,
+function's docstring). Only `DenseEngine{<:ExactBackend}` (`ExhaustiveSearch`/`ParallelExhaustiveSearch`,
 no staging split at all) instead flags a pending whole-index save that happens right after
 each `add_item!` call returns (see [`_maybe_flush_index!`](@ref)); [`close_project!`](@ref)
 forces one final flush of that so nothing recent is lost -- the other two kinds never have
@@ -316,7 +316,7 @@ end
 Reopens a project previously created by [`create_project`](@ref), restoring its search
 engine -- including the `minrecall` target and any calibrated `opt_beamsearch` it was
 created/calibrated with -- field-by-field from its `Persistence.EngineStore` (a
-`SearchGraphEngine`'s index specifically via `IndexEngine.build_searchgraph` replaying its
+`DenseEngine{GraphBackend}`'s index specifically via `IndexEngine.build_searchgraph` replaying its
 saved insertion blocks, see [`_searchgraph_on_change`](@ref)). Falls back to a fresh,
 empty `SearchGraph`/`SqL2`/`minrecall=0.9` engine if this project has never been saved
 yet, mirroring `Server._reload_one_dataset!`'s own "create if nothing persisted yet"
@@ -412,11 +412,11 @@ end
     close_project!(handle::EmbeddedEngine)
 
 Flushes the engine's index one final time and closes the project's RocksDB connection
-(and, for a `SearchGraphEngine` that ever had a vector appended, its `MMapMatrixDatabase`
-file too -- see [`_searchgraph_on_change`](@ref)). For `SearchGraphEngine`/`BM25Engine`/
-`InvertedFileEngine` there is nothing left to flush -- every insertion block was already
+(and, for a `DenseEngine{GraphBackend}` that ever had a vector appended, its `MMapMatrixDatabase`
+file too -- see [`_searchgraph_on_change`](@ref)). For a graph-backed dense project and for the
+inverted-file backends (sparse and text) there is nothing left to flush -- every block was already
 saved the instant it was reported -- so this only does the final `:index` save for
-`GenericEngine`. Every other field (`deleted_ids`, `opt_beamsearch`, ...) is, for every
+`DenseEngine{<:ExactBackend}`. Every other field (`deleted_ids`, `opt_beamsearch`, ...) is, for every
 kind, already persisted immediately by whichever call changed it (`delete_item!`,
 `calibrate!`, ...).
 """
@@ -484,8 +484,8 @@ end
 """
     append_items!(handle::EmbeddedEngine, items) -> Int
 
-Appends a batch of typed items -- [`DenseItem`](@ref Schema.DenseItem)s for a dense project,
-[`TextItem`](@ref Schema.TextItem)s for a text one, each already carrying its own `doc_id`,
+Appends a batch of typed items -- [`DenseItem`](@ref)s for a dense project,
+[`TextItem`](@ref)s for a text one, each already carrying its own `doc_id`,
 `keywords`, `refs` and `meta`. Returns the number inserted, which is always `length(items)`:
 every item in the batch is inserted, and an item of the wrong kind for this project raises
 rather than being skipped.
@@ -503,9 +503,9 @@ graph-linking/encoding work -- so freshly appended items are *not* yet visible t
 [`index!`](@ref index!(::EmbeddedEngine)) call catches up the backlog (for a text
 project's very first `index!` call, that also trains its `Vocabulary` -- there's no
 separate training entry point or "must be trained first" error here anymore).
-`GenericEngine` (`ExhaustiveSearch`/`ParallelExhaustiveSearch`) is the one engine kind that
+`DenseEngine{<:ExactBackend}` (`ExhaustiveSearch`/`ParallelExhaustiveSearch`) is the one engine kind that
 still indexes synchronously, on every `add_item!`, since it has no staging split at all
-(see `IndexEngine.index!(engine::IndexEngine.SearchGraphEngine)`'s docstring for why
+(see `IndexEngine.index!(engine::IndexEngine.DenseEngine{GraphBackend})`'s docstring for why
 `SimilaritySearch.jl`/`TextSearch.jl` support the split for the other three).
 
 Persistence: for a dense project, every batch's raw vectors are appended directly to the
@@ -516,7 +516,7 @@ time, not via `on_change`, since an item is already durable-worthy the moment it
 long before any graph-linking/encoding happens. Once an [`index!`](@ref index!(::EmbeddedEngine))
 call actually encodes/indexes a text project's backlog, `SimilaritySearch.CallbackLog` persists
 each newly-encoded object incrementally (see [`_invertedfile_on_change`](@ref)).
-`GenericEngine` instead flags a pending whole-index save that happens right after each
+`DenseEngine{<:ExactBackend}` instead flags a pending whole-index save that happens right after each
 `add_item!` call returns (see [`_maybe_flush_index!`](@ref)).
 
 # Performance: batch size matters a lot for a `SearchGraph` (dense) project
@@ -608,12 +608,12 @@ append_items!(handle::EmbeddedEngine, item::Schema.AbstractItem) = append_items!
 """
     _current_size(engine::IndexEngine.AbstractSearchEngine) -> Int
 
-The count that determines the next item's `_id`: for a `SearchGraphEngine`, the number of
+The count that determines the next item's `_id`: for a `DenseEngine{GraphBackend}`, the number of
 *staged* vectors (`length(database(engine.backend.index))`, i.e. `engine.backend.index.db`'s own count),
-and for a `BM25Engine`/`InvertedFileEngine`, the number of *staged* texts
+and for a `FullTextEngine`, the number of *staged* texts
 (`length(engine.staged)`) -- since [`append_items!`](@ref) only stages for any of these
 three, `length(engine.backend.index)` itself (the encoded/indexed count) would lag behind and hand
-out the wrong, already-taken `_id`s. `GenericEngine` (`ExhaustiveSearch`/
+out the wrong, already-taken `_id`s. `DenseEngine{<:ExactBackend}` (`ExhaustiveSearch`/
 `ParallelExhaustiveSearch`) is the one engine kind that still indexes synchronously on
 `add_item!`, so `length(engine.backend.index)` already reflects the item just added there.
 """
@@ -731,7 +731,7 @@ or backfilled -- they're returned with `deleted=true` and no hydrated metadata (
 Getting `k` *live* results back is a paging concern for a layer above this one (e.g. a
 server walking successive windows via a cursor), not something this function does itself.
 
-`minrecall`, for a `SearchGraphEngine`, searches at (approximately) that target recall
+`minrecall`, for a `DenseEngine{GraphBackend}`, searches at (approximately) that target recall
 using a calibrated `BeamSearch` from `engine.backend.opt_beamsearch` instead of its current
 default (see [`IndexEngine.search_live`](@ref)) -- if that table is still empty, this
 triggers a one-off `calibrate!` over `IndexEngine.DEFAULT_MINRECALL_LEVELS` and persists

@@ -1,8 +1,8 @@
 # SimilaritySearchEngine.jl
 
 `SimilaritySearchEngine.jl` is an embedded, no-HTTP-required Julia API for running
-similarity search *projects*: named, persistent collections of dense vectors or text
-documents backed by [SimilaritySearch.jl](https://github.com/sadit/SimilaritySearch.jl),
+similarity search *projects*: named, persistent collections of dense vectors, sparse vectors or
+text documents backed by [SimilaritySearch.jl](https://github.com/sadit/SimilaritySearch.jl),
 [TextSearch.jl](https://github.com/sadit/TextSearch.jl), and
 [RocksDB.jl](https://github.com/sadit/RocksDB.jl). A script does `using
 SimilaritySearchEngine` and calls its functions directly — no running server, no CLI
@@ -11,10 +11,18 @@ directory, the same as any other embedded database.
 
 ## Key features
 
+- **A project says what it holds, and separately what holds it**: `engine=` is `DenseEngine`,
+  `SparseEngine` or `FullTextEngine`; `backend=` is the index underneath, defaulting to that
+  engine's own. `payload_kind(engine)` answers the first question for a project you opened,
+  `BACKENDS` lists the legal pairings, and the item type follows from the engine —
+  `DenseItem`, `SparseItem`, `TextItem`.
 - **Dense vector search** over a `SearchGraph` (an approximate, self-tuning graph index),
   or an exact `ExhaustiveSearch`/`ParallelExhaustiveSearch` — insertion (`append_items!`)
   and graph-building (`index!`) are separate, explicit steps for `SearchGraph`, so a
   caller controls when the expensive graph-connection cost is paid.
+- **Sparse vector search** over an `InvertedFile`, for vectors *you* encoded, of a dimension
+  fixed at creation, under any distance that reads a sparse vector — cosine over the weights or
+  one of `Dist.Sets.*` over the nonzero positions. No vocabulary, no profile, no tokenizer.
 - **Full-text search** over a `BM25InvertedFile` or a TF-IDF-weighted `TextInvertedFile`,
   sharing the exact same `append_items!`(stage)/`index!`(build)/`ftsearch` surface as the
   dense case — the first `index!` call on a text project also fits its `TextProfile`
@@ -62,9 +70,10 @@ using Pkg
 Pkg.develop(path="path/to/SimilaritySearchEngine.jl")
 
 using SimilaritySearchEngine
-using SimilaritySearch: SearchGraph
 
 workdir = mktempdir()
+# `engine` says what the project holds, `backend` which index holds it. Both have defaults --
+# `create_project(workdir, "demo")` means exactly this line.
 h = create_project(workdir, "demo"; engine=DenseEngine, backend=SearchGraph, minrecall=0.9)
 
 # typed items in: this library never takes a JSON-shaped dictionary and picks it apart
