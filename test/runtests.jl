@@ -6,6 +6,7 @@ using TextSearch: BM25InvertedFile, InvertedFile, TextInvertedFile, Normalizatio
                   lineage_summary, token2id
 using JSON
 using RocksDB
+using SparseArrays: sparsevec, SparseVector, nonzeros, nonzeroinds
 
 const FRANKENSTEIN_PATH = joinpath(@__DIR__, "data", "frankenstein.jsonl")
 
@@ -27,6 +28,26 @@ dense_items(rows) = [DenseItem(r["vector"]; doc_id=r["doc_id"], keywords=r["keyw
                                refs=r["ref"], meta=_meta_of(r)) for r in rows]
 text_items(rows) = [TextItem(r["text"]; doc_id=r["doc_id"], keywords=r["keywords"],
                              refs=r["ref"], meta=_meta_of(r)) for r in rows]
+
+# A sparse project's items are vectors the *caller* encoded -- the engine has no vocabulary and
+# never sees a token. Hashing words into a fixed dimension is the smallest honest stand-in for
+# whatever a caller's own encoder does (a learned sparse retriever, a feature table, a set of ids),
+# and it is deliberately not TextSearch's encoding: that path is what `FullTextEngine` is for.
+const SPARSE_DIM = 4096
+function sparse_items(rows)
+    map(rows) do r
+        counts = Dict{Int32,Float32}()
+        for w in split(lowercase(r["text"]), r"[^\p{L}\p{N}]+"; keepempty=false)
+            k = Int32(mod(hash(w), SPARSE_DIM) + 1)
+            counts[k] = get(counts, k, 0f0) + 1f0
+        end
+        ind = sort!(collect(keys(counts)))
+        val = Float32[counts[i] for i in ind]
+        val ./= sqrt(sum(abs2, val))          # NormCosine reads its inputs as already normalized
+        SparseItem(sparsevec(ind, val, SPARSE_DIM); doc_id=r["doc_id"], keywords=r["keywords"],
+                   refs=r["ref"], meta=_meta_of(r))
+    end
+end
 
 # A text policy that keeps case and diacritics, which is what makes orthographic bridging
 # possible at all: `derive_variants` has nothing to do under the default `TextConfig()`, whose
@@ -108,12 +129,126 @@ const ACCENT_ITEMS = vcat(
         end
     end
 
+    @testset "sparse dataset: caller-encoded vectors, no vocabulary anywhere" begin
+        mktempworkdir() do workdir
+            items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:100]]
+            sitems = sparse_items(items)
+
+            h = create_project(workdir, "sparse_ds"; engine=SparseEngine, dimension=SPARSE_DIM,
+                               distance=Dist.NormCosine())
+            @test payload_kind(h.engine) === :sparse
+            @test h.engine.backend.dimension == SPARSE_DIM
+            @test append_items!(h, sitems) == 100
+
+            # An InvertedFile indexes on insertion: unlike a SearchGraph there is no backlog, so
+            # the item is searchable before index! and index! is a no-op kept for uniformity.
+            res = search(h, payload(sitems[1]), 5)
+            @test length(res) == 5
+            @test res[1].doc_id == "frankenstein_1"
+            @test res[1].distance ≈ 0.0 atol=1e-5
+            index!(h)
+            @test [r._id for r in search(h, payload(sitems[1]), 5)] == [r._id for r in res]
+
+            # the payload comes back as a sparse vector, not densified on the way out
+            fetched = fetch_items(h, ["frankenstein_3"])
+            @test length(fetched) == 1
+            @test fetched[1].payload isa SparseVector{Float32,Int32}
+            @test nonzeroinds(fetched[1].payload) == nonzeroinds(payload(sitems[3]))
+            @test fetched[1].meta["word_count"] == items[3]["word_count"]
+
+            delete_item!(h, 2)
+            @test exists(h, ["frankenstein_2"])[1].deleted
+            hit = findfirst(r -> r._id == 2, search(h, payload(sitems[1]), 100))
+            @test hit === nothing || search(h, payload(sitems[1]), 100)[hit].deleted
+
+            filtered = search(h, payload(sitems[1]), 5;
+                              filter=(record, meta) -> record.doc_id == "frankenstein_1")
+            @test length(filtered) == 1 && filtered[1].doc_id == "frankenstein_1"
+
+            # a project of sparse vectors takes SparseItems and nothing else
+            @test_throws ErrorException append_items!(h, dense_items(items[1:1]))
+            @test_throws ErrorException append_items!(h, text_items(items[1:1]))
+            close_project!(h)
+
+            h2 = open_project(workdir, "sparse_ds")
+            @test payload_kind(h2.engine) === :sparse
+            @test h2.engine.backend.dimension == SPARSE_DIM
+            reopened = search(h2, payload(sitems[1]), 5)
+            @test [r._id for r in reopened] == [r._id for r in res]
+            @test exists(h2, ["frankenstein_2"])[1].deleted   # the tombstone survived
+            close_project!(h2)
+        end
+    end
+
+    @testset "sparse project: the query is a sparse vector of the project's own dimension" begin
+        mktempworkdir() do workdir
+            items = sparse_items([JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:20]])
+            h = create_project(workdir, "sq_ds"; engine=SparseEngine, dimension=SPARSE_DIM,
+                               distance=Dist.NormCosine())
+            append_items!(h, items)
+            # A dense query would `convert` cleanly and then die inside the library on a Float32
+            # used as a posting-list index, so it is refused here where the message can say why.
+            @test_throws ErrorException search(h, rand(Float32, SPARSE_DIM), 5)
+            @test_throws ErrorException search(h, sparsevec(Int32[1, 2], Float32[1, 0], 8), 5)
+            @test length(search(h, payload(items[1]), 3)) == 3
+            close_project!(h)
+        end
+    end
+
+    @testset "project creation: the engine says what it holds, the backend says what holds it" begin
+        mktempworkdir() do workdir
+            # defaults: a dense project on a SearchGraph, which is what `create_project(w, ds)` means
+            @test default_backend(DenseEngine) === SearchGraph
+            @test default_backend(SparseEngine) === InvertedFile
+            @test default_backend(FullTextEngine) === BM25InvertedFile
+            h = create_project(workdir, "defaults")
+            @test payload_kind(h.engine) === :dense
+            @test h.engine.backend isa SimilaritySearchEngine.IndexEngine.GraphBackend
+            close_project!(h)
+
+            # an exact dense backend is the same engine with a different index under it
+            he = create_project(workdir, "exact"; engine=DenseEngine, backend=ExhaustiveSearch)
+            @test payload_kind(he.engine) === :dense
+            @test he.engine.backend.index isa ExhaustiveSearch
+            close_project!(he)
+
+            # every legal pairing is in BACKENDS, and only those
+            @test Set(keys(BACKENDS)) == Set([DenseEngine, SparseEngine, FullTextEngine])
+            for (engine, backends) in BACKENDS, b in backends
+                @test SimilaritySearchEngine.IndexEngine.validate_backend(engine, b) === b
+            end
+            @test_throws ErrorException SimilaritySearchEngine.IndexEngine.validate_backend(SparseEngine, SearchGraph)
+            @test_throws ErrorException SimilaritySearchEngine.IndexEngine.validate_backend(DenseEngine, BM25InvertedFile)
+
+            # a sparse project has to be sized; nothing else may be
+            @test_throws ErrorException create_project(workdir, "nodim"; engine=SparseEngine)
+            @test_throws ErrorException create_project(workdir, "dim_on_dense"; dimension=16)
+            @test_throws ErrorException create_project(workdir, "dim_on_text"; engine=FullTextEngine,
+                                                       textmodel=FitFromCorpus(), dimension=16)
+            @test_throws ArgumentError create_project(workdir, "zerodim"; engine=SparseEngine, dimension=0)
+
+            # a text model belongs to a text project only -- and the check is the engine's, not
+            # the backend's, because InvertedFile is a legal backend for both kinds
+            @test_throws ErrorException create_project(workdir, "sparse_model"; engine=SparseEngine,
+                                                       dimension=16, textmodel=FitFromCorpus())
+            @test !isdir(joinpath(workdir, "sparse_model"))
+
+            # the pre-restructuring keyword names its replacement instead of being ignored
+            err = try; create_project(workdir, "old"; index_type=SearchGraph); catch e; e end
+            @test err isa ErrorException
+            @test occursin("engine=", err.msg) && occursin("backend=", err.msg)
+            @test !isdir(joinpath(workdir, "old"))
+
+            @test_throws ErrorException create_project(workdir, "bad_engine"; engine=Int)
+        end
+    end
+
     @testset "text (bm25) dataset: stage, index! (trains + catches up), ftsearch" begin
         mktempworkdir() do workdir
             items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:50]]
             first_batch, second_batch = items[1:30], items[31:50]
 
-            h = create_project(workdir, "text_ds"; index_type=BM25InvertedFile, textmodel=FitFromCorpus())
+            h = create_project(workdir, "text_ds"; engine=FullTextEngine, backend=BM25InvertedFile, textmodel=FitFromCorpus())
             inserted = append_items!(h, text_items(first_batch))
             @test inserted == 30
 
@@ -149,7 +284,7 @@ const ACCENT_ITEMS = vcat(
             items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:20]]
             first_batch, second_batch = items[1:10], items[11:20]
 
-            h = create_project(workdir, "invfile_ds"; index_type=InvertedFile, textmodel=FitFromCorpus())
+            h = create_project(workdir, "invfile_ds"; engine=FullTextEngine, backend=InvertedFile, textmodel=FitFromCorpus())
             append_items!(h, text_items(first_batch))
             @test isempty(ftsearch(h, first_batch[2]["text"], 3))
 
@@ -203,7 +338,7 @@ const ACCENT_ITEMS = vcat(
             items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:20]]
             trained, backlog = items[1:15], items[16:20]
 
-            h = create_project(workdir, "text_backlog_ds"; index_type=BM25InvertedFile, textmodel=FitFromCorpus())
+            h = create_project(workdir, "text_backlog_ds"; engine=FullTextEngine, backend=BM25InvertedFile, textmodel=FitFromCorpus())
             append_items!(h, text_items(trained))
             index!(h)
             append_items!(h, text_items(backlog)) # staged, deliberately left un-indexed
@@ -267,10 +402,10 @@ const ACCENT_ITEMS = vcat(
         mktempworkdir() do workdir
             # omitting it on a text project is an error rather than a silent default, because
             # the default it would have to pick freezes the vocabulary at the first index! call
-            @test_throws ErrorException create_project(workdir, "no_model"; index_type=BM25InvertedFile)
+            @test_throws ErrorException create_project(workdir, "no_model"; engine=FullTextEngine, backend=BM25InvertedFile)
 
             msg = try
-                create_project(workdir, "no_model"; index_type=BM25InvertedFile)
+                create_project(workdir, "no_model"; engine=FullTextEngine, backend=BM25InvertedFile)
                 ""
             catch e
                 sprint(showerror, e)
@@ -280,11 +415,11 @@ const ACCENT_ITEMS = vcat(
             # ... and the failed call left nothing behind: no directory, no held write lock,
             # so the same name is still free to create properly
             @test !isdir(joinpath(workdir, "no_model"))
-            h = create_project(workdir, "no_model"; index_type=BM25InvertedFile, textmodel=FitFromCorpus())
+            h = create_project(workdir, "no_model"; engine=FullTextEngine, backend=BM25InvertedFile, textmodel=FitFromCorpus())
             close_project!(h)
 
             # handing a text model to a dense project is an error too, not an ignored keyword
-            @test_throws ErrorException create_project(workdir, "dense_model"; index_type=SearchGraph,
+            @test_throws ErrorException create_project(workdir, "dense_model"; engine=DenseEngine, backend=SearchGraph,
                                                        textmodel=FitFromCorpus())
             @test !isdir(joinpath(workdir, "dense_model"))
         end
@@ -300,7 +435,7 @@ const ACCENT_ITEMS = vcat(
             items = [TextItem(corpus[i]; doc_id="d$i") for i in eachindex(corpus)]
 
             function fitted(name, spec)
-                h = create_project(workdir, name; index_type=TextInvertedFile, textmodel=spec)
+                h = create_project(workdir, name; engine=FullTextEngine, backend=TextInvertedFile, textmodel=spec)
                 append_items!(h, items)
                 index!(h)
                 h
@@ -350,7 +485,7 @@ const ACCENT_ITEMS = vcat(
 
     @testset "text project: a custom TextConfig is fitted under, persisted, and restored" begin
         mktempworkdir() do workdir
-            h = create_project(workdir, "cfg_ds"; index_type=BM25InvertedFile, textmodel=FitFromCorpus(CASED_ES))
+            h = create_project(workdir, "cfg_ds"; engine=FullTextEngine, backend=BM25InvertedFile, textmodel=FitFromCorpus(CASED_ES))
             append_items!(h, ACCENT_ITEMS)
             index!(h)
 
@@ -411,7 +546,7 @@ const ACCENT_ITEMS = vcat(
 
     @testset "text project: QueryPolicy corrects a query, :off searches it literally" begin
         mktempworkdir() do workdir
-            h = create_project(workdir, "policy_ds"; index_type=BM25InvertedFile, textmodel=FitFromCorpus(CASED_ES))
+            h = create_project(workdir, "policy_ds"; engine=FullTextEngine, backend=BM25InvertedFile, textmodel=FitFromCorpus(CASED_ES))
             append_items!(h, ACCENT_ITEMS)
             index!(h)
 
@@ -457,7 +592,7 @@ const ACCENT_ITEMS = vcat(
 
             # deferred fit: the vocabulary is frozen over the first batch, so a term that only
             # ever appears in the second is out-of-vocabulary forever after
-            h = create_project(workdir, "oov_ds"; index_type=BM25InvertedFile, textmodel=FitFromCorpus())
+            h = create_project(workdir, "oov_ds"; engine=FullTextEngine, backend=BM25InvertedFile, textmodel=FitFromCorpus())
             append_items!(h, first_batch); index!(h)
             append_items!(h, second_batch); index!(h)
             @test isempty(ftsearch(h, "zeppelin", 5))
@@ -465,7 +600,7 @@ const ACCENT_ITEMS = vcat(
 
             # same insertion sequence against the pre-fitted profile: trained before the first
             # item was staged, so the second batch's terms are searchable
-            hp = create_project(workdir, "prefit_ds"; index_type=BM25InvertedFile, textmodel=BaseProfile(reloaded))
+            hp = create_project(workdir, "prefit_ds"; engine=FullTextEngine, backend=BM25InvertedFile, textmodel=BaseProfile(reloaded))
             @test text_profile(hp) !== nothing          # trained at creation, not at first index!
             append_items!(hp, first_batch); index!(hp)
             append_items!(hp, second_batch); index!(hp)
@@ -487,7 +622,7 @@ const ACCENT_ITEMS = vcat(
             # so a query has to be encoded the same way or the two sides stop being comparable
             for dist in (Dist.Sets.Jaccard(), Dist.Sets.Dice())
                 name = "sets_$(nameof(typeof(dist)))"
-                h = create_project(workdir, name; index_type=TextInvertedFile, distance=dist, textmodel=FitFromCorpus())
+                h = create_project(workdir, name; engine=FullTextEngine, backend=TextInvertedFile, distance=dist, textmodel=FitFromCorpus())
                 append_items!(h, items)
                 index!(h)
                 hits = [r.doc_id for r in ftsearch(h, "perro patio", 3)]
@@ -519,7 +654,7 @@ const ACCENT_ITEMS = vcat(
                 query_expansion_distances=Dict("perro" => Float32[0.2, 0.9]),
                 applied=AppliedArtifacts(query_expansion=true))
 
-            h = create_project(workdir, "expand_ds"; index_type=BM25InvertedFile, textmodel=BaseProfile(withnet))
+            h = create_project(workdir, "expand_ds"; engine=FullTextEngine, backend=BM25InvertedFile, textmodel=BaseProfile(withnet))
             append_items!(h, items)
             index!(h)
 
@@ -542,7 +677,7 @@ const ACCENT_ITEMS = vcat(
         mktempworkdir() do workdir
             items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:20]]
 
-            h = create_project(workdir, "tif_ds"; index_type=TextInvertedFile, textmodel=FitFromCorpus())
+            h = create_project(workdir, "tif_ds"; engine=FullTextEngine, backend=TextInvertedFile, textmodel=FitFromCorpus())
             append_items!(h, text_items(items))
             index!(h)
             @test h.engine isa SimilaritySearchEngine.IndexEngine.FullTextEngine

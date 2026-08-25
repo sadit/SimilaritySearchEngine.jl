@@ -5,6 +5,9 @@ using JSON3
 using SimilaritySearch
 using TextSearch
 using RocksDB
+# For the sparse half of the public surface: a sparse project's items and its queries are
+# `SparseVector{Float32,Int32}`, so the names have to be in scope where that surface is defined.
+using SparseArrays: SparseVector, AbstractSparseVector, sparsevec
 
 # Extracted verbatim from SimilaritySearchServer.jl (PLAN.md §8.5, chunk 22) -- these four
 # modules were already the real shared engine both `similarity-search` (CLI) and
@@ -67,5 +70,25 @@ export text_profile, fit_profile
 # so these two are part of the minimum vocabulary for creating one at all.
 export AbstractTextModelSpec, BaseProfile, DefaultProfile, FitFromCorpus
 export DEFAULT_PROFILE_NICKNAMES, default_profile_path, train_profile
+
+# What kind of project to create, and which index to hold it in. `create_project` takes both as
+# types, so both have to be nameable by a caller who wrote one `using` line: `engine=` says what
+# the project indexes (dense vectors, sparse vectors, text) and `backend=` which index does it.
+# `BACKENDS` is the table of legal pairings, and it is exported because it is also the answer to
+# "what else could I have passed"; `default_backend` says what an omitted `backend=` becomes.
+export DenseEngine, SparseEngine, FullTextEngine
+export BACKENDS, default_backend
+
+# The backend types themselves, re-exported from SimilaritySearch.jl and TextSearch.jl for the
+# same reason `TextConfig` is: they are values this package's own API asks for, and a caller who
+# wrote `using SimilaritySearchEngine` should be able to write `backend=BM25InvertedFile`
+# without first having to know which of the two libraries that name comes from.
+export SearchGraph, ExhaustiveSearch, ParallelExhaustiveSearch, InvertedFile
+export BM25InvertedFile, TextInvertedFile
+
+# For asking an *open* project what it holds -- which a Julia caller needs, because the item
+# type it must build follows from it (`:dense` takes DenseItem, `:sparse` SparseItem, `:text`
+# TextItem) and `open_project` is free to be handed a directory whose kind it did not choose.
+export payload_kind
 
 end # module

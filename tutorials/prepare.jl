@@ -547,7 +547,7 @@ function build_project(c::Corpus)
 
     say("project $(c.name): creating (this writes the whole profile into the project)")
     t_create = @elapsed h = SSE.create_project(dir, c.name;
-        index_type=TextSearch.BM25InvertedFile, textmodel=SSE.BaseProfile(prof))
+        engine=FullTextEngine, backend=TextSearch.BM25InvertedFile, textmodel=SSE.BaseProfile(prof))
 
     # The engine takes typed items, so the JSONL line is split here rather than handed over for
     # the library to pick apart by key name. This script wrote the file, so it is the one that

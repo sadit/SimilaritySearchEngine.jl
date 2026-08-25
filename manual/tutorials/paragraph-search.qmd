@@ -357,7 +357,7 @@ carried, and applying it is the indexer's decision:
 ```julia
 base = load_profile("tutorials/profiles/wikipedia-en.zip")
 prof = TextSearch.with_applied(base; query_expansion=true)
-create_project(dir, "wikipedia-en"; index_type=BM25InvertedFile, textmodel=BaseProfile(prof))
+create_project(dir, "wikipedia-en"; engine=FullTextEngine, backend=BM25InvertedFile, textmodel=BaseProfile(prof))
 ```
 
 What the network holds for a few terms:
@@ -398,7 +398,7 @@ end
 
 workdir = mktempdir()
 h = SSE.create_project(workdir, "slice";
-        index_type = TextSearch.BM25InvertedFile,
+        engine=FullTextEngine, backend=TextSearch.BM25InvertedFile,
         textmodel  = SSE.BaseProfile(profiles["gutenberg-en"]))
 
 SSE.append_items!(h, slice)          # stages: durable, but nothing is searchable yet
@@ -447,7 +447,7 @@ starting from nothing.
 building its own profiles as it goes:
 
 ```julia
-create_project(workdir, "noticias"; index_type=BM25InvertedFile,
+create_project(workdir, "noticias"; engine=FullTextEngine, backend=BM25InvertedFile,
                textmodel=DefaultProfile(:es))
 ```
 
@@ -466,7 +466,7 @@ you are after. `DefaultProfile`'s docstring has the numbers.
 from the project's own corpus:
 
 ```julia
-create_project(workdir, "self-fitted"; index_type=BM25InvertedFile,
+create_project(workdir, "self-fitted"; engine=FullTextEngine, backend=BM25InvertedFile,
                textmodel=FitFromCorpus(TextConfig(language=:en); min_ndocs=3, stopwords=0.9))
 ```
 

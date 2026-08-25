@@ -18,10 +18,12 @@ export stored_payload
 export calibrate!, current_beamsearch, OptBeamSearch, DEFAULT_MINRECALL_LEVELS
 export direct_neighbors, apply_searchgraph_vectors!, build_searchgraph
 export invertedfile_objects, build_bm25invertedfile, build_textinvertedfile, build_sparseinvertedfile
-export text_profile, text_vocabulary, resolve_query, query_pipeline
+export text_profile, text_vocabulary, resolve_query
 export AbstractTextModelSpec, BaseProfile, FitFromCorpus, DefaultProfile
 export DEFAULT_PROFILE_NICKNAMES, default_profile_path, train_profile
 export is_text_index_type, validate_textmodel
+export BACKENDS, engine_kind, default_backend, validate_backend, default_distance
+export BACKENDS, default_backend, validate_backend, default_distance
 
 """
     AbstractSearchEngine
@@ -970,6 +972,72 @@ end
 # pass layered on top, not the sole writer of `engine.backend.index.algo[]`.
 _searchgraph_context(minrecall::Nothing, logging) = SearchGraphContext(; hyperparameters_callback=nothing, logging...)
 _searchgraph_context(minrecall::Real, logging) = SearchGraphContext(; hyperparameters_callback=OptimizeParameters(MinRecall(Float32(minrecall))), logging...)
+
+"""
+    BACKENDS
+
+Which backends each engine kind accepts, and in which order -- the first is that engine's
+default.
+
+A table rather than a set of methods because it is read three ways: to default a backend, to
+check one, and to say in an error message what the alternatives were. Three methods would drift
+from one another; one table cannot.
+
+`InvertedFile` appears under both `SparseEngine` and `FullTextEngine`, and that is not a
+mistake: the same library index serves a project of sparse vectors and a project of text whose
+vectors come from a profile. Which of the two you get is `engine`'s to say -- the entire reason
+`engine` and `backend` are separate arguments.
+"""
+const BACKENDS = Dict{Type,Vector{Type}}(
+    DenseEngine    => Type[SearchGraph, ExhaustiveSearch, ParallelExhaustiveSearch],
+    SparseEngine   => Type[InvertedFile],
+    FullTextEngine => Type[BM25InvertedFile, TextInvertedFile, InvertedFile],
+)
+
+"""
+    engine_kind(engine::Type) -> Symbol
+
+The [`payload_kind`](@ref) an engine *type* stands for, before any instance exists.
+
+`payload_kind` answers it for a live engine, which is what every guard wants; this answers it
+for the type a caller named, which is what `create_project` needs before it has built anything.
+Two functions rather than one because at that point there is no instance to ask.
+"""
+function engine_kind(engine::Type)
+    engine === DenseEngine && return :dense
+    engine === SparseEngine && return :sparse
+    engine === FullTextEngine && return :text
+    error("unknown engine $(nameof(engine)); expected DenseEngine, SparseEngine or FullTextEngine")
+end
+
+"""
+    default_backend(engine::Type) -> Type
+    validate_backend(engine::Type, backend::Type) -> Type
+
+The backend an engine kind gets when the caller does not name one, and the check that a named
+one belongs to it.
+
+`SearchGraph` for a dense project (approximate and self-tuning, the useful default at any size),
+`InvertedFile` for a sparse one (its only backend), `BM25InvertedFile` for text -- what
+"full-text search" means before anybody asks for something else.
+
+`validate_backend` earns its place because the pairing is checkable and the failure is otherwise
+obscure: `engine=DenseEngine, backend=BM25InvertedFile` would reach `create_engine` and die
+there on a `MethodError` about keyword arguments, naming nothing a caller could act on.
+"""
+function default_backend(engine::Type)
+    haskey(BACKENDS, engine) ||
+        error("unknown engine $(nameof(engine)); expected DenseEngine, SparseEngine or FullTextEngine")
+    first(BACKENDS[engine])
+end
+
+function validate_backend(engine::Type, backend::Type)
+    haskey(BACKENDS, engine) ||
+        error("unknown engine $(nameof(engine)); expected DenseEngine, SparseEngine or FullTextEngine")
+    backend in BACKENDS[engine] && return backend
+    error("$(nameof(backend)) is not a backend for $(nameof(engine)); it takes " *
+          join(("$(nameof(b))" for b in BACKENDS[engine]), ", ", " or "))
+end
 
 """
     default_distance(index_type::Type) -> PreMetric

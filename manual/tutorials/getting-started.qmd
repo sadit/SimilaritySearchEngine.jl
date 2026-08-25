@@ -66,7 +66,7 @@ using SimilaritySearchEngine
 using SimilaritySearch: SearchGraph
 
 workdir = mktempdir()
-h = create_project(workdir, "frankenstein_dense"; index_type=SearchGraph, minrecall=0.9)
+h = create_project(workdir, "frankenstein_dense"; engine=DenseEngine, backend=SearchGraph, minrecall=0.9)
 ```
 
 ### Getting real dense vectors quickly, with LSI
@@ -226,7 +226,7 @@ using TextSearch: BM25InvertedFile
 
 # `textmodel` is required for a text project -- see the next section for what the
 # alternative is and why neither is a default
-hb = create_project(workdir, "frankenstein_bm25"; index_type=BM25InvertedFile,
+hb = create_project(workdir, "frankenstein_bm25"; engine=FullTextEngine, backend=BM25InvertedFile,
                     textmodel=FitFromCorpus())
 
 append_items!(hb, [
@@ -262,7 +262,7 @@ it out for reuse — but the real fix for a project that keeps growing is the ne
 default:
 
 ```julia
-create_project(workdir, "oops"; index_type=BM25InvertedFile)
+create_project(workdir, "oops"; engine=FullTextEngine, backend=BM25InvertedFile)
 # ERROR: a text project (BM25InvertedFile) needs an explicit `textmodel`, because the ways to
 #        get a vocabulary are not interchangeable and the cheap one cannot be undone later: ...
 ```
@@ -273,7 +273,7 @@ and the order below is the order worth preferring them in.
 ### `DefaultProfile` — start from a language, adapt to your corpus
 
 ```julia
-hes = create_project(workdir, "noticias"; index_type=BM25InvertedFile,
+hes = create_project(workdir, "noticias"; engine=FullTextEngine, backend=BM25InvertedFile,
                      textmodel=DefaultProfile(:es))
 ```
 
@@ -310,7 +310,7 @@ explicit way to say "I have nothing pre-fitted", and it is the weakest of the th
 ```julia
 using TextSearch: NormalizationConfig
 
-hf = create_project(workdir, "noticias_propias"; index_type=BM25InvertedFile,
+hf = create_project(workdir, "noticias_propias"; engine=FullTextEngine, backend=BM25InvertedFile,
     textmodel=FitFromCorpus(TextConfig(normalization=NormalizationConfig(lc=false, del_diac=false),
                                        language=:es);
                             min_ndocs=3, stopwords=0.9))
@@ -341,7 +341,7 @@ exists.
 ### `BaseProfile` — a model fitted elsewhere
 
 ```julia
-hp = create_project(workdir, "noticias_wiki"; index_type=BM25InvertedFile,
+hp = create_project(workdir, "noticias_wiki"; engine=FullTextEngine, backend=BM25InvertedFile,
                     textmodel=BaseProfile(load_profile("wiki20231101-es.zip")))
 ```
 
@@ -356,7 +356,7 @@ a project that fitted its own model can export it for the next one to index agai
 
 ```julia
 save_profile("mi-perfil", text_profile(hes))
-create_project(workdir, "hermano"; index_type=BM25InvertedFile,
+create_project(workdir, "hermano"; engine=FullTextEngine, backend=BM25InvertedFile,
                textmodel=BaseProfile(load_profile("mi-perfil")))
 ```
 
@@ -404,7 +404,7 @@ accepted interchangeably; `TextInvertedFile` is the name of what actually gets b
 ```julia
 using TextSearch: TextInvertedFile
 
-ht = create_project(workdir, "frankenstein_tfidf"; index_type=TextInvertedFile,
+ht = create_project(workdir, "frankenstein_tfidf"; engine=FullTextEngine, backend=TextInvertedFile,
                     textmodel=FitFromCorpus())
 
 append_items!(ht, [
@@ -422,7 +422,7 @@ end
 close_project!(ht)
 ```
 
-Same insertion/search shape as BM25 — only `index_type` changes — so switching between the
+Same insertion/search shape as BM25 — only `backend` changes — so switching between the
 two to compare rankings on your own corpus is a one-line change.
 
 ## Expensive, whole-dataset operations

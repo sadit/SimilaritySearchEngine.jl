@@ -244,33 +244,70 @@ each `add_item!` call returns (see [`_maybe_flush_index!`](@ref)); [`close_proje
 forces one final flush of that so nothing recent is lost -- the other two kinds never have
 anything left to flush there, since each block is already durable the instant it's saved.
 """
-function create_project(workdir::String, dataset::String; index_type::Type=SearchGraph, distance=nothing, minrecall::Union{Nothing,Real}=0.9,
-                        textmodel::Union{Nothing,IndexEngine.AbstractTextModelSpec}=nothing, schema_version::Int=1)
-    # Before anything is created on disk: `create_engine` checks this too, but only after the
-    # project's directory exists and RocksDB's write lock is held, so a call that fails here
-    # would otherwise leave both behind.
-    IndexEngine.validate_textmodel(index_type, textmodel)
+function create_project(workdir::String, dataset::String;
+                        engine::Type=DenseEngine, backend::Union{Nothing,Type}=nothing,
+                        distance=nothing, minrecall::Union{Nothing,Real}=0.9,
+                        dimension::Union{Nothing,Integer}=nothing,
+                        textmodel::Union{Nothing,IndexEngine.AbstractTextModelSpec}=nothing,
+                        index_type=nothing, schema_version::Int=1)
+    index_type === nothing || error("""
+        `index_type` is gone: a project now names the kind of data it holds and, separately, the
+        index that holds it.
+            create_project(w, ds; engine=DenseEngine,    backend=SearchGraph, distance=SqL2())
+            create_project(w, ds; engine=SparseEngine,   backend=InvertedFile, dimension=50_000)
+            create_project(w, ds; engine=FullTextEngine, backend=BM25InvertedFile, textmodel=...)
+        `engine` defaults to DenseEngine and `backend` to that engine's own default.""")
+
+    # Everything checkable is checked before anything exists on disk. `create_engine` repeats
+    # some of it, but only after the project directory has been made and RocksDB's write lock
+    # taken, so a call that fails there leaves both behind.
+    kind = IndexEngine.engine_kind(engine)
+    back = backend === nothing ? IndexEngine.default_backend(engine) :
+                                 IndexEngine.validate_backend(engine, backend)
+    if kind === :text
+        IndexEngine.validate_textmodel(back, textmodel)
+    elseif textmodel !== nothing
+        # Not delegated to `validate_textmodel`, which checks a *backend*: `InvertedFile` is a
+        # legal backend for both a sparse and a text project, so the backend alone cannot answer
+        # whether a text model belongs here. The engine can, and it is the thing the caller named.
+        error("`textmodel` only applies to a text project; $(nameof(engine)) indexes $kind " *
+              "vectors, which have no text to tokenize and no vocabulary to fit")
+    end
+    if kind === :sparse
+        dimension === nothing &&
+            error("a sparse project needs `dimension`: an InvertedFile is a fixed array of " *
+                  "posting lists, so it has to be sized before the first item, and every " *
+                  "SparseItem appended has to agree with it")
+    elseif dimension !== nothing
+        error("`dimension` only applies to a sparse project; $(nameof(engine)) does not take one")
+    end
+
     dir = joinpath(workdir, dataset)
     mkpath(dir)
     project = Project.open_project(dir, dataset; extra_cf_names=[Persistence.ENGINE_CF, Persistence.ADJACENCY_CF, Persistence.INVFILE_DB_CF, Persistence.STAGED_TEXT_CF])
     store = Persistence.open_engine_store(project.db)
     pending_flush = Ref(false)
     dense_vectors = Ref{Union{Nothing,MMapMatrixDatabase}}(nothing)
-    on_change = if index_type === SearchGraph
+
+    # Which storage a project persists incrementally into follows from what its backend
+    # produces per insertion: a graph reports link blocks, an inverted file reports encoded
+    # objects, and an exact index has nothing to report so its whole index is flushed instead.
+    on_change = if kind === :dense && back === SearchGraph
         _searchgraph_on_change(store, Persistence.open_adjacency_store(project.db))
-    elseif IndexEngine.is_text_index_type(index_type)
+    elseif kind === :sparse || kind === :text
         _invertedfile_on_change(Persistence.open_invertedfile_object_store(project.db))
     else
         (_, __, ___) -> (pending_flush[] = true)
     end
+
     # The sentinel is resolved here, once, and everything below this line receives a real
-    # value. That is the whole of the no-defaults-below-the-surface policy in one statement:
-    # this used to be a `?:` whose only job was to decide whose default won.
-    dist = distance === nothing ? IndexEngine.default_distance(index_type) : distance
-    engine = IndexEngine.create_engine(index_type;
-        distance=dist, minrecall, textmodel, on_change, log_io=nothing)
-    Persistence.save_fields!(store, IndexEngine.snapshot_state(engine))
-    return EmbeddedEngine(workdir, dataset, dir, project, engine, store, pending_flush, schema_version, dense_vectors)
+    # value -- the whole of the no-defaults-below-the-surface policy in one statement.
+    dist = distance === nothing ? IndexEngine.default_distance(back) : distance
+    eng = kind === :sparse ?
+        IndexEngine.create_sparse_engine(; distance=dist, dimension, on_change, log_io=nothing) :
+        IndexEngine.create_engine(back; distance=dist, minrecall, textmodel, on_change, log_io=nothing)
+    Persistence.save_fields!(store, IndexEngine.snapshot_state(eng))
+    return EmbeddedEngine(workdir, dataset, dir, project, eng, store, pending_flush, schema_version, dense_vectors)
 end
 
 """
@@ -398,11 +435,10 @@ end
     index!(handle::EmbeddedEngine)
 
 Catches up encoding/indexing over whatever's been staged via [`append_items!`](@ref)
-since the last call (or since creation) -- one uniform entry point for every index kind
-with a staging split (`SearchGraph`, `BM25InvertedFile`, `InvertedFile`): idempotent, safe
-to call repeatedly, only ever processes the backlog (see
-`IndexEngine.index!(engine::IndexEngine.SearchGraphEngine)`'s docstring for the exact
-contract, shared verbatim by the text engines). Nothing staged via `append_items!` becomes
+since the last call (or since creation) -- one uniform entry point for every project kind:
+idempotent, safe to call repeatedly, only ever processes the backlog (see
+`IndexEngine.index!(engine::IndexEngine.DenseEngine{IndexEngine.GraphBackend})`'s docstring for
+the exact contract, shared verbatim by the text engines). Nothing staged via `append_items!` becomes
 visible to [`search`](@ref)/[`ftsearch`](@ref)/[`allknn`](@ref)/[`fft`](@ref)/
 [`closestpairs`](@ref)/[`bichromatic_kclosestpairs`](@ref) until this runs at least once.
 
@@ -419,9 +455,14 @@ A project created with a `BaseProfile` (see [`create_project`](@ref)) was alread
 before its first item was staged, so there is no such transition and every call here is a
 pure catch-up.
 
-Errors for a `GenericEngine` (`ExhaustiveSearch`/`ParallelExhaustiveSearch`) project --
-the one index kind with no staging split at all, since it always evaluates directly
-against `db`; there is never a backlog for this to catch up.
+A no-op for the backends that have no staging split -- a sparse project's `InvertedFile` and a
+dense project's `ExhaustiveSearch`/`ParallelExhaustiveSearch` both index on insertion, so there
+is never a backlog here to catch up. It is deliberately a no-op and not an error: a caller
+writing `create_project` / `append_items!` / `index!` / `search` gets four lines that mean the
+same thing for every kind of project, and does not have to know which backends need the third
+one. The cost of that is a call that does nothing, which is the cheaper mistake -- the
+alternative made switching a project from a graph to a brute-force scan a change to every script
+that fed it.
 """
 function index!(handle::EmbeddedEngine)
     engine = handle.engine
@@ -435,7 +476,7 @@ function index!(handle::EmbeddedEngine)
         IndexEngine.index!(engine)
         just_fitted && Persistence.save_field!(handle.store, :profile, IndexEngine.text_profile(engine))
     else
-        error("index!(handle) is not supported for this project's index kind -- ExhaustiveSearch/ParallelExhaustiveSearch have no staging split, items are searchable immediately on append_items!")
+        IndexEngine.index!(engine)   # sparse and exact: already indexed on append, a no-op
     end
     return handle
 end
@@ -641,6 +682,35 @@ function _resolve_record(project::Project.ProjectManager, raw_id)
 end
 
 """
+    _search_query(engine, vector) -> Vector{Float32} | SparseVector{Float32,Int32}
+
+`vector` in the form this project's backend searches with.
+
+A dense project's index evaluates a distance against a contiguous vector; a sparse project's
+`InvertedFile` walks the query's nonzero positions to pick posting lists, and reads its
+`nzind`/`nzval` directly. So the conversion is the project's, not the caller's -- and the sparse
+case cannot fall back on the dense one: `convert(Vector{Float32}, sparse_query)` type-checks,
+densifies, and then dies inside `select_posting_lists` on a `Float32` used as an index.
+
+A dense vector handed to a sparse project is rejected rather than sparsified. It would usually
+be a mistake worth naming (a project's items are `SparseItem`s, so its queries are sparse too),
+and sparsifying silently would turn a dimension mismatch into posting lists selected from
+whatever the values happened to be.
+"""
+function _search_query(engine::IndexEngine.AbstractSearchEngine, vector)
+    kind = IndexEngine.payload_kind(engine)
+    kind === :dense && return convert(Vector{Float32}, vector)
+    kind === :sparse || error("search(handle, vector) needs a dense or sparse project; this one holds $kind")
+    vector isa AbstractSparseVector ||
+        error("a sparse project searches with a SparseVector{Float32,Int32}, not a $(typeof(vector)); " *
+              "build one with `sparsevec(indices, values, dimension)` over the same dimension the " *
+              "project was created with ($(engine.backend.dimension))")
+    length(vector) == engine.backend.dimension ||
+        error("query dimension $(length(vector)) does not match the project's $(engine.backend.dimension)")
+    convert(SparseVector{Float32,Int32}, vector)
+end
+
+"""
     search(handle::EmbeddedEngine, vector, k::Int=10; filter=nothing) -> Vector{SearchResult}
 
 Dense vector search, hydrated with each hit's original id (mirrors `Server.handle_search`
@@ -673,7 +743,7 @@ caller's own, and note that those two field names sit the opposite way round fro
 tuple this replaced.
 """
 function search(handle::EmbeddedEngine, vector, k::Int=10; filter=nothing, minrecall=nothing)
-    query = convert(Vector{Float32}, vector)
+    query = _search_query(handle.engine, vector)
     needs_save = minrecall !== nothing && handle.engine isa IndexEngine.DenseEngine{IndexEngine.GraphBackend} && isempty(handle.engine.backend.opt_beamsearch)
     res_knn = filter === nothing ?
         IndexEngine.search_live(handle.engine, query, k; bs_override=nothing, minrecall, policy=nothing) :

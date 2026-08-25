@@ -65,7 +65,7 @@ using SimilaritySearchEngine
 using SimilaritySearch: SearchGraph
 
 workdir = mktempdir()
-h = create_project(workdir, "demo"; index_type=SearchGraph, minrecall=0.9)
+h = create_project(workdir, "demo"; engine=DenseEngine, backend=SearchGraph, minrecall=0.9)
 
 # typed items in: this library never takes a JSON-shaped dictionary and picks it apart
 append_items!(h, [DenseItem(rand(Float32, 32); doc_id="item-$i") for i in 1:1000])
