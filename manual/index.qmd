@@ -3,92 +3,44 @@ title: "SimilaritySearchEngine.jl"
 lang: en-US
 ---
 
-`SimilaritySearchEngine.jl` is an embedded, no-HTTP-required Julia API for running
-similarity search *projects*: named, persistent collections of dense vectors, sparse vectors or
-text documents backed by [SimilaritySearch.jl](https://github.com/sadit/SimilaritySearch.jl),
-[TextSearch.jl](https://github.com/sadit/TextSearch.jl), and
-[RocksDB.jl](https://github.com/sadit/RocksDB.jl). A script does `using
-SimilaritySearchEngine` and calls its functions directly — no running server, no CLI
-subprocess, no job queue. The trust boundary is just OS file permissions on a working
-directory, the same as any other embedded database.
+`SimilaritySearchEngine.jl` is an embedded, in-process library for similarity search and information retrieval in Julia. It provides transactional, persistent storage for collections of dense vectors, sparse representations, and text documents, backed by [SimilaritySearch.jl](https://github.com/sadit/SimilaritySearch.jl), [TextSearch.jl](https://github.com/sadit/TextSearch.jl), and [RocksDB.jl](https://github.com/sadit/RocksDB.jl).
 
-## What it gives you
+By executing directly within the host process, `SimilaritySearchEngine.jl` eliminates the operational overhead of HTTP servers, background daemons, and inter-process communication layers. Access control is managed directly through standard operating system file permissions on the working directory.
 
-- **Project lifecycle**: `create_project`, `open_project`, `close_project!` manage a
-  project's on-disk RocksDB directory and the live search engine backing it.
-- **A project says what it holds, and separately what holds it**: `engine=` is `DenseEngine`,
-  `SparseEngine` or `FullTextEngine` — dense vectors, sparse vectors, text — and `backend=` is
-  the index underneath it, defaulting to that engine's own (`SearchGraph`, `InvertedFile`,
-  `BM25InvertedFile`). `payload_kind(engine)` answers the first question for a project you
-  opened; `BACKENDS` lists the legal pairings.
-- **Dense vector search** over a `SearchGraph` (an approximate, self-tuning graph index),
-  or an exact `ExhaustiveSearch`/`ParallelExhaustiveSearch`, all sharing the same
-  `append_items!`/`search` surface — for a `SearchGraph`, `append_items!` only stages raw
-  vectors, and the (expensive) graph-connection step happens in a separate, explicit
-  `index!` call, so a caller controls when that cost is paid.
-- **Sparse vector search** over an `InvertedFile`, for vectors *you* encoded — a learned sparse
-  retriever, a feature table, a set of ids. It takes `SparseItem`s of a dimension fixed at
-  creation, under any distance that reads a sparse vector (cosine over the weights, or one of
-  `Dist.Sets.*` over the nonzero positions), and there is no vocabulary, no profile and no
-  tokenizer anywhere in it. BM25 is deliberately not among its distances: it scores from corpus
-  statistics rather than from a vector, so it belongs to a text project.
-- **Full-text search**, where this package does the encoding, over a `BM25InvertedFile` or a
-  weighted `TextInvertedFile`, sharing
-  the same `append_items!`(stage)/`index!`(build)/`ftsearch` surface as the dense case — the
-  first `index!` call on a text project also fits its `TextProfile` from whatever's been
-  staged so far, so there's no separate training step to call first.
-- **A text model stated explicitly**: creating a text project requires a `textmodel`, and
-  there is no default. Prefer `DefaultProfile(:es)` — the published profile for a language,
-  refitted to your own corpus at the first `index!` call, so your weights are calibrated over
-  millions of paragraphs and the stopwords, lemmas and query-expansion network are inherited
-  rather than derived (`refit=false` keeps the base's language-wide vocabulary instead).
-  `BaseProfile(p)` uses a profile you already hold. `FitFromCorpus(TextConfig(language=:es))`
-  is the explicit "no base profile" escape, delegated to `TextSearch.fit_profile` and capped at
-  `max_documents` to bound its cost — which makes its vocabulary thin, and that is not a
-  decision to arrive at by omission. Queries then travel with a
-  `QueryPolicy`: whether to correct their spelling against the vocabulary (`ftexplain`
-  reports what was corrected, `correction=:off` undoes it) and whether to widen them with
-  the profile's expansion network.
-- **Typed in, typed out**: items are `DenseItem`/`SparseItem`/`TextItem` values and results are
-  `SearchResult`/`StoredItem`/`ExistsResult`. No JSON-shaped dictionary is taken apart by key
-  name on the way in or assembled on the way out; `meta` stays a free-form `Dict{String,Any}`,
-  and `get_raw_meta` is the one raw path, reserved for the HTTP server.
-- **Soft deletes**: `delete_item!` marks a document as logically deleted without touching
-  the underlying index; search reports a `deleted` marker per candidate instead of
-  silently hiding or backfilling it.
-- **Recall calibration**: `calibrate!` runs `SimilaritySearch.jl`'s real hyperparameter
-  search so later queries can ask for `minrecall=0.95` (or any other target) and get back
-  a `BeamSearch` tuned for it.
-- **Whole-dataset operations**: `allknn`, `fft` (diverse sampling), `closestpairs`
-  (near-duplicate detection), and `bichromatic_kclosestpairs` (closest pairs across two
-  collections) all run synchronously, in-process, against a dense project's index.
-- **Incremental, per-field persistence**: every mutation writes only the storage it
-  actually touched — a `SearchGraph`'s raw vectors go straight into a memory-mapped file,
-  a soft delete never rewrites the index, and routine inserts never rewrite the whole
-  engine state. See [Architecture](architecture.qmd) for the on-disk layout.
+---
 
-## Where this fits
+## Core Capabilities
 
-This package is deliberately scoped to project lifecycle, core CRUD, calibration, and the
-whole-dataset operations (`allknn`, `fft`, `closestpairs`, `bichromatic_kclosestpairs`).
+- **Project Lifecycle Management**: Functions `create_project`, `open_project`, and `close_project!` manage the on-disk RocksDB directory and the associated live search engine.
+- **Engine and Backend Separation**:
+  - **Payload Engines**: `DenseEngine`, `SparseEngine`, and `FullTextEngine` specify the stored data domain.
+  - **Index Backends**: `SearchGraph`, `ExhaustiveSearch`, `InvertedFile`, and `BM25InvertedFile` define the underlying indexing data structures.
+  - The function `payload_kind(engine)` identifies the data domain, and the `BACKENDS` registry enforces valid engine-backend pairings.
+- **Dense Vector Search**: Approximate nearest-neighbor search via `SearchGraph` with dynamic beam-search tuning, or exact brute-force search via `ExhaustiveSearch` and `ParallelExhaustiveSearch`. For `SearchGraph`, insertions (`append_items!`) and graph construction (`index!`) are decoupled to give callers explicit control over indexing latency.
+- **Sparse Vector Search**: Native inverted index search (`InvertedFile`) over user-encoded sparse representations of fixed dimension. Distance functions include cosine distance over weights and discrete set metrics (`Dist.Sets.*`) over non-zero coordinate supports.
+- **Full-Text Retrieval**: Lexical search backed by `BM25InvertedFile` or TF-IDF-weighted `TextInvertedFile`. The initial `index!` call fits or initializes a `TextProfile` from staged texts, establishing the vocabulary and linguistic weighting model.
+- **Explicit Text Modeling**: Text projects require an explicit `AbstractTextModelSpec`:
+  - `DefaultProfile(:lang)`: Resolves a pre-trained language profile and refits vocabulary frequencies against the staged corpus.
+  - `BaseProfile(p)`: Utilizes an existing, pre-computed `TextProfile`.
+  - `FitFromCorpus(cfg)`: Fits a new profile directly from the staged corpus, bounded by `max_documents`.
+  - Query execution accepts a `QueryPolicy` to control automatic orthographic correction and semantic query expansion.
+- **Strongly Typed Interface**: Inputs are encapsulated in typed containers (`DenseItem`, `SparseItem`, `TextItem`), and queries return structured results (`SearchResult`, `StoredItem`, `ExistsResult`).
+- **Logical Deletions**: The `delete_item!` function marks documents as logically deleted without mutating the underlying search index. Queries return candidates alongside an explicit `deleted` flag.
+- **Target Recall Calibration**: The `calibrate!` function executes hyperparameter optimization to calibrate beam-search configurations for target recall constraints (`minrecall`).
+- **Whole-Dataset Metric Operations**: Synchronous, in-process execution of all-pairs nearest neighbors (`allknn`), diverse center selection (`fft`), closest pair discovery (`closestpairs`), and cross-dataset closest pairs (`bichromatic_kclosestpairs`).
+- **Granular Storage Persistence**: High-throughput persistence utilizing a hybrid layout of RocksDB column families and dedicated memory-mapped vector files (`dense_vectors.mmapdb`).
 
-It has two kinds of user, and the embedded API is the surface for both. A **Julia program** does
-`using SimilaritySearchEngine` and calls these functions directly — that is a first-class use,
-not a testing convenience, which is why the API takes and returns typed Julia values rather than
-JSON-shaped dictionaries. The sibling **`SimilaritySearchServer`** is the other: it wraps this
-same engine in a CLI and an HTTP server, and it is a *consumer* of this package rather than the
-reason it exists. Development happens here first, at the engine level, and is ported there
-afterwards — so a capability can exist here before it has a server counterpart (sparse projects
-do today), and a project touched through either stays readable by the other, same on-disk
-layout and same insertion/search/persistence semantics.
+---
 
-## Where to go next
+## Ecosystem Role
 
-- [Architecture](architecture.qmd) — the module map, the engine type hierarchy, the
-  staging-vs-indexing split, the concurrency model, and the RocksDB-plus-mmap-file
-  persistence layout, each with a diagram.
-- [Tutorial](tutorials/index.qmd) — a hands-on walkthrough: create a dense project and a
-  text project, insert, search, soft-delete, calibrate, and reopen.
-- **API reference** — generated from the source docstrings with
-  [Documenter.jl](https://documenter.juliadocs.org/), in `docs/` (the standard location
-  for a Julia package's reference docs), not on this site.
+`SimilaritySearchEngine.jl` provides the core embedded engine functionality. Higher-level services—such as HTTP REST APIs, asynchronous task workers, and command-line interfaces—are provided by the sibling package `SimilaritySearchServer.jl`, which uses this embedded engine directly.
+
+---
+
+## Manual Navigation
+
+- **[Architecture](architecture.qmd)**: Detailed specifications of the module architecture, engine type hierarchy, staging-indexing split, concurrency model, and on-disk layout.
+- **[Getting Started Tutorial](tutorials/getting-started.qmd)**: Step-by-step tutorial covering dense vectors, sparse indexing, BM25 text search, filtering, calibration, and whole-dataset operations.
+- **[Multilingual Paragraph Search](tutorials/paragraph-search.qmd)**: Comprehensive evaluation over multilingual Project Gutenberg corpora and Wikipedia.
+- **[API Reference](../api.html)**: Comprehensive API documentation generated with Documenter.jl.

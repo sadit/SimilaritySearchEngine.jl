@@ -1,16 +1,20 @@
 ---
-title: "Tutorial"
+title: "Tutorials Overview"
 lang: en-US
 ---
 
-- [Getting started](getting-started.qmd) — using paragraphs from *Frankenstein*: dense
-  vector search with LSI-derived embeddings, full-text search with BM25 and TF-IDF, plus
-  soft-delete, filtering, calibrating for a target recall, close/reopen, and the
-  whole-dataset operations (`allknn`, `fft`, `closestpairs`, `bichromatic_kclosestpairs`).
+This section provides hands-on tutorials for working with `SimilaritySearchEngine.jl`:
 
-- [Paragraph search over books and Wikipedia](paragraph-search.qmd) — the larger tour: four
-  real corpora (100 Gutenberg books each in English, Spanish and Portuguese, plus 1000
-  Wikipedia articles), all retrieved by paragraph, each indexed against a `TextProfile` fitted
-  for it. Covers fitting and loading profiles, what `install`/`list`/`info` do, correcting a
-  query against the vocabulary, expanding it through the profile's network, and what building
-  the whole thing actually cost.
+- **[Getting Started](getting-started.qmd)**: A comprehensive walkthrough using paragraphs from Mary Shelley's *Frankenstein*. Demonstrates:
+  - Dense vector similarity search using LSI-derived embeddings with `SearchGraph`.
+  - Sparse vector indexing with `InvertedFile`.
+  - Full-text retrieval with BM25 and TF-IDF models.
+  - Logical soft deletions and metadata filtering.
+  - Target recall calibration via `calibrate!`.
+  - Transactional persistence (closing and reopening projects).
+  - Whole-dataset metric operations (`allknn`, `fft`, `closestpairs`, `bichromatic_kclosestpairs`).
+
+- **[Multilingual Paragraph Search](paragraph-search.qmd)**: A large-scale tutorial indexing four corpora across three languages (English, Spanish, Portuguese Project Gutenberg collections, and English Wikipedia). Demonstrates:
+  - Fitting and configuring linguistic profiles (`TextProfile`).
+  - Orthographic query variant resolution and semantic query expansion.
+  - Empirical benchmarking of indexing throughput, memory overhead, and search latency.

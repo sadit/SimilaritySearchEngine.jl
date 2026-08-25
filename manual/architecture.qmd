@@ -4,29 +4,28 @@ lang: en-US
 toc: true
 ---
 
-This page describes how `SimilaritySearchEngine.jl` is put together: its module map, the
-engine type hierarchy that replaces name/enum-based dispatch with real Julia types, the
-staging-vs-indexing split that lets a project decouple insertion from the expensive
-graph-connection/encoding step (dense *and* full-text alike), the concurrency model that
-lets searches run in parallel while staying safe from concurrent inserts, and the
-RocksDB-column-families-plus-one-mmap-file layout that makes persistence incremental
-instead of a single ever-growing blob.
+This document describes the architectural design and internal subsystems of `SimilaritySearchEngine.jl`. It covers the module organization, the engine type hierarchy, the decoupled staging-versus-indexing lifecycle, the multithreaded concurrency model, and the hybrid persistence layout combining RocksDB column families with memory-mapped array storage.
 
-## Module map
+---
 
-The package is five source files, four of them real submodules (`Schema`, `Project`,
-`IndexEngine`, `Persistence`) plus `embedded.jl`, which defines `EmbeddedEngine` and the
-top-level functions (`create_project`, `append_items!`, `search`, ...) directly in the
-`SimilaritySearchEngine` module itself — the friendly surface a script actually calls.
+## Subsystem Architecture and Module Map
+
+The package is structured into four core submodules and an embedded orchestration layer:
+
+- **`Schema`**: Defines the metadata record contract (`Schema.MetadataRecord`) and serialization interfaces.
+- **`Project`**: Implements project metadata storage (`ProjectManager`), document ID indexing, and secondary key lookups.
+- **`IndexEngine`**: Implements the `AbstractSearchEngine` hierarchy, encapsulating indexing algorithms from `SimilaritySearch.jl` and `TextSearch.jl`.
+- **`Persistence`**: Provides storage adapters for RocksDB column families and memory-mapped files.
+- **`embedded.jl`**: Implements `EmbeddedEngine` and exports the high-level transactional API (`create_project`, `append_items!`, `search`, etc.).
 
 ```{mermaid}
 flowchart LR
-    Schema["Schema<br/><small>MetadataRecord (_id, doc_id,<br/>keywords, refs), meta split</small>"]
+    Schema["Schema<br/><small>MetadataRecord (_id, doc_id,<br/>keywords, refs), meta JSON</small>"]
     Project["Project<br/><small>ProjectManager, metadata CRUD</small>"]
     IndexEngine["IndexEngine<br/><small>AbstractSearchEngine hierarchy</small>"]
     Persistence["Persistence<br/><small>EngineStore, AdjacencyStore, ...</small>"]
     Embedded["embedded.jl<br/><small>EmbeddedEngine + top-level API</small>"]
-    Caller(["Julia script, or<br/>SimilaritySearchServer"])
+    Caller(["Host Julia script, or<br/>SimilaritySearchServer"])
 
     Schema --> Project
     Schema --> Embedded
@@ -36,41 +35,37 @@ flowchart LR
     Embedded --> Caller
 ```
 
-`IndexEngine` and `Persistence` are deliberately independent of `Project`/`Schema` and of
-each other: `IndexEngine` knows nothing about RocksDB (its persistence hook is a plain
-`(index, sp, ep) -> nothing` callback), and `Persistence` knows nothing about metadata
-schemas or search engines (it stores plain Julia values under string keys). `embedded.jl`
-is the one place that wires all four together — every other module could, in principle,
-be reused on its own.
+### Decoupling of Subsystems
 
-`Schema`/`Project` have no per-project typed-field schema to declare anymore: every
-project has exactly the same fixed-shape `Schema.MetadataRecord` (`_id`, `doc_id`,
-`keywords`, `refs`) plus a free-form `meta` JSON blob for everything else appended with an
-item — `_id` is the internal, sequential, always-present handle (the same id space the
-engine's own vector/text store uses); `doc_id` is the caller's own external id, if any;
-`keywords`/`refs` are the only two fields with a secondary index (`Project`'s fixed
-`idx_keywords`/`idx_refs` column families), everything else lives in `meta`, looked up
-straight from `Project`, never indexed.
+`IndexEngine` and `Persistence` operate independently of `Project` and `Schema`:
+- `IndexEngine` is agnostic to RocksDB, interacting with persistence exclusively through structural callback hooks `(index, sp, ep) -> nothing`.
+- `Persistence` stores serialized Julia objects under key-value interfaces without semantic knowledge of index internals.
+- `embedded.jl` orchestrates these components into a unified transactional engine.
 
-## Engine type hierarchy
+### Uniform Metadata Contract
 
-A project is two decisions, and the hierarchy keeps them apart: an **engine** says what the
-project holds, and a **backend** says which index holds it.
+Projects use a standardized metadata record structure, `Schema.MetadataRecord`:
+- `_id`: Internal, sequential, zero-based or 1-based integer identifier aligned with vector storage indices.
+- `doc_id`: Caller-provided external string identifier.
+- `keywords`: Indexed string tags mapped via the secondary index `idx_keywords`.
+- `refs`: Indexed document reference links mapped via `idx_refs`.
+- `meta`: Arbitrary unstructured metadata stored as a serialized JSON object.
 
-```{julia}
-#| eval: false
-create_project(w, ds)                                              # dense vectors, SearchGraph
-create_project(w, ds; engine=DenseEngine, backend=ExhaustiveSearch)
-create_project(w, ds; engine=SparseEngine, dimension=50_000)
+---
+
+## Engine Type Hierarchy
+
+`SimilaritySearchEngine.jl` parameterizes search collections through two distinct abstractions:
+1. **Engine (`AbstractSearchEngine`)**: Defines the data domain of the stored payloads (`DenseEngine`, `SparseEngine`, `FullTextEngine`).
+2. **Backend (`AbstractSearchIndex`)**: Defines the underlying search data structure (`SearchGraph`, `ExhaustiveSearch`, `ParallelExhaustiveSearch`, `InvertedFile`, `BM25InvertedFile`).
+
+```julia
+create_project(w, ds)                                               # Dense vectors, SearchGraph (defaults)
+create_project(w, ds; engine=DenseEngine, backend=ExhaustiveSearch) # Dense vectors, exact linear scan
+create_project(w, ds; engine=SparseEngine, dimension=50_000)        # Sparse vectors, InvertedFile
 create_project(w, ds; engine=FullTextEngine, backend=BM25InvertedFile,
-                      textmodel=DefaultProfile(:es))
+                      textmodel=DefaultProfile(:es))                # Full text, BM25 scoring
 ```
-
-Three engines, because there are three kinds of thing a caller can hand over — a dense vector,
-a sparse vector, a string — and each needs a different amount of machinery to accept it. Four
-backends, because there are four ways to hold an index and they carry different state. There is
-still no enum tag anywhere: the concrete Julia type is what `add_item!`, `search_live` and every
-other generic function dispatch on, and `DenseEngine{B}` dispatches on its backend too.
 
 ```{mermaid}
 classDiagram
@@ -129,342 +124,141 @@ classDiagram
     FullTextEngine *-- TextBackend
 ```
 
-A few design choices worth calling out:
+### Architectural Properties of the Hierarchy
 
-- **The split exists because of `SparseEngine`.** Before it, the hierarchy was one struct per
-  index kind — a `SearchGraphEngine`, a `GenericEngine{IndexType}`, a `BM25Engine`, an
-  `InvertedFileEngine` — which sorted projects by the thing a caller is least likely to know and
-  most likely to change. It also left a hole: an `InvertedFile` and its distance were reachable
-  only *through* a text engine, so a caller who already held sparse vectors had to pretend to
-  have text — fit a profile it did not want, stage strings it did not have. `SparseEngine` is
-  that missing layer, and separating the two decisions is what made it expressible.
-- **`payload_kind(engine)`** returns `:dense`, `:sparse` or `:text`, and is what guards ask
-  instead of the `is_text_index` predicate they used to. With two kinds, "not text" meant
-  "dense"; with three that reading is simply false.
-- **`BACKENDS`** is the table of legal pairings, read three ways — to default a backend, to
-  check one, and to name the alternatives in the error when a check fails. `InvertedFile`
-  appears under both `SparseEngine` and `FullTextEngine` on purpose: the same library index
-  serves sparse vectors a caller encoded and text this package encodes, and `engine` is what
-  says which. Three methods instead of one table would drift; the table cannot.
-- **BM25 is not one of `SparseEngine`'s distances**, which is the one asymmetry worth
-  explaining. `BM25InvertedFile` holds a `Vocabulary` and scores from `getndocs`/`avgdoclen`:
-  BM25 is a scoring rule over a corpus, not a metric over sparse vectors. So it stays with
-  `FullTextEngine`, which has the corpus statistics, and `SparseEngine` takes the distances that
-  read a vector — cosine over the weights, or one of `Dist.Sets.*` over the nonzero positions.
-- `minrecall`/`opt_beamsearch` live on `GraphBackend` and nowhere else — only a `SearchGraph`
-  autotunes a `BeamSearch` toward a target recall. On the engine they would be two fields every
-  exact and every inverted-file project could only ever leave empty.
-- `SparseBackend` records the `dimension` it was created with, and `create_project` requires it
-  for a sparse project. An `InvertedFile` is a fixed array of posting lists: the dimension is
-  structural, not descriptive, so it has to be known before the first item and every item
-  appended has to agree with it.
-- `FullTextEngine` carries its whole text model in one field,
-  `profile::Union{Nothing, TextProfile}` — vocabulary and weights (`profile.model`) plus the
-  corpus-produced artifacts (stopword set, lemma map, query-expansion network) and the
-  lineage saying how it was produced. That replaced a `voc`/`model` pair carried before
-  `TextSearch` 1.1 published `TextProfile`, and the reason to prefer it is structural: an
-  artifact has exactly one home, and the `TextConfig` the tokenizer runs is *derived* from the
-  profile, so an index cannot end up tokenizing documents through a different lemma map than
-  the one it saves.
-- A text project is created from an `AbstractTextModelSpec`: three answers to "where does the
-  vocabulary come from", not variations on one setting. `BaseProfile(profile)` trains it at
-  creation. `DefaultProfile(:es)` and `FitFromCorpus(textconfig; …)` leave it untrained and
-  store the recipe in `fitspec`, for the first `index!` call to carry out — the first by loading
-  the published profile for that language and refitting it against the staged corpus, the second
-  by delegating a fit of it to `TextSearch.fit_profile`. `index === nothing` exactly while
-  `profile === nothing`. There is no separate training entry point:
-  `add_item!`/`append_items!` always just stage raw text into `staged` (never an error,
-  trained or not — see "Staging vs. indexing" below).
-- **Fitting is the library's job, not this package's.** `train_profile` is a dispatcher over
-  the two deferred specs and nothing more: one calls `TextSearch.fit_profile`, the other
-  `TextSearch.load_profile` + `TextSearch.refit_profile`. This package used to fit a vocabulary
-  and weights itself, and every line of that was a second implementation of something the
-  library does. What delegation costs is that a fit is now the *full* pipeline — LSI, expansion
-  network, lemma clustering — with no cheap variant, which is why `FitFromCorpus` caps its
-  sample at `max_documents` and why the recommended path avoids fitting altogether.
-- `create_project` **requires** the spec for a text project and refuses `nothing`, and the other
-  two kinds refuse a spec rather than ignoring one. Both directions are deliberate. The
-  fit-from-corpus form freezes the vocabulary at the first `index!` call, so every term a later
-  batch introduces is dropped from then on — nothing about the project's behaviour afterwards
-  distinguishes "I chose this" from "I never said", which is exactly why it cannot be a default.
-  In the other direction, a text model handed to an index of vectors has no reading under which
-  it does anything, so swallowing it is how a project ends up not being the kind its author
-  thought it was. Each spec is a type carrying its *own* options, so an option that only
-  means something on one path cannot be handed to the other — the same reason this hierarchy
-  discriminates on concrete types instead of an enum tag.
-- **Query-side orthographic bridging is the library's too.** This engine used to derive and
-  cache a variant map itself (`musica` → `música`) in a `variants` field. `TextSearch` 1.1 builds
-  that map inside the index's own `QueryPipeline`, so the field is gone and a `QueryPolicy`
-  passed to `ftsearch` modifies how the existing map is *applied* rather than rebuilding it. One
-  map, in the index that owns it.
-- Every engine shares three fields regardless of what else it carries: `deleted_ids::Set{UInt32}`
-  (logically deleted document ids — `UInt32` uniformly, matching the id type search
-  results actually come back as), `lock::ReadWriteLock`, and `search_ctx_pool::ContextPool`
-  (see below).
+- **First-Class Sparse Engine (`SparseEngine`)**: Provides direct inverted-index search over externally encoded sparse vectors. Callers supply pre-computed `SparseVector` objects without requiring linguistic tokenizers or text profiles.
+- **Payload Domain Introspection (`payload_kind`)**: Returns `:dense`, `:sparse`, or `:text`, allowing client layers to inspect payload requirements.
+- **Backend Compatibility Registry (`BACKENDS`)**: Enforces valid combinations of payload engines and search backends:
+  - `DenseEngine` accepts `SearchGraph`, `ExhaustiveSearch`, and `ParallelExhaustiveSearch`.
+  - `SparseEngine` accepts `InvertedFile`.
+  - `FullTextEngine` accepts `BM25InvertedFile` and `TextInvertedFile`.
+- **Domain Separation of BM25**: `BM25InvertedFile` is restricted to `FullTextEngine` because BM25 scoring relies on corpus-level document frequencies and average document lengths rather than purely geometric vector properties.
+- **Structural Dimension Constraints**: `SparseBackend` requires an explicit `dimension` parameter at initialization because an `InvertedFile` allocates a fixed array of posting lists.
+- **Encapsulated Linguistic Modeling**: `FullTextEngine` encapsulates its entire linguistic configuration within a `TextProfile` (`profile`), including vocabulary frequencies, term weighting schemes, stopword lists, lemma clusters, and query-expansion graphs.
 
-## Staging vs. indexing: a graph and a text project have the split, the rest index on insertion
+---
 
-`append_items!`/`add_item!` only ever *stages* an item for a graph-backed dense project and for
-a text one; `search_live`/`ftsearch`/`allknn`/`fft`/`closestpairs`/`bichromatic_kclosestpairs`
-only ever see items an explicit `index!` call has actually processed, not merely staged.
+## Decoupled Lifecycle: Staging vs. Indexing
 
-The other two backends have no split to speak of. An exact index (`ExhaustiveSearch`/
-`ParallelExhaustiveSearch`) always evaluates directly against `db`, and an `InvertedFile` builds
-its posting lists on insertion, so for both of them `append_items!` makes an item searchable
-immediately. `index!` is still defined for them, as a no-op: the same four lines —
-`create_project`, `append_items!`, `index!`, `search` — should mean the same thing for every kind
-of project, and a caller should not have to know which backends need the third one. The cost is a
-call that does nothing, which is the cheaper mistake; the alternative made switching a project
-from a graph to a brute-force scan a change to every script that fed it.
+`SimilaritySearchEngine.jl` decouples the ingestion of raw items from the computationally intensive construction of search index structures:
 
-`SimilaritySearch.jl`'s own `SearchGraph` separates *staging* raw vectors into its
-database from the (expensive) graph-connection work, and this package extends that same
-split to the text backends, which have no such native support of their own to lean on:
+```
+[ Ingestion ] ──────> append_items! ──────> [ Staged Backlog ] ──────> index! ──────> [ Searchable Index ]
+                     (Durable in Store)                                              (Searchable in Engine)
+```
 
-- graph-backed dense: `insert_dense!(index::SearchGraph, ctx, item) = push_item!(index.db, item)`
-  only ever appends `item` to `index.db` — cheap, and durable the instant it happens (see
-  Persistence below), but `index.adj` (the graph itself) is untouched.
-  `IndexEngine.index!(engine::DenseEngine{GraphBackend})` is the explicit, idempotent step that
-  actually builds graph connections for whatever has been staged since the last call (or
-  since creation) — it delegates to `SimilaritySearch.index!(engine.index, engine.ctx)`,
-  which itself only ever processes the backlog (`length(engine.index)+1:length(database(engine.index))`),
-  so calling it repeatedly, or with nothing new staged, is a cheap no-op.
-- text: `add_item!` just pushes raw text onto `engine.staged`
-  — the text-engine counterpart of `index.db`, since `TextSearch.jl`'s inverted-file types
-  have no raw-item staging area of their own to reuse. `IndexEngine.index!(engine)` (no
-  corpus argument) catches up the exact same backlog range
-  (`(engine.index === nothing ? 0 : length(engine.index))+1:length(engine.staged)`),
-  encoding each staged text (`bagofwords` for BM25; for the weighted engine, handing the
-  text straight to `TextInvertedFile`, whose own `push_item!` vectorizes through the
-  profile's model) and `push_item!`ing it into the real index — with one extra twist on its
-  *first* call for a project created without a profile: since neither index kind can even be
-  constructed without a `Vocabulary`, that call runs the engine's `fitspec` over what is staged
-  so far and builds the real index against the resulting `TextProfile`, before running the same
-  backlog loop. Every later call is a plain catch-up, identical in shape to the graph's.
+### Operational Dynamics
 
-  A project created from a `BaseProfile` skips that entirely, and the difference is not only
-  when the work happens: a vocabulary fitted from a sample of the first batch is frozen there,
-  so every term appended later that it never saw is out-of-vocabulary and silently dropped.
-  Starting from a profile fitted over the language — `DefaultProfile(:es)`, or a `BaseProfile`
-  of one you hold — is what makes an incrementally-grown text project behave.
+1. **`SearchGraph` (Dense Engine)**:
+   - `append_items!` appends raw `Vector{Float32}` arrays directly to the memory-mapped vector file `dense_vectors.mmapdb`. This operation is durable and fast ($O(1)$ per vector), but does not construct graph edges.
+   - `index!` evaluates the backlog range `length(index)+1:length(database(index))` and builds proximity graph connections via `SimilaritySearch.index!`.
+2. **`FullTextEngine` (Text Engine)**:
+   - `append_items!` appends raw text strings to `StagedTextStore` within RocksDB.
+   - `index!` processes the staged text backlog:
+     - On the **first invocation** of an uninitialized project, `index!` executes the linguistic model specification (`fitspec`) to build the initial `TextProfile` and instantiate the inverted index.
+     - On subsequent invocations, `index!` encodes staged strings and inserts posting list entries.
+3. **`ExhaustiveSearch` and `InvertedFile` (Sparse Engine)**:
+   - Because exact linear scans evaluate directly over the database and sparse inverted files update posting lists upon insertion, `append_items!` makes items searchable immediately. `index!` operates as an idempotent no-op.
 
-This decouples *when* an item becomes durable (immediately, on `append_items!`) from
-*when* it becomes searchable (only after an explicit `index!`), so a caller controls when
-the expensive graph-connection/encoding cost is paid — once per big batch, on a schedule,
-or right before the next round of queries — instead of paying it synchronously on every
-single insert the way an exact or an inverted-file backend does.
+---
 
-## Concurrency model
+## Concurrency Model
 
-None of the underlying index kinds tolerates a search running concurrently with an
-insertion into the *same* index — a search reading `index.adj`/`index.db` while
-`add_item!` resizes/appends to those same arrays is exactly the kind of concurrent
-read-during-mutation none of them are built for. But all of them *do* safely support running
-multiple searches concurrently against the same index, since that is exactly what their
-own `searchbatch`/`allknn` parallel paths already rely on internally.
+Index data structures in `SimilaritySearch.jl` and `TextSearch.jl` support concurrent read operations, but mutate unsafely if writes occur concurrently with reads or other writes.
 
-### `ReadWriteLock`
+`SimilaritySearchEngine.jl` coordinates multithreaded access via two synchronization mechanisms: `ReadWriteLock` and `ContextPool`.
 
-Each engine's `lock` is a custom reader/writer lock (built from a `Threads.Condition` plus
-a reader count), not a plain `ReentrantLock`: `search_live`/`current_beamsearch` take it as
-a *read* lock (any number of readers concurrently), while `add_item!`/`index!`/
-`mark_deleted!`/`calibrate!` take it as a *write* lock (exclusive of every reader and every
-other writer).
+### Reader-Writer Synchronization: `ReadWriteLock`
+
+Each engine maintains a `ReadWriteLock` to coordinate thread access:
+- **Read Lock (Shared)**: Acquired by query operations (`search`, `ftsearch`, `allknn`, `closestpairs`). Allows multiple worker threads to execute searches in parallel.
+- **Write Lock (Exclusive)**: Acquired by mutating operations (`append_items!`, `index!`, `delete_item!`, `calibrate!`). Blocks all active readers and concurrent writers.
 
 ```{mermaid}
 sequenceDiagram
-    participant S1 as search_live (thread 1)
-    participant S2 as search_live (thread 2)
-    participant W as add_item! (thread 3)
+    participant S1 as search (thread 1)
+    participant S2 as search (thread 2)
+    participant W as append_items! (thread 3)
     participant L as engine.lock
 
-    S1->>L: read_lock (readers 0 to 1)
-    S2->>L: read_lock (readers 1 to 2)
-    Note over S1,S2: both searches run concurrently
-    W->>L: write_lock (blocks: readers > 0)
-    S1->>L: release (readers 2 to 1)
-    S2->>L: release (readers 1 to 0)
-    L->>W: write lock granted
-    Note over W: insert_dense! / push_item! using engine.ctx
+    S1->>L: read_lock (readers: 1)
+    S2->>L: read_lock (readers: 2)
+    Note over S1,S2: Concurrent search execution
+    W->>L: write_lock (blocks until readers == 0)
+    S1->>L: release (readers: 1)
+    S2->>L: release (readers: 0)
+    L->>W: write_lock granted (exclusive)
+    Note over W: Execute mutation and update persistence
     W->>L: release
 ```
 
-A read-to-write "upgrade" on the same logical operation would deadlock (the write lock
-waits for the reader count to hit zero, including the reader this same call is itself
-holding) — so a graph backend's `minrecall`-driven auto-`calibrate!` inside
-`search_live` is always resolved *before* the read lock is acquired, never nested inside
-it.
+### Context Isolation: `ContextPool`
 
-### `ContextPool`
+Search contexts (`SearchGraphContext`, `GenericContext`, `InvertedFileContext`) contain internal scratch buffers (beam priority queues, visited-vertex bitvectors, and accumulator caches). If concurrent search threads share a single context instance, memory corruption occurs.
 
-Guarding the index data isn't enough by itself: `SearchGraphContext`/`GenericContext`/
-`InvertedFileContext` are all *mutable, reused* scratch spaces (beam buffers,
-visited-vertices state, per-batch cost counters, ...), and two concurrent searches sharing
-the same context object corrupt each other's scratch state — confirmed directly by a
-segfault inside `SearchGraph`'s own beam search when two threads raced on a shared
-context.
-
-`ContextPool` avoids both bad alternatives — sharing one context (unsafe) and allocating a
-fresh one on every single call (wasteful, since these contexts are non-trivial to
-allocate) — by handing each concurrent `search_live` call its own checked-out context,
-returned to the pool when done:
+`ContextPool` manages a dynamic pool of isolated context instances:
 
 ```{mermaid}
 flowchart LR
-    A["search_live call"] --> B{"pool.available<br/>non-empty?"}
-    B -- yes --> C["pop! an idle context"]
-    B -- no --> D["deepcopy(pool.template)"]
-    C --> E["run the search with this context"]
+    A["Search Query Entry"] --> B{"pool.available<br/>non-empty?"}
+    B -- Yes --> C["pop! available context"]
+    B -- No --> D["deepcopy(pool.template)"]
+    C --> E["Execute search using checked-out context"]
     D --> E
-    E --> F["checkin!: push! back onto pool.available"]
+    E --> F["Return context to pool.available"]
 ```
 
-The pool grows lazily to (and then stays at) however many concurrent searches an engine
-has actually seen at once — never pre-allocated speculatively, never shrunk either. `ctx`
-itself (the engine's own field) is never touched by `search_live`; it stays reserved for
-insertion, which already runs under an exclusive `write_lock`, so sharing it there is
-safe.
+The pool expands dynamically to match the peak concurrent query volume and retains allocated buffers to eliminate runtime allocation overhead.
 
-## Persistence: one storage unit per concern
+---
 
-Earlier iterations of this design re-serialized the *entire* engine state — including the
-whole index — on every mutation. The current design instead gives each kind of state its
-own RocksDB column family (or, for a `SearchGraph`'s raw vectors, its own file outside
-RocksDB entirely — see below), so a mutation only ever rewrites the storage it actually
-touched.
+## Persistence Architecture
+
+`SimilaritySearchEngine.jl` employs a fine-grained, column-family-based storage architecture where mutations modify only the affected persistence segments.
 
 ```{mermaid}
 flowchart TB
-    subgraph db["one RocksDB directory per project"]
-        records[("records<br/><small>_id → MetadataRecord (fixed shape)</small>")]
-        meta[("meta<br/><small>_id → free-form meta (JSON)</small>")]
+    subgraph db["RocksDB Project Directory"]
+        records[("records<br/><small>_id → MetadataRecord</small>")]
+        meta[("meta<br/><small>_id → JSON meta blob</small>")]
         oplog[("op_log")]
         idxkw[("idx_keywords<br/><small>keyword → _ids</small>")]
         idxrefs[("idx_refs<br/><small>referenced doc_id → _ids</small>")]
-        engine[("engine <small>(ENGINE_CF)</small><br/><small>one key per engine struct field</small>")]
-        adj[("searchgraph_adj <small>(ADJACENCY_CF)</small><br/><small>object_id → direct neighbors</small>")]
-        stagedtext[("staged_text <small>(STAGED_TEXT_CF)</small><br/><small>append-only raw, not-yet-encoded text blocks</small>")]
-        sparsedb[("sparse_db <small>(INVFILE_DB_CF)</small><br/><small>append-only encoded object blocks</small>")]
+        engine[("engine<br/><small>Field-level engine state</small>")]
+        adj[("searchgraph_adj<br/><small>object_id → direct neighbors</small>")]
+        stagedtext[("staged_text<br/><small>Raw text blocks</small>")]
+        sparsedb[("sparse_db<br/><small>Encoded object blocks</small>")]
     end
-    mmapfile[["dense_vectors.mmapdb<br/><small>-- not RocksDB --<br/>one row per staged vector</small>"]]
+    mmapfile[["dense_vectors.mmapdb<br/><small>Memory-Mapped Vector File</small>"]]
 
-    ProjectManager -- "put_metadata! / get_metadata" --> records
-    ProjectManager -- "get_meta / get_raw_meta" --> meta
-    ProjectManager -- "secondary lookups" --> idxkw
-    ProjectManager -- "secondary lookups" --> idxrefs
+    ProjectManager -- "Metadata CRUD" --> records
+    ProjectManager -- "Unstructured Meta" --> meta
+    ProjectManager -- "Secondary Indices" --> idxkw
+    ProjectManager -- "Secondary Indices" --> idxrefs
     EngineStore -- "save_field! / load_field" --> engine
     AdjacencyStore -- "save_neighbors! / load_neighbors" --> adj
-    StagedTextStore -- "append_staged_texts! / load_staged_text_blocks" --> stagedtext
-    InvertedFileObjectStore -- "append_objects! / load_object_blocks" --> sparsedb
-    append_items_dense["append_items!<br/>(SearchGraph)"] --> mmapfile
-    append_items_text["append_items!<br/>(BM25InvertedFile/InvertedFile)"] --> stagedtext
+    StagedTextStore -- "append_staged_texts!" --> stagedtext
+    InvertedFileObjectStore -- "append_objects!" --> sparsedb
+    append_dense["append_items! (Dense)"] --> mmapfile
+    append_text["append_items! (Text)"] --> stagedtext
 ```
 
-Every RocksDB column family above lives in the *same* directory/connection as the
-project's metadata store (`Project.ProjectManager.db`) — `Project.open_project`'s
-`extra_cf_names` keyword is how `IndexEngine`'s persistence layer gets its own column
-families listed alongside `Project`'s, since every column family that exists on disk must
-be named at `opendb` time on *every* open, not only the first. `dense_vectors.mmapdb` is
-the one exception: a plain file, alongside (not inside) the RocksDB directory -- raw text
-has no fixed-size-record shape to exploit that way, so `staged_text` stays a RocksDB
-column family, structured exactly like `sparse_db` (append-only, blocks keyed by starting
-position) but holding *raw, un-encoded* text instead of already-encoded objects.
+### Storage Subsystems
 
-### `EngineStore`: per-field keys, not one blob
+1. **`EngineStore` (Engine Field State)**:
+   - Stores engine-level configuration as individual key-value entries (`:minrecall`, `:opt_beamsearch`, `:deleted_ids`, `:profile`).
+   - Mutations (e.g., updating deleted IDs or storing calibration results) rewrite only their specific keys.
+2. **Dense Vector Storage (`dense_vectors.mmapdb`)**:
+   - Dense vectors are stored in a dedicated memory-mapped binary file managed by `MMapMatrixDatabase`.
+   - Bypasses key-value serialization overhead, providing high-speed sequential appends and zero-copy random access.
+3. **`AdjacencyStore` (Graph Topology)**:
+   - Graph adjacencies are persisted incrementally through `CallbackLog` observer hooks during `index!`.
+   - Stores only forward (direct) edges; reverse edges are reconstructed dynamically in memory during project reopening to ensure idempotency.
+4. **`StagedTextStore` and `InvertedFileObjectStore`**:
+   - `StagedTextStore` holds un-encoded raw text lines.
+   - `InvertedFileObjectStore` stores contiguous blocks of encoded posting-list objects.
 
-`EngineStore` is a `field_name::Symbol => value` map, one RocksDB key per struct field.
-`save_field!`/`load_field` touch exactly one key; `save_fields!` is only used for rare,
-one-shot multi-field transitions (right after `create_engine`, or the moment a text
-engine's vocabulary is first trained). A soft delete only ever rewrites `:deleted_ids`; a
-`calibrate!` call only ever rewrites `:opt_beamsearch`.
-
-### Dense vectors: a memory-mapped file, not a RocksDB column family
-
-A graph-backed project's raw vectors are fixed-dimension `Float32` data — exactly what
-`SimilaritySearch.MMapMatrixDatabase` is for, and its own append-only counter/growth/fsync
-discipline already gives durable, in-order, crash-safe storage with no need for
-RocksDB's batch-keying scheme, at a much cheaper per-vector read than a RocksDB point
-lookup (confirmed empirically against `VectorDatabase`/`BlockMatrixDatabase` in
-`SimilaritySearch.jl`'s own test suite). `append_items!` writes staged vectors directly
-into this file, at stage time — not through `CallbackLog` at all, unlike everything else
-in this section — since a vector is durable-worthy the moment it's staged, long before any
-graph-linking work happens. The file (`dense_vectors.mmapdb`) is created lazily, on the
-first dense append, since its dimension isn't known before then.
-
-Batch size matters a lot here: `MMapMatrixDatabase` `fsync`s once per `append_items!`
-call, never per individual vector, so the number of calls a caller makes (not the total
-vector count) drives wall-clock time — confirmed empirically, 200,000 128-dim vectors as
-one 200,000-item call took ~0.10s; the same total split into calls of 10 items took
-~2.1s; one call per single item measured roughly 1000x slower than the all-at-once case.
-Prefer fewer, larger `append_items!` calls over many small ones.
-
-### Incremental adjacency/posting-list persistence: different shapes, by necessity
-
-The graph/posting-list structure itself is the other expensive, ever-growing part, so it
-is never saved as a single value either. Its incremental format is driven by
-`SimilaritySearch.CallbackLog`, an *observer* that fires a `flush(index, sp, ep)` callback
-on every `:add!` event a mutating call reports — `SimilaritySearch.jl` standardizes every
-index kind's structural events onto this one name, regardless of which entry point
-triggered it, and the observation channel carries nothing else, so `CallbackLog` never has
-to branch on the event itself. What *does* differ by index kind is the *shape* of what gets
-saved, and *when* this callback fires relative to `append_items!`.
-
-```{mermaid}
-sequenceDiagram
-    participant Caller as index!(handle)
-    participant Idx as SearchGraph
-    participant CB as CallbackLog
-    participant ES as EngineStore
-    participant AS as AdjacencyStore
-
-    Note over Caller,Idx: append_items! already staged vectors into<br/>dense_vectors.mmapdb -- no CallbackLog involved
-    Caller->>Idx: SimilaritySearch.index!(engine.index, ctx)
-    Idx->>Idx: build graph connections for the staged backlog (range sp:ep)
-    Idx->>CB: LOG(:add!, index, ctx, sp, ep)
-    Note right of Idx: fires BEFORE connect_reverse_links!<br/>index.adj[sp:ep] holds only direct links
-    CB->>AS: save_neighbors!(i, direct_neighbors(i)) for i in sp:ep
-    CB->>ES: save_field!(:graph_len, ep)
-    Idx->>Idx: connect_reverse_links! (in memory only)
-```
-
-For a `SearchGraph`, `LOG` fires *before* `connect_reverse_links!` runs for that range —
-so what's captured at that instant is exactly the direct-links-only slice. This is by
-design, not a bug to route around: `connect_reverse_links!` isn't idempotent (re-running
-it on an already-complete graph would duplicate reverse edges), so the on-disk format
-never saves reverse links at all. `:graph_len` (how far graph-indexing actually got,
-which can lag behind how many vectors are staged in `dense_vectors.mmapdb` if the process
-closed between an `append_items!` and its follow-up `index!`) lets reloading resume
-exactly where indexing left off, over the same, already-fully-restored `.db`.
-
-The inverted-file backends — `BM25InvertedFile` and `TextInvertedFile` for a text project,
-`InvertedFile` for a sparse one — have no direct/reverse-link hazard: their own `LOG` only
-fires after a `push_item!` call's mutation is fully done, so `InvertedFileObjectStore`
-simply appends the raw encoded objects just inserted (`invertedfile_objects`) as a new
-block. For a **text** project that `LOG` fires from *inside* an `index!` call's backlog loop
-(see "Staging vs. indexing" above) rather than from `append_items!` directly — `append_items!`
-only ever writes to `StagedTextStore`, the raw-text counterpart of `dense_vectors.mmapdb`, and
-`sparse_db`'s already-encoded blocks only grow once an `index!` call actually catches the
-backlog up. For a **sparse** project there is no such indirection and no `StagedTextStore` at
-all: the caller handed over the encoded vector itself, so the insertion *is* the encoding and
-the block is written on `append_items!`.
-Reloading `index` itself still rebuilds the whole thing by replaying every saved *encoded*
-object back through the library's own `push_item!` — a rebuild-by-reinsertion design, not
-a real on-disk posting-list format — while `staged` (every raw text ever staged, whether
-or not it's been encoded yet) is restored separately, straight from `StagedTextStore`, and
-handed to `restore_engine` alongside `object_blocks`. This is a deliberate scaling limit,
-not an oversight: it's fine up to a few million documents, since the whole corpus and the
-whole rebuilt index have to fit in memory and reloading costs the full original indexing
-time again. It is *not* a design for billion-document corpora, which need genuinely
-disk-backed, paged-on-demand posting lists.
-
-An exact backend (`ExhaustiveSearch`/`ParallelExhaustiveSearch`) has no incremental format
-of its own — its `on_change` just flags `pending_flush[]`, and `embedded.jl` saves the
-*whole* index as a single `:index` value right after the triggering `add_item!` call
-returns. This is acceptable for these exact, in-memory-only index kinds, which have no
-adjacency or posting-list structure to split apart in the first place, and index
-synchronously on every `add_item!`.
-
-### Reopening a project
+### Project Reopening Lifecycle
 
 ```{mermaid}
 sequenceDiagram
@@ -475,100 +269,36 @@ sequenceDiagram
     participant IE as IndexEngine
 
     Caller->>ES: load_field(:kind)
-    Caller->>MM: open_dense_vectors(dir) → vector_blocks (one block, every staged vector)
+    Caller->>MM: Open memory-mapped vector file
+    Caller->>ES: load_field(:graph_len)
     Caller->>AS: load_neighbors(i) for i in 1:graph_len
-    Caller->>ES: load_field(:graph_len, 0)
-    Caller->>IE: build_searchgraph(distance, vector_blocks, load_neighbors, graph_len)
-    IE->>IE: replay every staged vector into index.db (in full)
-    IE->>IE: add! each of the first graph_len objects' saved direct neighbors
-    IE->>IE: connect_reverse_links! once, over 1:graph_len
-    IE-->>Caller: reconstructed SearchGraph -- index.len[] = graph_len
-    Caller->>IE: restore_engine(state, on_change) → DenseEngine{GraphBackend}
+    Caller->>IE: build_searchgraph(distance, vectors, neighbors, graph_len)
+    IE->>IE: Restore forward graph adjacencies
+    IE->>IE: connect_reverse_links! over 1:graph_len
+    IE-->>Caller: Reconstructed DenseEngine{GraphBackend}
 ```
 
-`graph_len` can be `<= length(index.db)`: every staged vector is always fully restored
-into `.db` (that's durable from the moment it was staged), but only the first `graph_len`
-of them were ever graph-indexed before the project last closed — if it closed between an
-`append_items!` and its follow-up `index!` call, the gap is restored as staged-but-not-yet-
-searchable, waiting on a future `index!(handle)` call to catch it up, exactly as it was
-before closing.
+When a project is reopened, stored forward edges are reloaded and bidirectional reverse links are regenerated, restoring the search index to its exact state prior to closure.
 
-`restore_engine` dispatches on `Val(state.kind)` — `:dense`, `:sparse` or `:text` — and each
-branch then reads `state.backend` to pick the index within that kind. Both are **symbols, not
-Julia types**, and that is what makes a saved project survive this file being rewritten: the
-previous shape persisted the type `BM25Engine` into the project's own store, so renaming the
-types (which this restructuring did to every one of them) made every existing project
-unreadable by construction. A symbol cuts that tie, and an unrecognised one maps to an error
-naming the ones the reader does know instead of a `MethodError` about a type it has never
-heard of.
+---
 
-`IndexEngine.extra_state_fields` only covers the exact backends, and covers them with `()` —
-their whole index is a single `:index` field, so there is nothing extra to list. No other
-backend has such a field at all: each needs its own combination of `EngineStore` reads
-(`:minrecall`/`:opt_beamsearch` for a graph; `:distance`/`:dimension` for a sparse project;
-`:profile`/`:fitspec`/`:distance` for a text one) *plus* its own dedicated block-store reads
-(`vector_blocks`/`load_neighbors`/`graph_len` for a graph; `object_blocks`/`staged` for the
-inverted-file kinds), assembled by hand in `open_project` rather than driven by a generic
-per-kind field list.
+## Dual Logging Architecture: Reporters vs. Observers
 
-## Logging: informative output and persistence are independent
-
-Every engine's context carries **two** logging slots, and that split is what makes the
-independence structural instead of a convention to remember. This engine used to hand-roll
-it — one slot holding three backends of two different kinds, with a comment explaining
-which of them could affect persistence — until `SimilaritySearch.jl` grew the distinction
-itself.
-
-- **`ctx.reporters`** — where progress goes to be *read*. Always at least one
-  `InformativeLog` printing a throttled status line to `stderr`; a `log_io` adds a second
-  one writing the same line to any caller-given `IO` (an open file handle, or
-  `stdout`/`stderr`). Purely informative, and it cannot be anything else: a reporter is
-  only ever handed a message.
-- **`ctx.observers`** — what *reacts* to a structural change. A `CallbackLog` here forwards
-  every `:add!` report, untouched by any throttling, to whatever `on_change` closure
-  `embedded.jl` installed. This is the actual persistence trigger.
+Contexts maintain two isolated logging channels:
+- **Reporters (`ctx.reporters`)**: Receive progress messages via [`INFORM`](@ref) and output formatted status lines to `stderr` or custom `IO` streams. Throttled to prevent console flooding.
+- **Observers (`ctx.observers`)**: Receive structural mutation events (`:add!`) via [`OBSERVE`](@ref). Execute un-throttled callbacks that trigger persistence updates (`CallbackLog`).
 
 ```{mermaid}
 flowchart LR
-    Mutation["push_item! / append_items!"] --> INFORM["INFORM<br/>(ctx.reporters)"]
-    Mutation --> OBSERVE["OBSERVE :add!<br/>(ctx.observers)"]
-    INFORM --> Stderr["InformativeLog<br/>→ stderr, throttled"]
-    INFORM --> FileIO["InformativeLog(log_io)<br/>→ any IO, throttled<br/>(optional)"]
-    OBSERVE --> CallbackLog["CallbackLog<br/>→ on_change(index, sp, ep)<br/>(persistence trigger)"]
+    Mutation["append_items! / index!"] --> INFORM["INFORM (ctx.reporters)"]
+    Mutation --> OBSERVE["OBSERVE :add! (ctx.observers)"]
+    INFORM --> Stderr["InformativeLog → stderr (throttled)"]
+    OBSERVE --> CallbackLog["CallbackLog → Persistence Trigger (un-throttled)"]
 ```
 
-The two channels cannot interfere. Silencing the console is `reporters=[]`, and persistence
-continues untouched; conversely no observer can be lost by turning output down, because
-turning output down does not reach that slot.
+---
 
-## Soft deletes
+## Soft Deletions and Dataset Operations
 
-`mark_deleted!` adds a document's id to `deleted_ids` and nothing else — the underlying
-index is never touched, so no rebuild or backfill is needed. `search_live` reports a
-`deleted` flag per candidate instead of silently dropping deleted candidates and
-backfilling with the next-best live one: compensating for deletions by overfetching would
-have to grow with the total number of deletions, and it would hide from the caller which
-ids were even considered. A caller that wants `k` *live* results after filtering is
-expected to page for more (e.g. via a cursor over successive top-`k'` windows) at a layer
-above this one — `SimilaritySearchServer`, not this package.
-
-## Whole-dataset operations
-
-`allknn`, `fft`, `closestpairs`, and `bichromatic_kclosestpairs` all run synchronously,
-in-process, directly against a dense project's index — no job queue, unlike the HTTP
-API's `POST /api/v1/jobs/allknn`. Each does real work proportional to the *whole* dataset
-(or two datasets, for the bichromatic case): `allknn` is every item's own top-`k`
-neighbors at once; `fft` (Farthest-First-Traversal) picks `k` well-separated items for
-diverse sampling; `closestpairs` finds the `k` globally closest pairs within one project
-(near-duplicate/echo detection); `bichromatic_kclosestpairs` finds the `k` closest pairs
-between a project's own index and a second, unindexed collection of vectors. All four
-require a graph-backed dense project that's had `index!` run at least once — none
-apply to a text project.
-
-## Where this leaves `SimilaritySearchServer`
-
-This package covers project lifecycle, core CRUD, calibration, and the whole-dataset
-operations above. Pagination policy over soft-deleted results, HTTP/CLI surfaces, job
-queues, and telemetry all live one layer up, in the sibling `SimilaritySearchServer`
-package, which depends on this one and is kept in sync with it as this package's design
-settles.
+- **Soft Deletions**: The `delete_item!` function registers document identifiers in `deleted_ids`. The underlying index structure is preserved without requiring costly reorganization. Search queries evaluate candidates and attach an explicit `deleted::Bool` flag in `SearchResult`.
+- **Whole-Dataset Metric Operations**: Functions `allknn`, `fft`, `closestpairs`, and `bichromatic_kclosestpairs` execute directly on the in-memory graph index, utilizing multithreaded batch routines to perform comprehensive metric analyses across the entire collection.
