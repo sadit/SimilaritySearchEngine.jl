@@ -1,16 +1,18 @@
 module Schema
 
 using JSON3
+using SparseArrays: SparseVector, sparsevec, nonzeros, nonzeroinds
 
-export AbstractItem, DenseItem, TextItem, MetadataRecord, StoredItem
+export AbstractItem, DenseItem, SparseItem, TextItem, MetadataRecord, StoredItem
 export payload, metadata_record, encode_meta, decode_meta, raw_meta
 export get_field, matches_filter
 
 """
     AbstractItem
 
-Something to append to a project: [`DenseItem`](@ref) (a vector) or [`TextItem`](@ref) (a
-string), each carrying its own external id, tags, references and free-form metadata.
+Something to append to a project: [`DenseItem`](@ref) (a dense vector), [`SparseItem`](@ref)
+(a sparse one) or [`TextItem`](@ref) (a string), each carrying its own external id, tags,
+references and free-form metadata.
 
 This package takes typed values in and hands typed values back. It does not accept a
 JSON-shaped `Dict` as an item and pick it apart, which is what it used to do -- the caller
@@ -20,10 +22,11 @@ way out the same rule holds: [`StoredItem`](@ref), not a merged dictionary. The 
 path that remains is [`raw_meta`](@ref), reserved for an HTTP layer forwarding stored bytes it
 never inspects.
 
-Which concrete type an item is *is* the check. A project indexing vectors takes `DenseItem`s
-and a project indexing text takes `TextItem`s; handing over the wrong one raises, where the
-dictionary form silently skipped any item whose expected key was missing and returned a count
-that quietly disagreed with what the caller passed.
+Which concrete type an item is *is* the check. A project indexing dense vectors takes
+`DenseItem`s, one indexing sparse vectors takes `SparseItem`s and one indexing text takes
+`TextItem`s; handing over the wrong one raises, where the dictionary form silently skipped any
+item whose expected key was missing and returned a count that quietly disagreed with what the
+caller passed.
 """
 abstract type AbstractItem end
 
@@ -79,6 +82,36 @@ _as_meta(m::Dict{String,Any}) = m
 _as_meta(m::AbstractDict) = Dict{String,Any}(string(k) => v for (k, v) in m)
 
 """
+    SparseItem(vector; doc_id=nothing, keywords=String[], refs=String[], meta=Dict{String,Any}())
+
+One sparse vector to index, with its metadata.
+
+A `SparseVector{Float32,Int32}`, and only that: the element and index types an inverted file
+indexes in, converted once here rather than per insertion. A bag of counts is *not* accepted in
+its place, deliberately -- a `Dict{UInt32,Int32}` and a sparse vector mean different things to a
+scorer (presence-and-count against weight), and taking both would make the item's type stop
+answering which one this is.
+
+The vector's length is its dimension, and every item in a project must agree with the dimension
+that project was created with: an inverted file is a fixed array of posting lists, so the
+dimension is structural rather than descriptive.
+"""
+struct SparseItem <: AbstractItem
+    vector::SparseVector{Float32,Int32}
+    doc_id::Union{String,Nothing}
+    keywords::Vector{String}
+    refs::Vector{String}
+    meta::Dict{String,Any}
+end
+
+function SparseItem(vector::SparseVector;
+                    doc_id=nothing, keywords=String[], refs=String[],
+                    meta::AbstractDict=Dict{String,Any}())
+    SparseItem(convert(SparseVector{Float32,Int32}, vector), _as_doc_id(doc_id),
+               _as_strings(keywords), _as_strings(refs), _as_meta(meta))
+end
+
+"""
     payload(item::AbstractItem)
 
 The part of `item` that gets indexed -- the vector of a [`DenseItem`](@ref), the text of a
@@ -88,6 +121,7 @@ Exists so code that treats both kinds uniformly (staging, persistence) does not 
 concrete type just to reach the one field whose name differs.
 """
 payload(item::DenseItem) = item.vector
+payload(item::SparseItem) = item.vector
 payload(item::TextItem) = item.text
 
 """
@@ -152,7 +186,7 @@ metadata_record(item::AbstractItem, _id::Int32, schema_version::Int) =
     StoredItem
 
 One indexed item read back out: its [`MetadataRecord`](@ref) fields, its free-form `meta`, and
-its `payload` -- the very text or vector that was indexed.
+its `payload` -- the very text, dense vector or sparse vector that was indexed.
 
 `payload` is what a search result needs and what the dictionary-returning `fetch_items` could
 not give: `text` was a reserved key, stripped before anything reached the metadata store, so a
@@ -166,7 +200,7 @@ struct StoredItem
     doc_id::Union{String,Nothing}
     keywords::Vector{String}
     refs::Vector{String}
-    payload::Union{String,Vector{Float32},Nothing}
+    payload::Union{String,Vector{Float32},SparseVector{Float32,Int32},Nothing}
     meta::Dict{String,Any}
 end
 

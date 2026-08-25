@@ -46,7 +46,7 @@ export EmbeddedEngine, create_project, open_project, close_project!, append_item
 # JSON-shaped dictionary as an item and pick it apart, and does not answer with one either --
 # see `Schema.AbstractItem`. `get_raw_meta` above is the single exception, reserved for an HTTP
 # layer forwarding stored metadata bytes it never inspects.
-export AbstractItem, DenseItem, TextItem, MetadataRecord, StoredItem, payload
+export AbstractItem, DenseItem, SparseItem, TextItem, MetadataRecord, StoredItem, payload
 export SearchResult, ExistsResult, KnnRow, FFTResult
 
 # Re-exported from TextSearch.jl, not defined here: they are the vocabulary a caller needs to
