@@ -16,7 +16,7 @@
 # runner could otherwise clone.
 #
 # The manual is not rendered here either, and that one is not a packaging problem: its
-# paragraph-search tutorial executes Julia against corpora that are gitignored (827k
+# paragraph-search tutorial executes Julia against corpora that are gitignored (523k
 # paragraphs, an hour and a network connection). Re-render it yourself when its pages
 # change, and commit the result:
 #

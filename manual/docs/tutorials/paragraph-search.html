@@ -204,7 +204,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </header>
 
 
-<p>This is the tutorial to read after <a href="../tutorials/getting-started.html">Getting started</a>. That one used one novel and took every default; this one uses four real corpora, in three languages, each indexed against a text model fitted for it — which is where the decisions that matter start mattering.</p>
+<p>This is the tutorial to read after <a href="../tutorials/getting-started.html">Getting started</a>. That one used one novel and took every default; this one uses three real corpora, in two languages, each indexed against a text model fitted for it — which is where the decisions that matter start mattering.</p>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 20%">
@@ -238,13 +238,6 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <td>paragraph</td>
 </tr>
 <tr class="odd">
-<td><code>gutenberg-pt</code></td>
-<td>Project Gutenberg</td>
-<td>Portuguese</td>
-<td>100 books</td>
-<td>paragraph</td>
-</tr>
-<tr class="even">
 <td><code>wikipedia-en</code></td>
 <td>Wikipedia 2023-11-01</td>
 <td>English</td>
@@ -314,14 +307,6 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <td style="text-align: right;">89.2 MB</td>
 </tr>
 <tr class="even">
-<td style="text-align: right;"><code>gutenberg-pt</code></td>
-<td style="text-align: right;">pt</td>
-<td style="text-align: right;">100</td>
-<td style="text-align: right;">304,688</td>
-<td style="text-align: right;">3046.9</td>
-<td style="text-align: right;">104.2 MB</td>
-</tr>
-<tr class="odd">
 <td style="text-align: right;"><code>wikipedia-en</code></td>
 <td style="text-align: right;">en</td>
 <td style="text-align: right;">1,000</td>
@@ -337,7 +322,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </div>
 <p>Two things in that table are worth pausing on.</p>
 <p><strong>Wikipedia yields far more paragraphs per article than you would expect.</strong> The dump is ordered longest-article-first, so the first shard — which is what a thousand articles come from — is the densest part of the corpus. TextSearch’s own measurements put the corpus-wide figure near 7 paragraphs per article; take them from the front and you get an order of magnitude more. Sampling the convenient slice and extrapolating is how corpus-size estimates go wrong.</p>
-<p><strong>Books vary enormously, and the average hides it.</strong> A hundred Gutenberg volumes is not a hundred comparable things. In the Portuguese corpus a single dictionary contributes 128,133 paragraphs — 42% of the total, and thirty times the largest novel in the same hundred. The per-document average in the table above is therefore a number no actual book resembles, and what it costs you shows up in <em>Searching</em> below.</p>
+<p><strong>Books vary enormously, and the average hides it.</strong> A hundred Gutenberg volumes is not a hundred comparable things. The English hundred runs from 87 paragraphs to 36,096 — a <em>Complete Works of William Shakespeare</em> that is 13.6% of the corpus on its own — against a median book of 1,859. The Spanish hundred’s largest contributor is not a novel at all but a <code>Diccionario Ingles-Español-Tagalog</code> at 17,682 paragraphs, 8.2% of that corpus. The per-document average in the table above is therefore a number no actual book resembles, and what it costs you shows up in <em>Searching</em> below.</p>
 <p>Each record carries the paragraph plus enough metadata to say where it came from:</p>
 <div id="8" class="cell" data-execution_count="1">
 <div class="cell-output cell-output-stdout">
@@ -392,14 +377,6 @@ text:   Se ha respetado la ortografía y la acentuación del original.…</code>
 <td style="text-align: right;">476s</td>
 </tr>
 <tr class="even">
-<td style="text-align: right;"><code>gutenberg-pt</code></td>
-<td style="text-align: right;">407,778</td>
-<td style="text-align: right;">1 <em>(applied)</em></td>
-<td style="text-align: right;">94,234</td>
-<td style="text-align: right;">407,778</td>
-<td style="text-align: right;">863s</td>
-</tr>
-<tr class="odd">
 <td style="text-align: right;"><code>wikipedia-en</code></td>
 <td style="text-align: right;">139,776</td>
 <td style="text-align: right;">18 <em>(applied)</em></td>
@@ -487,14 +464,6 @@ text:   Se ha respetado la ortografía y la acentuación del original.…</code>
   3. Fortunata y Jacinta: dos historias de casa  -63.504
      Doña Lupe la invitó, dos días después de la tarde del choque con Jacinta, a volver a visitar a Mauricia. ¡Qué diría doña Guillermina si no volvían! Ne…
 
-[gutenberg-pt]  o crime do padre Amaro na aldeia
-  1. O crime do padre Amaro, scenas da vida dev  -66.331
-     Foi em casa do sineiro, d'ahi a dias, que Amaro participou a Amelia o plano do padre-mestre. Preparou-a, revelando-lhe primeiro que o conego sabia tud…
-  2. O crime do padre Amaro, scenas da vida dev  -65.218
-     João Eduardo sahiu acabrunhado. Que havia de fazer agora? O doutor Godinho, aquelle colosso, repellia-o com palavras tremendas! E que podia elle, pobr…
-  3. Diccionario de João Fernandes: Lições de l  -64.082
-     *SORRISO* (DAS CREANÇAS)--Flor do paraizo.
-
 [wikipedia-en]  anarchism as a political philosophy
   1. Anarcho-capitalism                          -141.363
      Anarcho-capitalism Anarchist activists and scholars do not consider anarcho-capitalism as a part of the anarchist movement, arguing that anarchism has…
@@ -506,8 +475,8 @@ text:   Se ha respetado la ortografía y la acentuación del original.…</code>
 </div>
 </div>
 <p>The distances are BM25 scores, negated so that smaller is better — the same convention every index kind in <code>SimilaritySearch.jl</code> uses, so a caller never has to ask whether high or low wins.</p>
-<p>Nothing about the calls above is language-specific. The language lives in the profile the project was created with; <code>ftsearch</code> is the same function in all four.</p>
-<p>If a dictionary entry outranked the novel you were expecting, that is the corpus and the scoring function telling you something true. Gutenberg’s popularity ranking is not a balanced sample: the Portuguese top hundred includes a <code>Novo dicionário da língua portuguesa</code> that is <strong>42% of that corpus’s paragraphs</strong> on its own, and the Spanish hundred contributes an English-Spanish-Tagalog dictionary. BM25 normalises by document length, and a two-line dictionary entry sharing one query term with you scores far above a hundred-word paragraph of prose sharing three. Neither the index nor the profile is misbehaving — a corpus assembled by popularity is simply not a corpus assembled for retrieval, and this is what that looks like before anyone filters it.</p>
+<p>Nothing about the calls above is language-specific. The language lives in the profile the project was created with; <code>ftsearch</code> is the same function in all three.</p>
+<p>If a dictionary entry outranked the novel you were expecting, that is the corpus and the scoring function telling you something true. Gutenberg’s popularity ranking is not a balanced sample: the Spanish top hundred’s single biggest contributor is a <code>Diccionario Ingles-Español-Tagalog</code>, 17,682 paragraphs — 8.2% of the corpus, and 1.7× the largest volume of prose in it. BM25 normalises by document length, and a two-line dictionary entry sharing one query term with you scores far above a hundred-word paragraph of prose sharing three. So a corpus with one dictionary in it has, in effect, seventeen thousand tiny documents competing for every query that touches their headwords. Neither the index nor the profile is misbehaving — a corpus assembled by popularity is simply not a corpus assembled for retrieval, and this is what that looks like before anyone filters it.</p>
 </section>
 <section id="correcting-a-query" class="level2">
 <h2 class="anchored" data-anchor-id="correcting-a-query">Correcting a query</h2>
@@ -552,7 +521,7 @@ query: el pais y la republica
 <p>The expansion network relates each vocabulary token to its nearest neighbours in the LSI space the fit computed. <code>prepare.jl</code> turns it on when it creates each project — <code>fit</code> leaves it carried, and applying it is the indexer’s decision:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb12"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>base <span class="op">=</span> <span class="fu">load_profile</span>(<span class="st">"tutorials/profiles/wikipedia-en.zip"</span>)</span>
 <span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>prof <span class="op">=</span> TextSearch.<span class="fu">with_applied</span>(base; query_expansion<span class="op">=</span><span class="cn">true</span>)</span>
-<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="fu">create_project</span>(dir, <span class="st">"wikipedia-en"</span>; index_type<span class="op">=</span>BM25InvertedFile, textmodel<span class="op">=</span><span class="fu">BaseProfile</span>(prof))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="fu">create_project</span>(dir, <span class="st">"wikipedia-en"</span>; engine<span class="op">=</span>FullTextEngine, backend<span class="op">=</span>BM25InvertedFile, textmodel<span class="op">=</span><span class="fu">BaseProfile</span>(prof))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p>What the network holds for a few terms:</p>
 <div id="24" class="cell" data-execution_count="1">
 <div class="cell-output cell-output-stdout">
@@ -592,11 +561,12 @@ revolution   -&gt; revolutions, Enlightenment, revolutionary, monde, mentalités
 <span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>workdir <span class="op">=</span> <span class="fu">mktempdir</span>()</span>
 <span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>h <span class="op">=</span> SSE.<span class="fu">create_project</span>(workdir, <span class="st">"slice"</span>;</span>
-<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>        index_type <span class="op">=</span> TextSearch.BM25InvertedFile,</span>
-<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>        textmodel  <span class="op">=</span> SSE.<span class="fu">BaseProfile</span>(profiles[<span class="st">"gutenberg-en"</span>]))</span>
-<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>SSE.<span class="fu">append_items!</span>(h, slice)          <span class="co"># stages: durable, but nothing is searchable yet</span></span>
-<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a><span class="fu">isempty</span>(SSE.<span class="fu">ftsearch</span>(h, <span class="st">"the whale"</span>, <span class="fl">3</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>        engine    <span class="op">=</span> SSE.FullTextEngine,</span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>        backend   <span class="op">=</span> TextSearch.BM25InvertedFile,</span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>        textmodel <span class="op">=</span> SSE.<span class="fu">BaseProfile</span>(profiles[<span class="st">"gutenberg-en"</span>]))</span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a>SSE.<span class="fu">append_items!</span>(h, slice)          <span class="co"># stages: durable, but nothing is searchable yet</span></span>
+<span id="cb15-14"><a href="#cb15-14" aria-hidden="true" tabindex="-1"></a><span class="fu">isempty</span>(SSE.<span class="fu">ftsearch</span>(h, <span class="st">"the whale"</span>, <span class="fl">3</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-display" data-execution_count="1">
 <pre><code>true</code></pre>
 </div>
@@ -629,15 +599,15 @@ revolution   -&gt; revolutions, Enlightenment, revolutionary, monde, mentalités
 <h3 class="anchored" data-anchor-id="the-two-alternatives-and-why-this-page-takes-neither">The two alternatives, and why this page takes neither</h3>
 <p>Every project on this page was created from a <code>BaseProfile</code>, because <code>prepare.jl</code> had just fitted the profile and held it in hand. The other two forms matter more for a project you are starting from nothing.</p>
 <p><code>DefaultProfile</code> is the one to reach for, and it is what this page would use if it were not building its own profiles as it goes:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb21"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="fu">create_project</span>(workdir, <span class="st">"noticias"</span>; index_type<span class="op">=</span>BM25InvertedFile,</span>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb21"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="fu">create_project</span>(workdir, <span class="st">"noticias"</span>; engine<span class="op">=</span>FullTextEngine, backend<span class="op">=</span>BM25InvertedFile,</span>
 <span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>               textmodel<span class="op">=</span><span class="fu">DefaultProfile</span>(<span class="op">:</span>es))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p>At the first <code>index!</code> call it loads the published Spanish paragraph profile — the same <code>wiki20231101-es-paragraphs</code> this tutorial’s own fits are modelled on — and refits it against whatever you staged: counts blended, weights recomputed, stopwords and lemmas and the expansion network inherited. It resolves from the profile library <code>textsearch install</code> maintains, and says how to install the profile if it is not there.</p>
 <p>The refit narrows the vocabulary to your corpus rather than keeping the language’s: measured on the English base, 335,336 tokens become 12,238 against an 800-document sample. What it buys is calibration and artifacts, not coverage; <code>refit=false</code> keeps the base whole if coverage is what you are after. <code>DefaultProfile</code>’s docstring has the numbers.</p>
 <p><code>FitFromCorpus</code> says, deliberately, that there is no pre-fitted model and one should be fitted from the project’s own corpus:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb22"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="fu">create_project</span>(workdir, <span class="st">"self-fitted"</span>; index_type<span class="op">=</span>BM25InvertedFile,</span>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb22"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="fu">create_project</span>(workdir, <span class="st">"self-fitted"</span>; engine<span class="op">=</span>FullTextEngine, backend<span class="op">=</span>BM25InvertedFile,</span>
 <span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>               textmodel<span class="op">=</span><span class="fu">FitFromCorpus</span>(<span class="fu">TextConfig</span>(language<span class="op">=:</span>en); min_ndocs<span class="op">=</span><span class="fl">3</span>, stopwords<span class="op">=</span><span class="fl">0.9</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p>There is no default among the three, and the reason is a trap. That fit is delegated whole to <code>TextSearch.fit_profile</code>, which has no cheap variant — it always runs the LSI, the expansion network and the lemma clustering — so it is bounded by <code>max_documents</code> (1,000 by default) instead of by the corpus. Which means its vocabulary is fitted from a <em>sample</em>: every term appended later that the sample never held is out-of-vocabulary and silently dropped, forever. Nothing about the project’s behaviour afterwards distinguishes “I chose this” from “I never said”, which is exactly why it cannot be arrived at by omission — <code>create_project</code> refuses a text project with no <code>textmodel</code>.</p>
-<p>The <code>profiles</code> table above is what that trap costs in the other direction: the four fits on this page took 129 to 863 seconds each, on corpora of 41,000 to 305,000 paragraphs. That is the price of a real profile, paid once, by a script — and the reason a project should be handed one rather than asked to produce it during its first <code>index!</code>.</p>
+<p>The <code>profiles</code> table above is what that trap costs in the other direction: the fits on this page took 129 to 476 seconds each, on corpora of 41,000 to 265,000 paragraphs. That is the price of a real profile, paid once, by a script — and the reason a project should be handed one rather than asked to produce it during its first <code>index!</code>.</p>
 </section>
 </section>
 <section id="what-building-this-cost" class="level2">
@@ -662,38 +632,28 @@ revolution   -&gt; revolutions, Enlightenment, revolutionary, monde, mentalités
 <td style="text-align: right;"><code>gutenberg-en</code></td>
 <td style="text-align: right;">265,424</td>
 <td style="text-align: right;">136,716</td>
-<td style="text-align: right;">2s</td>
-<td style="text-align: right;">9s</td>
-<td style="text-align: right;">86s</td>
-<td style="text-align: right;">0.32</td>
+<td style="text-align: right;">3s</td>
+<td style="text-align: right;">5s</td>
+<td style="text-align: right;">96s</td>
+<td style="text-align: right;">0.36</td>
 <td style="text-align: right;">278 MB</td>
 </tr>
 <tr class="odd">
 <td style="text-align: right;"><code>gutenberg-es</code></td>
 <td style="text-align: right;">216,247</td>
 <td style="text-align: right;">337,336</td>
-<td style="text-align: right;">3s</td>
-<td style="text-align: right;">7s</td>
-<td style="text-align: right;">47s</td>
-<td style="text-align: right;">0.22</td>
+<td style="text-align: right;">2s</td>
+<td style="text-align: right;">4s</td>
+<td style="text-align: right;">44s</td>
+<td style="text-align: right;">0.20</td>
 <td style="text-align: right;">201 MB</td>
 </tr>
 <tr class="even">
-<td style="text-align: right;"><code>gutenberg-pt</code></td>
-<td style="text-align: right;">304,688</td>
-<td style="text-align: right;">407,778</td>
-<td style="text-align: right;">4s</td>
-<td style="text-align: right;">9s</td>
-<td style="text-align: right;">61s</td>
-<td style="text-align: right;">0.20</td>
-<td style="text-align: right;">238 MB</td>
-</tr>
-<tr class="odd">
 <td style="text-align: right;"><code>wikipedia-en</code></td>
 <td style="text-align: right;">41,279</td>
 <td style="text-align: right;">139,776</td>
 <td style="text-align: right;">1s</td>
-<td style="text-align: right;">2s</td>
+<td style="text-align: right;">1s</td>
 <td style="text-align: right;">7s</td>
 <td style="text-align: right;">0.17</td>
 <td style="text-align: right;">66 MB</td>

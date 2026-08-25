@@ -47,7 +47,7 @@ const TEXTSEARCH_REPO = get(ENV, "TEXTSEARCH_REPO", normpath(joinpath(HERE, ".."
 # a search returns the paragraph that answers it, not the book or article it sits in, which is
 # also the unit the published wiki20231101-*-paragraphs profiles were fitted on.
 #
-# `del_diac=false, lc=false` on the Spanish and Portuguese fits, and on English too: keeping
+# `del_diac=false, lc=false` on the Spanish fit, and on English too: keeping
 # case and diacritics is what leaves anything for orthographic correction to bridge at query
 # time (see the tutorial's section on QueryPolicy). Folding them at index time is cheaper and
 # throws that away.
@@ -63,7 +63,6 @@ end
 const CORPORA = [
     Corpus("gutenberg-en", :gutenberg,  "en", 100,  3),
     Corpus("gutenberg-es", :gutenberg,  "es", 100,  3),
-    Corpus("gutenberg-pt", :gutenberg,  "pt", 100,  3),
     Corpus("wikipedia-en", :wikipedia,  "en", 1000, 20),
 ]
 
@@ -547,7 +546,7 @@ function build_project(c::Corpus)
 
     say("project $(c.name): creating (this writes the whole profile into the project)")
     t_create = @elapsed h = SSE.create_project(dir, c.name;
-        engine=FullTextEngine, backend=TextSearch.BM25InvertedFile, textmodel=SSE.BaseProfile(prof))
+        engine=SSE.FullTextEngine, backend=TextSearch.BM25InvertedFile, textmodel=SSE.BaseProfile(prof))
 
     # The engine takes typed items, so the JSONL line is split here rather than handed over for
     # the library to pick apart by key name. This script wrote the file, so it is the one that

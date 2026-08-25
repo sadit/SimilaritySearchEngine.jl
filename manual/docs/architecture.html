@@ -23,6 +23,41 @@ ul.task-list li input[type="checkbox"] {
   margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
   vertical-align: middle;
 }
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
 </style>
 
 
@@ -132,7 +167,7 @@ ul.task-list li input[type="checkbox"] {
   <ul>
   <li><a href="#module-map" id="toc-module-map" class="nav-link active" data-scroll-target="#module-map">Module map</a></li>
   <li><a href="#engine-type-hierarchy" id="toc-engine-type-hierarchy" class="nav-link" data-scroll-target="#engine-type-hierarchy">Engine type hierarchy</a></li>
-  <li><a href="#staging-vs.-indexing-every-engine-kind-has-the-split-except-exact-search" id="toc-staging-vs.-indexing-every-engine-kind-has-the-split-except-exact-search" class="nav-link" data-scroll-target="#staging-vs.-indexing-every-engine-kind-has-the-split-except-exact-search">Staging vs.&nbsp;indexing: every engine kind has the split except exact search</a></li>
+  <li><a href="#staging-vs.-indexing-a-graph-and-a-text-project-have-the-split-the-rest-index-on-insertion" id="toc-staging-vs.-indexing-a-graph-and-a-text-project-have-the-split-the-rest-index-on-insertion" class="nav-link" data-scroll-target="#staging-vs.-indexing-a-graph-and-a-text-project-have-the-split-the-rest-index-on-insertion">Staging vs.&nbsp;indexing: a graph and a text project have the split, the rest index on insertion</a></li>
   <li><a href="#concurrency-model" id="toc-concurrency-model" class="nav-link" data-scroll-target="#concurrency-model">Concurrency model</a>
   <ul class="collapse">
   <li><a href="#readwritelock" id="toc-readwritelock" class="nav-link" data-scroll-target="#readwritelock"><code>ReadWriteLock</code></a></li>
@@ -208,7 +243,15 @@ ul.task-list li input[type="checkbox"] {
 </section>
 <section id="engine-type-hierarchy" class="level2">
 <h2 class="anchored" data-anchor-id="engine-type-hierarchy">Engine type hierarchy</h2>
-<p>Every index kind (<code>SearchGraph</code>, <code>ExhaustiveSearch</code>/<code>ParallelExhaustiveSearch</code>, <code>BM25InvertedFile</code>, <code>InvertedFile</code>) gets its own concrete engine struct, each carrying only the state that kind actually needs. There is no enum tag or string name anywhere in this hierarchy — the concrete Julia type itself is what <code>add_item!</code>, <code>search_live</code>, <code>restore_engine</code>, and every other generic function dispatch on.</p>
+<p>A project is two decisions, and the hierarchy keeps them apart: an <strong>engine</strong> says what the project holds, and a <strong>backend</strong> says which index holds it.</p>
+<div id="2" class="cell" data-execution_count="0">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">create_project</span>(w, ds)                                              <span class="co"># dense vectors, SearchGraph</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="fu">create_project</span>(w, ds; engine<span class="op">=</span>DenseEngine, backend<span class="op">=</span>ExhaustiveSearch)</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="fu">create_project</span>(w, ds; engine<span class="op">=</span>SparseEngine, dimension<span class="op">=</span><span class="fl">50_000</span>)</span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="fu">create_project</span>(w, ds; engine<span class="op">=</span>FullTextEngine, backend<span class="op">=</span>BM25InvertedFile,</span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>                      textmodel<span class="op">=</span><span class="fu">DefaultProfile</span>(<span class="op">:</span>es))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>Three engines, because there are three kinds of thing a caller can hand over — a dense vector, a sparse vector, a string — and each needs a different amount of machinery to accept it. Four backends, because there are four ways to hold an index and they carry different state. There is still no enum tag anywhere: the concrete Julia type is what <code>add_item!</code>, <code>search_live</code> and every other generic function dispatch on, and <code>DenseEngine{B}</code> dispatches on its backend too.</p>
 <div class="cell" data-layout-align="default">
 <div class="cell-output-display">
 <div>
@@ -218,49 +261,56 @@ ul.task-list li input[type="checkbox"] {
     class AbstractSearchEngine {
         &lt;&lt;abstract&gt;&gt;
     }
-    class SearchGraphEngine {
+    class DenseEngine~B~ {
+        backend: B
+        search_ctx_pool: ContextPool
+        deleted_ids: Set~UInt32~
+        lock: ReadWriteLock
+    }
+    class SparseEngine {
+        backend: SparseBackend
+        search_ctx_pool: ContextPool
+        deleted_ids: Set~UInt32~
+        lock: ReadWriteLock
+    }
+    class FullTextEngine {
+        backend: TextBackend
+        profile: Union~Nothing, TextProfile~
+        fitspec: Union~Nothing, DeferredFit~
+        staged: Vector~String~
+        search_ctx_pool: ContextPool
+        deleted_ids: Set~UInt32~
+        lock: ReadWriteLock
+    }
+    class GraphBackend {
         index: SearchGraph
         ctx: SearchGraphContext
         minrecall: Union~Nothing, Float32~
         opt_beamsearch: OptBeamSearch
-        search_ctx_pool: ContextPool
-        deleted_ids: Set~UInt32~
-        lock: ReadWriteLock
     }
-    class GenericEngine~IndexType~ {
+    class ExactBackend~IndexType~ {
         index: IndexType
-        ctx: Any
-        search_ctx_pool: ContextPool
-        deleted_ids: Set~UInt32~
-        lock: ReadWriteLock
+        ctx: GenericContext
     }
-    class BM25Engine {
-        index: Union~Nothing, BM25InvertedFile~
-        profile: Union~Nothing, TextProfile~
-        textconfig: TextConfig
-        variants: Union~Nothing, Dict~
-        staged: Vector~String~
+    class SparseBackend {
+        index: InvertedFile
         ctx: InvertedFileContext
-        search_ctx_pool: ContextPool
-        deleted_ids: Set~UInt32~
-        lock: ReadWriteLock
-    }
-    class InvertedFileEngine {
-        index: Union~Nothing, TextInvertedFile~
-        profile: Union~Nothing, TextProfile~
-        textconfig: TextConfig
-        variants: Union~Nothing, Dict~
         distance: PreMetric
-        staged: Vector~String~
-        ctx: InvertedFileContext
-        search_ctx_pool: ContextPool
-        deleted_ids: Set~UInt32~
-        lock: ReadWriteLock
+        dimension: Int
     }
-    AbstractSearchEngine &lt;|-- SearchGraphEngine
-    AbstractSearchEngine &lt;|-- GenericEngine
-    AbstractSearchEngine &lt;|-- BM25Engine
-    AbstractSearchEngine &lt;|-- InvertedFileEngine
+    class TextBackend {
+        index: Union~Nothing, AbstractInvertedFile~
+        ctx: InvertedFileContext
+        kind: Type
+        distance: Union~Nothing, PreMetric~
+    }
+    AbstractSearchEngine &lt;|-- DenseEngine
+    AbstractSearchEngine &lt;|-- SparseEngine
+    AbstractSearchEngine &lt;|-- FullTextEngine
+    DenseEngine *-- GraphBackend
+    DenseEngine *-- ExactBackend
+    SparseEngine *-- SparseBackend
+    FullTextEngine *-- TextBackend
 </pre>
 </div>
 <p></p></figure><p></p>
@@ -269,30 +319,35 @@ ul.task-list li input[type="checkbox"] {
 </div>
 <p>A few design choices worth calling out:</p>
 <ul>
-<li><code>GenericEngine{IndexType}</code> covers <code>ExhaustiveSearch</code>/<code>ParallelExhaustiveSearch</code> (and any future dense index with no engine-specific state) with a single struct parameterized by the wrapped index type, instead of one struct per index kind.</li>
-<li><code>minrecall</code>/<code>opt_beamsearch</code> only exist on <code>SearchGraphEngine</code> — only a <code>SearchGraph</code> autotunes a <code>BeamSearch</code> toward a target recall.</li>
-<li><code>BM25Engine</code> and <code>InvertedFileEngine</code> each carry their whole text model in one field, <code>profile::Union{Nothing, TextProfile}</code> — vocabulary and weights (<code>profile.model</code>) plus the corpus-produced artifacts (stopword set, lemma map, query-expansion network) and the lineage saying how it was produced. That replaces the <code>voc</code>/<code>model</code> pair they carried before <code>TextSearch</code> 1.1 published <code>TextProfile</code>, and the reason to prefer it is structural: an artifact has exactly one home, and the <code>TextConfig</code> the tokenizer runs is <em>derived</em> from the profile, so an index cannot end up tokenizing documents through a different lemma map than the one it saves.</li>
-<li>A text engine is created from an <code>AbstractTextModelSpec</code>: three answers to “where does the vocabulary come from”, not variations on one setting. <code>BaseProfile(profile)</code> trains it at creation. <code>DefaultProfile(:es)</code> and <code>FitFromCorpus(textconfig; …)</code> leave it untrained and store the recipe in <code>fitspec</code>, for the first <code>index!</code> call to carry out — the first by loading the published profile for that language and refitting it against the staged corpus, the second by delegating a fit of it to <code>TextSearch.fit_profile</code>. <code>index === nothing</code> exactly while <code>profile === nothing</code>. There is no separate training entry point: <code>add_item!</code>/<code>append_items!</code> always just stage raw text into <code>staged</code> (never an error, trained or not — see “Staging vs.&nbsp;indexing” below).</li>
+<li><strong>The split exists because of <code>SparseEngine</code>.</strong> Before it, the hierarchy was one struct per index kind — a <code>SearchGraphEngine</code>, a <code>GenericEngine{IndexType}</code>, a <code>BM25Engine</code>, an <code>InvertedFileEngine</code> — which sorted projects by the thing a caller is least likely to know and most likely to change. It also left a hole: an <code>InvertedFile</code> and its distance were reachable only <em>through</em> a text engine, so a caller who already held sparse vectors had to pretend to have text — fit a profile it did not want, stage strings it did not have. <code>SparseEngine</code> is that missing layer, and separating the two decisions is what made it expressible.</li>
+<li><strong><code>payload_kind(engine)</code></strong> returns <code>:dense</code>, <code>:sparse</code> or <code>:text</code>, and is what guards ask instead of the <code>is_text_index</code> predicate they used to. With two kinds, “not text” meant “dense”; with three that reading is simply false.</li>
+<li><strong><code>BACKENDS</code></strong> is the table of legal pairings, read three ways — to default a backend, to check one, and to name the alternatives in the error when a check fails. <code>InvertedFile</code> appears under both <code>SparseEngine</code> and <code>FullTextEngine</code> on purpose: the same library index serves sparse vectors a caller encoded and text this package encodes, and <code>engine</code> is what says which. Three methods instead of one table would drift; the table cannot.</li>
+<li><strong>BM25 is not one of <code>SparseEngine</code>’s distances</strong>, which is the one asymmetry worth explaining. <code>BM25InvertedFile</code> holds a <code>Vocabulary</code> and scores from <code>getndocs</code>/<code>avgdoclen</code>: BM25 is a scoring rule over a corpus, not a metric over sparse vectors. So it stays with <code>FullTextEngine</code>, which has the corpus statistics, and <code>SparseEngine</code> takes the distances that read a vector — cosine over the weights, or one of <code>Dist.Sets.*</code> over the nonzero positions.</li>
+<li><code>minrecall</code>/<code>opt_beamsearch</code> live on <code>GraphBackend</code> and nowhere else — only a <code>SearchGraph</code> autotunes a <code>BeamSearch</code> toward a target recall. On the engine they would be two fields every exact and every inverted-file project could only ever leave empty.</li>
+<li><code>SparseBackend</code> records the <code>dimension</code> it was created with, and <code>create_project</code> requires it for a sparse project. An <code>InvertedFile</code> is a fixed array of posting lists: the dimension is structural, not descriptive, so it has to be known before the first item and every item appended has to agree with it.</li>
+<li><code>FullTextEngine</code> carries its whole text model in one field, <code>profile::Union{Nothing, TextProfile}</code> — vocabulary and weights (<code>profile.model</code>) plus the corpus-produced artifacts (stopword set, lemma map, query-expansion network) and the lineage saying how it was produced. That replaced a <code>voc</code>/<code>model</code> pair carried before <code>TextSearch</code> 1.1 published <code>TextProfile</code>, and the reason to prefer it is structural: an artifact has exactly one home, and the <code>TextConfig</code> the tokenizer runs is <em>derived</em> from the profile, so an index cannot end up tokenizing documents through a different lemma map than the one it saves.</li>
+<li>A text project is created from an <code>AbstractTextModelSpec</code>: three answers to “where does the vocabulary come from”, not variations on one setting. <code>BaseProfile(profile)</code> trains it at creation. <code>DefaultProfile(:es)</code> and <code>FitFromCorpus(textconfig; …)</code> leave it untrained and store the recipe in <code>fitspec</code>, for the first <code>index!</code> call to carry out — the first by loading the published profile for that language and refitting it against the staged corpus, the second by delegating a fit of it to <code>TextSearch.fit_profile</code>. <code>index === nothing</code> exactly while <code>profile === nothing</code>. There is no separate training entry point: <code>add_item!</code>/<code>append_items!</code> always just stage raw text into <code>staged</code> (never an error, trained or not — see “Staging vs.&nbsp;indexing” below).</li>
 <li><strong>Fitting is the library’s job, not this package’s.</strong> <code>train_profile</code> is a dispatcher over the two deferred specs and nothing more: one calls <code>TextSearch.fit_profile</code>, the other <code>TextSearch.load_profile</code> + <code>TextSearch.refit_profile</code>. This package used to fit a vocabulary and weights itself, and every line of that was a second implementation of something the library does. What delegation costs is that a fit is now the <em>full</em> pipeline — LSI, expansion network, lemma clustering — with no cheap variant, which is why <code>FitFromCorpus</code> caps its sample at <code>max_documents</code> and why the recommended path avoids fitting altogether.</li>
-<li><code>create_engine</code> <strong>requires</strong> the spec and refuses <code>nothing</code>, and the dense kinds refuse a spec rather than ignoring one. Both directions are deliberate. The fit-from-corpus form freezes the vocabulary at the first <code>index!</code> call, so every term a later batch introduces is dropped from then on — nothing about the project’s behaviour afterwards distinguishes “I chose this” from “I never said”, which is exactly why it cannot be a default. In the other direction, a text model handed to an index of vectors has no reading under which it does anything, so swallowing it is how a project ends up not being the kind its author thought it was. Each spec is a type carrying its <em>own</em> options, so an option that only means something on one path cannot be handed to the other — the same reason this hierarchy discriminates on concrete types instead of an enum tag.</li>
-<li><code>variants</code> caches the orthographic variant map a query is bridged with (<code>musica</code> → <code>música</code>). It is a pure function of the frozen vocabulary, so it is derived once, the moment <code>profile</code> is set, rather than per query — deriving it costs ~0.24s over a half-million-token vocabulary, and doing it up front also keeps <code>search_live</code> free of any write to the engine, so it stays safe under a plain read lock. It is not persisted: reopening a project re-derives it from the restored vocabulary.</li>
-<li>Every kind shares three fields regardless of what else it carries: <code>deleted_ids::Set{UInt32}</code> (logically deleted document ids — <code>UInt32</code> uniformly, matching the id type search results actually come back as), <code>lock::ReadWriteLock</code>, and <code>search_ctx_pool::ContextPool</code> (see below).</li>
+<li><code>create_project</code> <strong>requires</strong> the spec for a text project and refuses <code>nothing</code>, and the other two kinds refuse a spec rather than ignoring one. Both directions are deliberate. The fit-from-corpus form freezes the vocabulary at the first <code>index!</code> call, so every term a later batch introduces is dropped from then on — nothing about the project’s behaviour afterwards distinguishes “I chose this” from “I never said”, which is exactly why it cannot be a default. In the other direction, a text model handed to an index of vectors has no reading under which it does anything, so swallowing it is how a project ends up not being the kind its author thought it was. Each spec is a type carrying its <em>own</em> options, so an option that only means something on one path cannot be handed to the other — the same reason this hierarchy discriminates on concrete types instead of an enum tag.</li>
+<li><strong>Query-side orthographic bridging is the library’s too.</strong> This engine used to derive and cache a variant map itself (<code>musica</code> → <code>música</code>) in a <code>variants</code> field. <code>TextSearch</code> 1.1 builds that map inside the index’s own <code>QueryPipeline</code>, so the field is gone and a <code>QueryPolicy</code> passed to <code>ftsearch</code> modifies how the existing map is <em>applied</em> rather than rebuilding it. One map, in the index that owns it.</li>
+<li>Every engine shares three fields regardless of what else it carries: <code>deleted_ids::Set{UInt32}</code> (logically deleted document ids — <code>UInt32</code> uniformly, matching the id type search results actually come back as), <code>lock::ReadWriteLock</code>, and <code>search_ctx_pool::ContextPool</code> (see below).</li>
 </ul>
 </section>
-<section id="staging-vs.-indexing-every-engine-kind-has-the-split-except-exact-search" class="level2">
-<h2 class="anchored" data-anchor-id="staging-vs.-indexing-every-engine-kind-has-the-split-except-exact-search">Staging vs.&nbsp;indexing: every engine kind has the split except exact search</h2>
-<p><code>append_items!</code>/<code>add_item!</code> only ever <em>stages</em> an item — for <code>SearchGraphEngine</code>, <code>BM25Engine</code>, and <code>InvertedFileEngine</code> alike; <code>search_live</code>/<code>ftsearch</code>/<code>allknn</code>/<code>fft</code>/ <code>closestpairs</code>/<code>bichromatic_kclosestpairs</code> only ever see items an explicit <code>index!</code> call has actually processed, not merely staged. <code>GenericEngine</code> (<code>ExhaustiveSearch</code>/<code>ParallelExhaustiveSearch</code>) is the one exception: it always evaluates directly against <code>db</code>, so <code>append_items!</code>/<code>add_item!</code> indexes it synchronously and it has no <code>index!</code> method of its own.</p>
-<p><code>SimilaritySearch.jl</code>’s own <code>SearchGraph</code> separates <em>staging</em> raw vectors into its database from the (expensive) graph-connection work, and this package extends that same split to the two inverted-file text engines, which have no such native support of their own to lean on:</p>
+<section id="staging-vs.-indexing-a-graph-and-a-text-project-have-the-split-the-rest-index-on-insertion" class="level2">
+<h2 class="anchored" data-anchor-id="staging-vs.-indexing-a-graph-and-a-text-project-have-the-split-the-rest-index-on-insertion">Staging vs.&nbsp;indexing: a graph and a text project have the split, the rest index on insertion</h2>
+<p><code>append_items!</code>/<code>add_item!</code> only ever <em>stages</em> an item for a graph-backed dense project and for a text one; <code>search_live</code>/<code>ftsearch</code>/<code>allknn</code>/<code>fft</code>/<code>closestpairs</code>/<code>bichromatic_kclosestpairs</code> only ever see items an explicit <code>index!</code> call has actually processed, not merely staged.</p>
+<p>The other two backends have no split to speak of. An exact index (<code>ExhaustiveSearch</code>/ <code>ParallelExhaustiveSearch</code>) always evaluates directly against <code>db</code>, and an <code>InvertedFile</code> builds its posting lists on insertion, so for both of them <code>append_items!</code> makes an item searchable immediately. <code>index!</code> is still defined for them, as a no-op: the same four lines — <code>create_project</code>, <code>append_items!</code>, <code>index!</code>, <code>search</code> — should mean the same thing for every kind of project, and a caller should not have to know which backends need the third one. The cost is a call that does nothing, which is the cheaper mistake; the alternative made switching a project from a graph to a brute-force scan a change to every script that fed it.</p>
+<p><code>SimilaritySearch.jl</code>’s own <code>SearchGraph</code> separates <em>staging</em> raw vectors into its database from the (expensive) graph-connection work, and this package extends that same split to the text backends, which have no such native support of their own to lean on:</p>
 <ul>
-<li><p><code>SearchGraphEngine</code>: <code>insert_dense!(index::SearchGraph, ctx, item) = push_item!(index.db, item)</code> only ever appends <code>item</code> to <code>index.db</code> — cheap, and durable the instant it happens (see Persistence below), but <code>index.adj</code> (the graph itself) is untouched. <code>IndexEngine.index!(engine::SearchGraphEngine)</code> is the explicit, idempotent step that actually builds graph connections for whatever has been staged since the last call (or since creation) — it delegates to <code>SimilaritySearch.index!(engine.index, engine.ctx)</code>, which itself only ever processes the backlog (<code>length(engine.index)+1:length(database(engine.index))</code>), so calling it repeatedly, or with nothing new staged, is a cheap no-op.</p></li>
-<li><p><code>BM25Engine</code>/<code>InvertedFileEngine</code>: <code>add_item!</code> just pushes raw text onto <code>engine.staged</code> — the text-engine counterpart of <code>index.db</code>, since <code>TextSearch.jl</code>’s inverted-file types have no raw-item staging area of their own to reuse. <code>IndexEngine.index!(engine)</code> (no corpus argument) catches up the exact same backlog range (<code>(engine.index === nothing ? 0 : length(engine.index))+1:length(engine.staged)</code>), encoding each staged text (<code>bagofwords</code> for BM25; for the weighted engine, handing the text straight to <code>TextInvertedFile</code>, whose own <code>push_item!</code> vectorizes through the profile’s model) and <code>push_item!</code>ing it into the real index — with one extra twist on its <em>first</em> call for a project created without a profile: since neither index kind can even be constructed without a <code>Vocabulary</code>, that call runs the engine’s <code>fitspec</code> over what is staged so far and builds the real index against the resulting <code>TextProfile</code>, before running the same backlog loop. Every later call is a plain catch-up, identical in shape to <code>SearchGraphEngine</code>’s.</p>
+<li><p>graph-backed dense: <code>insert_dense!(index::SearchGraph, ctx, item) = push_item!(index.db, item)</code> only ever appends <code>item</code> to <code>index.db</code> — cheap, and durable the instant it happens (see Persistence below), but <code>index.adj</code> (the graph itself) is untouched. <code>IndexEngine.index!(engine::DenseEngine{GraphBackend})</code> is the explicit, idempotent step that actually builds graph connections for whatever has been staged since the last call (or since creation) — it delegates to <code>SimilaritySearch.index!(engine.index, engine.ctx)</code>, which itself only ever processes the backlog (<code>length(engine.index)+1:length(database(engine.index))</code>), so calling it repeatedly, or with nothing new staged, is a cheap no-op.</p></li>
+<li><p>text: <code>add_item!</code> just pushes raw text onto <code>engine.staged</code> — the text-engine counterpart of <code>index.db</code>, since <code>TextSearch.jl</code>’s inverted-file types have no raw-item staging area of their own to reuse. <code>IndexEngine.index!(engine)</code> (no corpus argument) catches up the exact same backlog range (<code>(engine.index === nothing ? 0 : length(engine.index))+1:length(engine.staged)</code>), encoding each staged text (<code>bagofwords</code> for BM25; for the weighted engine, handing the text straight to <code>TextInvertedFile</code>, whose own <code>push_item!</code> vectorizes through the profile’s model) and <code>push_item!</code>ing it into the real index — with one extra twist on its <em>first</em> call for a project created without a profile: since neither index kind can even be constructed without a <code>Vocabulary</code>, that call runs the engine’s <code>fitspec</code> over what is staged so far and builds the real index against the resulting <code>TextProfile</code>, before running the same backlog loop. Every later call is a plain catch-up, identical in shape to the graph’s.</p>
 <p>A project created from a <code>BaseProfile</code> skips that entirely, and the difference is not only when the work happens: a vocabulary fitted from a sample of the first batch is frozen there, so every term appended later that it never saw is out-of-vocabulary and silently dropped. Starting from a profile fitted over the language — <code>DefaultProfile(:es)</code>, or a <code>BaseProfile</code> of one you hold — is what makes an incrementally-grown text project behave.</p></li>
 </ul>
-<p>This decouples <em>when</em> an item becomes durable (immediately, on <code>append_items!</code>) from <em>when</em> it becomes searchable (only after an explicit <code>index!</code>), so a caller controls when the expensive graph-connection/encoding cost is paid — once per big batch, on a schedule, or right before the next round of queries — instead of paying it synchronously on every single insert the way <code>GenericEngine</code> still does.</p>
+<p>This decouples <em>when</em> an item becomes durable (immediately, on <code>append_items!</code>) from <em>when</em> it becomes searchable (only after an explicit <code>index!</code>), so a caller controls when the expensive graph-connection/encoding cost is paid — once per big batch, on a schedule, or right before the next round of queries — instead of paying it synchronously on every single insert the way an exact or an inverted-file backend does.</p>
 </section>
 <section id="concurrency-model" class="level2">
 <h2 class="anchored" data-anchor-id="concurrency-model">Concurrency model</h2>
-<p>None of the four underlying index kinds tolerates a search running concurrently with an insertion into the <em>same</em> index — a search reading <code>index.adj</code>/<code>index.db</code> while <code>add_item!</code> resizes/appends to those same arrays is exactly the kind of concurrent read-during-mutation none of them are built for. But all four <em>do</em> safely support running multiple searches concurrently against the same index, since that is exactly what their own <code>searchbatch</code>/<code>allknn</code> parallel paths already rely on internally.</p>
+<p>None of the underlying index kinds tolerates a search running concurrently with an insertion into the <em>same</em> index — a search reading <code>index.adj</code>/<code>index.db</code> while <code>add_item!</code> resizes/appends to those same arrays is exactly the kind of concurrent read-during-mutation none of them are built for. But all of them <em>do</em> safely support running multiple searches concurrently against the same index, since that is exactly what their own <code>searchbatch</code>/<code>allknn</code> parallel paths already rely on internally.</p>
 <section id="readwritelock" class="level3">
 <h3 class="anchored" data-anchor-id="readwritelock"><code>ReadWriteLock</code></h3>
 <p>Each engine’s <code>lock</code> is a custom reader/writer lock (built from a <code>Threads.Condition</code> plus a reader count), not a plain <code>ReentrantLock</code>: <code>search_live</code>/<code>current_beamsearch</code> take it as a <em>read</em> lock (any number of readers concurrently), while <code>add_item!</code>/<code>index!</code>/ <code>mark_deleted!</code>/<code>calibrate!</code> take it as a <em>write</em> lock (exclusive of every reader and every other writer).</p>
@@ -322,7 +377,7 @@ ul.task-list li input[type="checkbox"] {
 </div>
 </div>
 </div>
-<p>A read-to-write “upgrade” on the same logical operation would deadlock (the write lock waits for the reader count to hit zero, including the reader this same call is itself holding) — so a <code>SearchGraphEngine</code>’s <code>minrecall</code>-driven auto-<code>calibrate!</code> inside <code>search_live</code> is always resolved <em>before</em> the read lock is acquired, never nested inside it.</p>
+<p>A read-to-write “upgrade” on the same logical operation would deadlock (the write lock waits for the reader count to hit zero, including the reader this same call is itself holding) — so a graph backend’s <code>minrecall</code>-driven auto-<code>calibrate!</code> inside <code>search_live</code> is always resolved <em>before</em> the read lock is acquired, never nested inside it.</p>
 </section>
 <section id="contextpool" class="level3">
 <h3 class="anchored" data-anchor-id="contextpool"><code>ContextPool</code></h3>
@@ -394,7 +449,7 @@ ul.task-list li input[type="checkbox"] {
 </section>
 <section id="dense-vectors-a-memory-mapped-file-not-a-rocksdb-column-family" class="level3">
 <h3 class="anchored" data-anchor-id="dense-vectors-a-memory-mapped-file-not-a-rocksdb-column-family">Dense vectors: a memory-mapped file, not a RocksDB column family</h3>
-<p>A <code>SearchGraphEngine</code>’s raw vectors are fixed-dimension <code>Float32</code> data — exactly what <code>SimilaritySearch.MMapMatrixDatabase</code> is for, and its own append-only counter/growth/fsync discipline already gives durable, in-order, crash-safe storage with no need for RocksDB’s batch-keying scheme, at a much cheaper per-vector read than a RocksDB point lookup (confirmed empirically against <code>VectorDatabase</code>/<code>BlockMatrixDatabase</code> in <code>SimilaritySearch.jl</code>’s own test suite). <code>append_items!</code> writes staged vectors directly into this file, at stage time — not through <code>CallbackLog</code> at all, unlike everything else in this section — since a vector is durable-worthy the moment it’s staged, long before any graph-linking work happens. The file (<code>dense_vectors.mmapdb</code>) is created lazily, on the first dense append, since its dimension isn’t known before then.</p>
+<p>A graph-backed project’s raw vectors are fixed-dimension <code>Float32</code> data — exactly what <code>SimilaritySearch.MMapMatrixDatabase</code> is for, and its own append-only counter/growth/fsync discipline already gives durable, in-order, crash-safe storage with no need for RocksDB’s batch-keying scheme, at a much cheaper per-vector read than a RocksDB point lookup (confirmed empirically against <code>VectorDatabase</code>/<code>BlockMatrixDatabase</code> in <code>SimilaritySearch.jl</code>’s own test suite). <code>append_items!</code> writes staged vectors directly into this file, at stage time — not through <code>CallbackLog</code> at all, unlike everything else in this section — since a vector is durable-worthy the moment it’s staged, long before any graph-linking work happens. The file (<code>dense_vectors.mmapdb</code>) is created lazily, on the first dense append, since its dimension isn’t known before then.</p>
 <p>Batch size matters a lot here: <code>MMapMatrixDatabase</code> <code>fsync</code>s once per <code>append_items!</code> call, never per individual vector, so the number of calls a caller makes (not the total vector count) drives wall-clock time — confirmed empirically, 200,000 128-dim vectors as one 200,000-item call took ~0.10s; the same total split into calls of 10 items took ~2.1s; one call per single item measured roughly 1000x slower than the all-at-once case. Prefer fewer, larger <code>append_items!</code> calls over many small ones.</p>
 </section>
 <section id="incremental-adjacencyposting-list-persistence-different-shapes-by-necessity" class="level3">
@@ -427,8 +482,8 @@ ul.task-list li input[type="checkbox"] {
 </div>
 </div>
 <p>For a <code>SearchGraph</code>, <code>LOG</code> fires <em>before</em> <code>connect_reverse_links!</code> runs for that range — so what’s captured at that instant is exactly the direct-links-only slice. This is by design, not a bug to route around: <code>connect_reverse_links!</code> isn’t idempotent (re-running it on an already-complete graph would duplicate reverse edges), so the on-disk format never saves reverse links at all. <code>:graph_len</code> (how far graph-indexing actually got, which can lag behind how many vectors are staged in <code>dense_vectors.mmapdb</code> if the process closed between an <code>append_items!</code> and its follow-up <code>index!</code>) lets reloading resume exactly where indexing left off, over the same, already-fully-restored <code>.db</code>.</p>
-<p><code>BM25InvertedFile</code>/<code>InvertedFile</code> have no direct/reverse-link hazard: their own <code>LOG</code> only fires after a <code>push_item!</code> call’s mutation is fully done, so <code>InvertedFileObjectStore</code> simply appends the raw encoded objects just inserted (<code>invertedfile_objects</code>) as a new block. <code>LOG</code> here fires from <em>inside</em> an <code>index!</code> call’s backlog loop (see “Staging vs. indexing” above) rather than from <code>append_items!</code> directly — <code>append_items!</code> only ever writes to <code>StagedTextStore</code>, the raw-text counterpart of <code>dense_vectors.mmapdb</code>; <code>sparse_db</code>’s already-encoded blocks only grow once an <code>index!</code> call actually catches the backlog up. Reloading <code>index</code> itself still rebuilds the whole thing by replaying every saved <em>encoded</em> object back through the library’s own <code>push_item!</code> — a rebuild-by-reinsertion design, not a real on-disk posting-list format — while <code>staged</code> (every raw text ever staged, whether or not it’s been encoded yet) is restored separately, straight from <code>StagedTextStore</code>, and handed to <code>restore_engine</code> alongside <code>object_blocks</code>. This is a deliberate scaling limit, not an oversight: it’s fine up to a few million documents, since the whole corpus and the whole rebuilt index have to fit in memory and reloading costs the full original indexing time again. It is <em>not</em> a design for billion-document corpora, which need genuinely disk-backed, paged-on-demand posting lists.</p>
-<p><code>GenericEngine</code> (<code>ExhaustiveSearch</code>/<code>ParallelExhaustiveSearch</code>) has no incremental format of its own — its <code>on_change</code> just flags <code>pending_flush[]</code>, and <code>embedded.jl</code> saves the <em>whole</em> index as a single <code>:index</code> value right after the triggering <code>add_item!</code> call returns. This is acceptable for these exact, in-memory-only index kinds, which have no adjacency or posting-list structure to split apart in the first place, and index synchronously on every <code>add_item!</code> same as the text engines.</p>
+<p>The inverted-file backends — <code>BM25InvertedFile</code> and <code>TextInvertedFile</code> for a text project, <code>InvertedFile</code> for a sparse one — have no direct/reverse-link hazard: their own <code>LOG</code> only fires after a <code>push_item!</code> call’s mutation is fully done, so <code>InvertedFileObjectStore</code> simply appends the raw encoded objects just inserted (<code>invertedfile_objects</code>) as a new block. For a <strong>text</strong> project that <code>LOG</code> fires from <em>inside</em> an <code>index!</code> call’s backlog loop (see “Staging vs.&nbsp;indexing” above) rather than from <code>append_items!</code> directly — <code>append_items!</code> only ever writes to <code>StagedTextStore</code>, the raw-text counterpart of <code>dense_vectors.mmapdb</code>, and <code>sparse_db</code>’s already-encoded blocks only grow once an <code>index!</code> call actually catches the backlog up. For a <strong>sparse</strong> project there is no such indirection and no <code>StagedTextStore</code> at all: the caller handed over the encoded vector itself, so the insertion <em>is</em> the encoding and the block is written on <code>append_items!</code>. Reloading <code>index</code> itself still rebuilds the whole thing by replaying every saved <em>encoded</em> object back through the library’s own <code>push_item!</code> — a rebuild-by-reinsertion design, not a real on-disk posting-list format — while <code>staged</code> (every raw text ever staged, whether or not it’s been encoded yet) is restored separately, straight from <code>StagedTextStore</code>, and handed to <code>restore_engine</code> alongside <code>object_blocks</code>. This is a deliberate scaling limit, not an oversight: it’s fine up to a few million documents, since the whole corpus and the whole rebuilt index have to fit in memory and reloading costs the full original indexing time again. It is <em>not</em> a design for billion-document corpora, which need genuinely disk-backed, paged-on-demand posting lists.</p>
+<p>An exact backend (<code>ExhaustiveSearch</code>/<code>ParallelExhaustiveSearch</code>) has no incremental format of its own — its <code>on_change</code> just flags <code>pending_flush[]</code>, and <code>embedded.jl</code> saves the <em>whole</em> index as a single <code>:index</code> value right after the triggering <code>add_item!</code> call returns. This is acceptable for these exact, in-memory-only index kinds, which have no adjacency or posting-list structure to split apart in the first place, and index synchronously on every <code>add_item!</code>.</p>
 </section>
 <section id="reopening-a-project" class="level3">
 <h3 class="anchored" data-anchor-id="reopening-a-project">Reopening a project</h3>
@@ -453,7 +508,7 @@ ul.task-list li input[type="checkbox"] {
     IE-&gt;&gt;IE: add! each of the first graph_len objects' saved direct neighbors
     IE-&gt;&gt;IE: connect_reverse_links! once, over 1:graph_len
     IE--&gt;&gt;Caller: reconstructed SearchGraph -- index.len[] = graph_len
-    Caller-&gt;&gt;IE: restore_engine(state, on_change) → SearchGraphEngine
+    Caller-&gt;&gt;IE: restore_engine(state, on_change) → DenseEngine{GraphBackend}
 </pre>
 </div>
 <p></p></figure><p></p>
@@ -461,7 +516,8 @@ ul.task-list li input[type="checkbox"] {
 </div>
 </div>
 <p><code>graph_len</code> can be <code>&lt;= length(index.db)</code>: every staged vector is always fully restored into <code>.db</code> (that’s durable from the moment it was staged), but only the first <code>graph_len</code> of them were ever graph-indexed before the project last closed — if it closed between an <code>append_items!</code> and its follow-up <code>index!</code> call, the gap is restored as staged-but-not-yet- searchable, waiting on a future <code>index!(handle)</code> call to catch it up, exactly as it was before closing.</p>
-<p><code>restore_engine</code> dispatches on <code>state.kind</code> exactly the way <code>create_engine</code> dispatches on an index type. <code>IndexEngine.extra_state_fields(kind)</code> only covers <code>GenericEngine</code>’s wrapped index types (<code>ExhaustiveSearch</code>/<code>ParallelExhaustiveSearch</code>) — the static, per-kind list of extra <code>EngineStore</code> keys <code>open_project</code>’s generic fallback branch reads back before an engine instance exists to ask <code>snapshot_state</code> directly. <code>SearchGraphEngine</code>/ <code>BM25Engine</code>/<code>InvertedFileEngine</code> are deliberately <em>not</em> covered by it: each needs its own dedicated combination of <code>EngineStore</code> fields (<code>:minrecall</code>/<code>:opt_beamsearch</code> for <code>SearchGraphEngine</code>; <code>:profile</code>/<code>:fitspec</code> for <code>BM25Engine</code>; those two plus <code>:distance</code> for <code>InvertedFileEngine</code>) <em>plus</em> its own dedicated block-store reads (<code>vector_blocks</code>/ <code>load_neighbors</code>/<code>graph_len</code> for <code>SearchGraphEngine</code>; <code>object_blocks</code>/<code>staged</code> for the two text engines) assembled by hand, directly in <code>open_project</code>, rather than a generic per-kind field list.</p>
+<p><code>restore_engine</code> dispatches on <code>Val(state.kind)</code> — <code>:dense</code>, <code>:sparse</code> or <code>:text</code> — and each branch then reads <code>state.backend</code> to pick the index within that kind. Both are <strong>symbols, not Julia types</strong>, and that is what makes a saved project survive this file being rewritten: the previous shape persisted the type <code>BM25Engine</code> into the project’s own store, so renaming the types (which this restructuring did to every one of them) made every existing project unreadable by construction. A symbol cuts that tie, and an unrecognised one maps to an error naming the ones the reader does know instead of a <code>MethodError</code> about a type it has never heard of.</p>
+<p><code>IndexEngine.extra_state_fields</code> only covers the exact backends, and covers them with <code>()</code> — their whole index is a single <code>:index</code> field, so there is nothing extra to list. No other backend has such a field at all: each needs its own combination of <code>EngineStore</code> reads (<code>:minrecall</code>/<code>:opt_beamsearch</code> for a graph; <code>:distance</code>/<code>:dimension</code> for a sparse project; <code>:profile</code>/<code>:fitspec</code>/<code>:distance</code> for a text one) <em>plus</em> its own dedicated block-store reads (<code>vector_blocks</code>/<code>load_neighbors</code>/<code>graph_len</code> for a graph; <code>object_blocks</code>/<code>staged</code> for the inverted-file kinds), assembled by hand in <code>open_project</code> rather than driven by a generic per-kind field list.</p>
 </section>
 </section>
 <section id="logging-informative-output-and-persistence-are-independent" class="level2">
@@ -496,7 +552,7 @@ ul.task-list li input[type="checkbox"] {
 </section>
 <section id="whole-dataset-operations" class="level2">
 <h2 class="anchored" data-anchor-id="whole-dataset-operations">Whole-dataset operations</h2>
-<p><code>allknn</code>, <code>fft</code>, <code>closestpairs</code>, and <code>bichromatic_kclosestpairs</code> all run synchronously, in-process, directly against a dense project’s index — no job queue, unlike the HTTP API’s <code>POST /api/v1/jobs/allknn</code>. Each does real work proportional to the <em>whole</em> dataset (or two datasets, for the bichromatic case): <code>allknn</code> is every item’s own top-<code>k</code> neighbors at once; <code>fft</code> (Farthest-First-Traversal) picks <code>k</code> well-separated items for diverse sampling; <code>closestpairs</code> finds the <code>k</code> globally closest pairs within one project (near-duplicate/echo detection); <code>bichromatic_kclosestpairs</code> finds the <code>k</code> closest pairs between a project’s own index and a second, unindexed collection of vectors. All four require a dense (<code>SearchGraphEngine</code>) project that’s had <code>index!</code> run at least once — none apply to a text project.</p>
+<p><code>allknn</code>, <code>fft</code>, <code>closestpairs</code>, and <code>bichromatic_kclosestpairs</code> all run synchronously, in-process, directly against a dense project’s index — no job queue, unlike the HTTP API’s <code>POST /api/v1/jobs/allknn</code>. Each does real work proportional to the <em>whole</em> dataset (or two datasets, for the bichromatic case): <code>allknn</code> is every item’s own top-<code>k</code> neighbors at once; <code>fft</code> (Farthest-First-Traversal) picks <code>k</code> well-separated items for diverse sampling; <code>closestpairs</code> finds the <code>k</code> globally closest pairs within one project (near-duplicate/echo detection); <code>bichromatic_kclosestpairs</code> finds the <code>k</code> closest pairs between a project’s own index and a second, unindexed collection of vectors. All four require a graph-backed dense project that’s had <code>index!</code> run at least once — none apply to a text project.</p>
 </section>
 <section id="where-this-leaves-similaritysearchserver" class="level2">
 <h2 class="anchored" data-anchor-id="where-this-leaves-similaritysearchserver">Where this leaves <code>SimilaritySearchServer</code></h2>

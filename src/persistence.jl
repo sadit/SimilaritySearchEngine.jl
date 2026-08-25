@@ -266,7 +266,8 @@ const INVFILE_DB_CF = "sparse_db"
     InvertedFileObjectStore
 
 An append-only sequence of raw indexed objects (see `IndexEngine.invertedfile_objects`)
-for one `FullTextEngine`, backed by its own RocksDB column family
+for one inverted-file-backed project -- a `FullTextEngine` or a `SparseEngine` -- backed by its
+own RocksDB column family
 ([`INVFILE_DB_CF`](@ref)) -- kept separate from [`EngineStore`](@ref) for the same reason
 [`AdjacencyStore`](@ref) is: this can grow to one entry per indexed object, and shouldn't
 share a keyspace with the handful of other, small engine fields.
@@ -333,7 +334,7 @@ plain iteration over `store.dict` already comes back in ascending `sp` order (se
 load_object_blocks(store::InvertedFileObjectStore) = [objects for (_, objects) in store.dict]
 
 # ---------------------------------------------------------
-# Staged (raw, not-yet-encoded) text persistence for FullTextEngine -- their
+# Staged (raw, not-yet-encoded) text persistence for a text project -- its
 # own RocksDB column family, holding what append_items! stages before any Vocabulary
 # exists to encode it against. Structurally identical to InvertedFileObjectStore (same
 # block-keyed-by-sp scheme, see _be_key) but a different concern: InvertedFileObjectStore
@@ -358,11 +359,11 @@ const STAGED_TEXT_CF = "staged_text"
 """
     StagedTextStore
 
-An append-only sequence of raw, not-yet-encoded text blocks for one `FullTextEngine`/
-`FullTextEngine`, backed by its own RocksDB column family ([`STAGED_TEXT_CF`](@ref)) --
+An append-only sequence of raw, not-yet-encoded text blocks for one `FullTextEngine`,
+backed by its own RocksDB column family ([`STAGED_TEXT_CF`](@ref)) --
 the text-engine counterpart of a `DenseEngine{GraphBackend}`'s `dense_vectors.mmapdb`: every item
-`add_item!`/`append_items!` has ever staged (see `IndexEngine.FullTextEngine`/
-`IndexEngine.FullTextEngine`'s `staged` field), whether or not
+`add_item!`/`append_items!` has ever staged (see `IndexEngine.FullTextEngine`'s
+`staged` field), whether or not
 `IndexEngine.index!(engine::IndexEngine.FullTextEngine)` has caught it up into the real
 `BM25InvertedFile`/`InvertedFile` yet.
 

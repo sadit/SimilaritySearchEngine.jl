@@ -503,10 +503,11 @@ graph-linking/encoding work -- so freshly appended items are *not* yet visible t
 [`index!`](@ref index!(::EmbeddedEngine)) call catches up the backlog (for a text
 project's very first `index!` call, that also trains its `Vocabulary` -- there's no
 separate training entry point or "must be trained first" error here anymore).
-`DenseEngine{<:ExactBackend}` (`ExhaustiveSearch`/`ParallelExhaustiveSearch`) is the one engine kind that
-still indexes synchronously, on every `add_item!`, since it has no staging split at all
-(see `IndexEngine.index!(engine::IndexEngine.DenseEngine{GraphBackend})`'s docstring for why
-`SimilaritySearch.jl`/`TextSearch.jl` support the split for the other three).
+The backends with no staging split -- the exact dense ones
+(`ExhaustiveSearch`/`ParallelExhaustiveSearch`) and a sparse project's `InvertedFile` -- index
+synchronously on every `add_item!` instead (see
+`IndexEngine.index!(engine::IndexEngine.DenseEngine{GraphBackend})`'s docstring for why
+`SimilaritySearch.jl`/`TextSearch.jl` support the split where they do).
 
 Persistence: for a dense project, every batch's raw vectors are appended directly to the
 project's `MMapMatrixDatabase` (see [`index!`](@ref index!(::EmbeddedEngine))'s docstring
@@ -608,14 +609,16 @@ append_items!(handle::EmbeddedEngine, item::Schema.AbstractItem) = append_items!
 """
     _current_size(engine::IndexEngine.AbstractSearchEngine) -> Int
 
-The count that determines the next item's `_id`: for a `DenseEngine{GraphBackend}`, the number of
-*staged* vectors (`length(database(engine.backend.index))`, i.e. `engine.backend.index.db`'s own count),
-and for a `FullTextEngine`, the number of *staged* texts
-(`length(engine.staged)`) -- since [`append_items!`](@ref) only stages for any of these
-three, `length(engine.backend.index)` itself (the encoded/indexed count) would lag behind and hand
-out the wrong, already-taken `_id`s. `DenseEngine{<:ExactBackend}` (`ExhaustiveSearch`/
-`ParallelExhaustiveSearch`) is the one engine kind that still indexes synchronously on
-`add_item!`, so `length(engine.backend.index)` already reflects the item just added there.
+The count that determines the next item's `_id`, which has to be the *staged* count wherever
+staging and indexing are separate: for a `DenseEngine{GraphBackend}`, the number of staged vectors
+(`length(database(engine.backend.index))`, i.e. `engine.backend.index.db`'s own count), and for a
+`FullTextEngine`, the number of staged texts (`length(engine.staged)`). Since
+[`append_items!`](@ref) only stages on those two, `length(engine.backend.index)` (the
+encoded/indexed count) would lag behind and hand out `_id`s already taken.
+
+The fallback method is `length(engine.backend.index)`, which is right for every backend that
+indexes on insertion -- the exact dense ones and a sparse project's `InvertedFile` -- because
+there the index already reflects the item just added.
 """
 _current_size(engine::IndexEngine.DenseEngine{IndexEngine.GraphBackend}) = length(SimilaritySearch.database(engine.backend.index))
 _current_size(engine::IndexEngine.FullTextEngine) = length(engine.staged)

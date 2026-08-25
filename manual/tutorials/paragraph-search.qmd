@@ -8,7 +8,7 @@ execute:
 ---
 
 This is the tutorial to read after [Getting started](getting-started.qmd). That one used one
-novel and took every default; this one uses four real corpora, in three languages, each
+novel and took every default; this one uses three real corpora, in two languages, each
 indexed against a text model fitted for it — which is where the decisions that matter start
 mattering.
 
@@ -16,7 +16,6 @@ mattering.
 |---|---|---|---|---|
 | `gutenberg-en` | Project Gutenberg | English | 100 books | paragraph |
 | `gutenberg-es` | Project Gutenberg | Spanish | 100 books | paragraph |
-| `gutenberg-pt` | Project Gutenberg | Portuguese | 100 books | paragraph |
 | `wikipedia-en` | Wikipedia 2023-11-01 | English | 1000 articles | paragraph |
 
 **Paragraphs, not documents.** A search here answers with the paragraph that contains the
@@ -83,7 +82,7 @@ const SUFFIX = isfile(joinpath(DATA, "manifest.json")) ? "" :
     (or `--smoke` for a few books and articles instead of the documented scale)""")
 
 const MANIFEST = JSON3.read(read(joinpath(DATA, "manifest$SUFFIX.json"), String))
-const NAMES = ["gutenberg-en", "gutenberg-es", "gutenberg-pt", "wikipedia-en"]
+const NAMES = ["gutenberg-en", "gutenberg-es", "wikipedia-en"]
 
 corpus_file(name) = joinpath(DATA, name * SUFFIX * ".jsonl")
 profile_file(name) = joinpath(PROFILES, name * SUFFIX * ".zip")
@@ -144,10 +143,12 @@ the densest part of the corpus. TextSearch's own measurements put the corpus-wid
 Sampling the convenient slice and extrapolating is how corpus-size estimates go wrong.
 
 **Books vary enormously, and the average hides it.** A hundred Gutenberg volumes is not a
-hundred comparable things. In the Portuguese corpus a single dictionary contributes 128,133
-paragraphs — 42% of the total, and thirty times the largest novel in the same hundred. The
-per-document average in the table above is therefore a number no actual book resembles, and
-what it costs you shows up in *Searching* below.
+hundred comparable things. The English hundred runs from 87 paragraphs to 36,096 — a *Complete
+Works of William Shakespeare* that is 13.6% of the corpus on its own — against a median book of
+1,859. The Spanish hundred's largest contributor is not a novel at all but a
+`Diccionario Ingles-Español-Tagalog` at 17,682 paragraphs, 8.2% of that corpus. The per-document
+average in the table above is therefore a number no actual book resembles, and what it costs you
+shows up in *Searching* below.
 
 Each record carries the paragraph plus enough metadata to say where it came from:
 
@@ -289,7 +290,6 @@ nothing
 #| echo: false
 show_hits("gutenberg-en", "the whale rose out of the sea")
 show_hits("gutenberg-es", "Fortunata y Jacinta en Madrid")
-show_hits("gutenberg-pt", "o crime do padre Amaro na aldeia")
 show_hits("wikipedia-en", "anarchism as a political philosophy")
 ```
 
@@ -297,15 +297,16 @@ The distances are BM25 scores, negated so that smaller is better — the same co
 index kind in `SimilaritySearch.jl` uses, so a caller never has to ask whether high or low wins.
 
 Nothing about the calls above is language-specific. The language lives in the profile the
-project was created with; `ftsearch` is the same function in all four.
+project was created with; `ftsearch` is the same function in all three.
 
 If a dictionary entry outranked the novel you were expecting, that is the corpus and the scoring
-function telling you something true. Gutenberg's popularity ranking is not a balanced sample:
-the Portuguese top hundred includes a `Novo dicionário da língua portuguesa` that is **42% of
-that corpus's paragraphs** on its own, and the Spanish hundred contributes an
-English-Spanish-Tagalog dictionary. BM25 normalises by document length, and a two-line
-dictionary entry sharing one query term with you scores far above a hundred-word paragraph of
-prose sharing three. Neither the index nor the profile is misbehaving — a corpus assembled by
+function telling you something true. Gutenberg's popularity ranking is not a balanced sample: the
+Spanish top hundred's single biggest contributor is a `Diccionario Ingles-Español-Tagalog`,
+17,682 paragraphs — 8.2% of the corpus, and 1.7× the largest volume of prose in it. BM25
+normalises by document length, and a two-line dictionary entry sharing one query term with you
+scores far above a hundred-word paragraph of prose sharing three. So a corpus with one dictionary
+in it has, in effect, seventeen thousand tiny documents competing for every query that touches
+their headwords. Neither the index nor the profile is misbehaving — a corpus assembled by
 popularity is simply not a corpus assembled for retrieval, and this is what that looks like
 before anyone filters it.
 
@@ -398,8 +399,9 @@ end
 
 workdir = mktempdir()
 h = SSE.create_project(workdir, "slice";
-        engine=FullTextEngine, backend=TextSearch.BM25InvertedFile,
-        textmodel  = SSE.BaseProfile(profiles["gutenberg-en"]))
+        engine    = SSE.FullTextEngine,
+        backend   = TextSearch.BM25InvertedFile,
+        textmodel = SSE.BaseProfile(profiles["gutenberg-en"]))
 
 SSE.append_items!(h, slice)          # stages: durable, but nothing is searchable yet
 isempty(SSE.ftsearch(h, "the whale", 3))
@@ -479,10 +481,10 @@ Nothing about the project's behaviour afterwards distinguishes "I chose this" fr
 said", which is exactly why it cannot be arrived at by omission — `create_project` refuses a
 text project with no `textmodel`.
 
-The `profiles` table above is what that trap costs in the other direction: the four fits on
-this page took 129 to 863 seconds each, on corpora of 41,000 to 305,000 paragraphs. That is the
-price of a real profile, paid once, by a script — and the reason a project should be handed one
-rather than asked to produce it during its first `index!`.
+The `profiles` table above is what that trap costs in the other direction: the fits on this page
+took 129 to 476 seconds each, on corpora of 41,000 to 265,000 paragraphs. That is the price of a
+real profile, paid once, by a script — and the reason a project should be handed one rather than
+asked to produce it during its first `index!`.
 
 ## What building this cost
 
