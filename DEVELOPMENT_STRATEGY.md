@@ -30,6 +30,39 @@ once the corresponding engine-level change is done, to port it through (update i
 re-run its suite). Don't restart both packages' work in lockstep by default — the engine
 leads, the server follows.
 
+## Audience: `SimilaritySearchServer` is a consumer, not the audience (as of 2026-08-25)
+
+`SimilaritySearchEngine.jl` **also expects people who reach for it as a Julia package** — a
+script or an application that does `using SimilaritySearchEngine`, indexes its own data and
+searches it, with no HTTP server and no CLI anywhere in the picture. That is what
+`src/embedded.jl` is for, and the paragraph-search tutorial is written for exactly that reader.
+
+The section above says the engine leads and the server follows, and that stays true about
+*where work lands*. It should not be read as saying the server is who the engine is for.
+
+**Why it changes decisions, not just framing:**
+
+- **The public surface is published, not a seam.** What `SimilaritySearchEngine` exports is an
+  API somebody outside this repository reads, calls and depends on. It has to be ergonomic on
+  its own terms — which is also why that is exactly where defaults belong (see the policy
+  below): a caller choosing `create_project(workdir, name)` should not have to name everything
+  the internals name.
+- **A breaking change costs more than a port.** Renaming an exported type or reshaping a
+  keyword used to mean "update the server's call sites". It now also means somebody else's
+  script stops working. Breaks are still on the table at `0.x` — the engine-kind redesign is
+  one — but they are a cost to weigh rather than a free move, and they belong in a version
+  bump and the README rather than in a quiet commit.
+- **The submodules are not the API.** `IndexEngine`, `Persistence`, `Project` and `Schema` are
+  reachable from outside, and the server does call into them, but the package's exports are
+  what an outside user is invited to use. Anything a package user genuinely needs should be
+  exported from `SimilaritySearchEngine` rather than reached for as `IndexEngine.something`.
+
+**How to apply:** when a change touches an exported name or the shape of a public call, ask
+what it does to a reader who has this package as a dependency and nothing else — not only what
+it does to the server. When something is only for the server, keep it out of the package's
+exports. And when a public function grows an argument, give it a default: the surface is where
+defaults are supposed to live.
+
 ## Policy: no defaults below the public surface (as of 2026-08-25)
 
 **Defaults live on the package's public surface — what `SimilaritySearchEngine` exports — and
