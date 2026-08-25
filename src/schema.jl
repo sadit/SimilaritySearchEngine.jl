@@ -190,7 +190,7 @@ own `put!` already accepts a plain `String` and converts it to bytes via
 encode_meta(meta) = JSON3.write(meta)
 
 """
-    decode_meta(bytes::Union{Vector{UInt8},Nothing}; lazy::Bool=true) -> Any
+    decode_meta(bytes::Union{Vector{UInt8},Nothing}; lazy::Bool) -> Any
 
 Inverse of [`encode_meta`](@ref). `nothing`/empty input decodes to `nothing`.
 
@@ -208,11 +208,11 @@ the raw `bytes` from storage directly -- that's the only actually-zero-cost path
 Pass `lazy=false` for a fully materialized `Dict{String,Any}`/`Vector{Any}` instead,
 when the caller needs to mutate or merge `meta` rather than just read from it.
 """
-function decode_meta(bytes::Vector{UInt8}; lazy::Bool=true)
+function decode_meta(bytes::Vector{UInt8}; lazy::Bool)
     isempty(bytes) && return nothing
     lazy ? JSON3.read(String(copy(bytes))) : JSON3.read(String(copy(bytes)), Dict{String,Any})
 end
-decode_meta(::Nothing; lazy::Bool=true) = nothing
+decode_meta(::Nothing; lazy::Bool) = nothing
 
 """
     raw_meta(bytes::Union{Vector{UInt8},Nothing}) -> Union{String,Nothing}

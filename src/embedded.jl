@@ -263,9 +263,12 @@ function create_project(workdir::String, dataset::String; index_type::Type=Searc
     else
         (_, __, ___) -> (pending_flush[] = true)
     end
-    engine = distance === nothing ?
-        IndexEngine.create_engine(index_type; minrecall, textmodel, on_change) :
-        IndexEngine.create_engine(index_type; distance, minrecall, textmodel, on_change)
+    # The sentinel is resolved here, once, and everything below this line receives a real
+    # value. That is the whole of the no-defaults-below-the-surface policy in one statement:
+    # this used to be a `?:` whose only job was to decide whose default won.
+    dist = distance === nothing ? IndexEngine.default_distance(index_type) : distance
+    engine = IndexEngine.create_engine(index_type;
+        distance=dist, minrecall, textmodel, on_change, log_io=nothing)
     Persistence.save_fields!(store, IndexEngine.snapshot_state(engine))
     return EmbeddedEngine(workdir, dataset, dir, project, engine, store, pending_flush, schema_version, dense_vectors)
 end
@@ -295,10 +298,12 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
     pending_flush = Ref(false)
     dense_vectors = Ref{Union{Nothing,MMapMatrixDatabase}}(nothing)
 
-    kind = Persistence.load_field(store, :kind)
+    kind = Persistence.load_field(store, :kind, nothing)
     engine = if kind === nothing
         on_change = _searchgraph_on_change(store, Persistence.open_adjacency_store(project.db))
-        engine = IndexEngine.create_engine(SearchGraph; on_change)
+        engine = IndexEngine.create_engine(SearchGraph;
+            distance=IndexEngine.default_distance(SearchGraph), minrecall=0.9,
+            textmodel=nothing, on_change, log_io=nothing)
         Persistence.save_fields!(store, IndexEngine.snapshot_state(engine))
         engine
     elseif kind === IndexEngine.SearchGraphEngine
@@ -306,46 +311,46 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
         adj_store = Persistence.open_adjacency_store(project.db)
         state = (
             kind=kind,
-            distance=Persistence.load_field(store, :distance),
+            distance=Persistence.load_field(store, :distance, nothing),
             vector_blocks=Persistence.load_dense_vector_blocks(dense_vectors[]),
             load_neighbors=(i -> Persistence.load_neighbors(adj_store, i)),
             graph_len=Persistence.load_field(store, :graph_len, 0),
-            minrecall=Persistence.load_field(store, :minrecall),
-            opt_beamsearch=Persistence.load_field(store, :opt_beamsearch),
-            deleted_ids=Persistence.load_field(store, :deleted_ids),
+            minrecall=Persistence.load_field(store, :minrecall, nothing),
+            opt_beamsearch=Persistence.load_field(store, :opt_beamsearch, nothing),
+            deleted_ids=Persistence.load_field(store, :deleted_ids, nothing),
         )
-        IndexEngine.restore_engine(state; on_change=_searchgraph_on_change(store, adj_store))
+        IndexEngine.restore_engine(state; on_change=_searchgraph_on_change(store, adj_store), log_io=nothing)
     elseif kind === IndexEngine.BM25Engine
         obj_store = Persistence.open_invertedfile_object_store(project.db)
         staged_store = Persistence.open_staged_text_store(project.db)
         state = (
             kind=kind,
-            profile=Persistence.load_field(store, :profile),
-            fitspec=Persistence.load_field(store, :fitspec),
+            profile=Persistence.load_field(store, :profile, nothing),
+            fitspec=Persistence.load_field(store, :fitspec, nothing),
             object_blocks=Persistence.load_object_blocks(obj_store),
             staged=vcat(String[], Persistence.load_staged_text_blocks(staged_store)...),
-            deleted_ids=Persistence.load_field(store, :deleted_ids),
+            deleted_ids=Persistence.load_field(store, :deleted_ids, nothing),
         )
-        IndexEngine.restore_engine(state; on_change=_invertedfile_on_change(obj_store))
+        IndexEngine.restore_engine(state; on_change=_invertedfile_on_change(obj_store), log_io=nothing)
     elseif kind === IndexEngine.InvertedFileEngine
         obj_store = Persistence.open_invertedfile_object_store(project.db)
         staged_store = Persistence.open_staged_text_store(project.db)
         state = (
             kind=kind,
-            profile=Persistence.load_field(store, :profile),
-            fitspec=Persistence.load_field(store, :fitspec),
-            distance=Persistence.load_field(store, :distance),
+            profile=Persistence.load_field(store, :profile, nothing),
+            fitspec=Persistence.load_field(store, :fitspec, nothing),
+            distance=Persistence.load_field(store, :distance, nothing),
             object_blocks=Persistence.load_object_blocks(obj_store),
             staged=vcat(String[], Persistence.load_staged_text_blocks(staged_store)...),
-            deleted_ids=Persistence.load_field(store, :deleted_ids),
+            deleted_ids=Persistence.load_field(store, :deleted_ids, nothing),
         )
-        IndexEngine.restore_engine(state; on_change=_invertedfile_on_change(obj_store))
+        IndexEngine.restore_engine(state; on_change=_invertedfile_on_change(obj_store), log_io=nothing)
     else
         on_change = (_, __, ___) -> (pending_flush[] = true)
-        common = (index=Persistence.load_field(store, :index), deleted_ids=Persistence.load_field(store, :deleted_ids))
+        common = (index=Persistence.load_field(store, :index, nothing), deleted_ids=Persistence.load_field(store, :deleted_ids, nothing))
         extra = NamedTuple{IndexEngine.extra_state_fields(kind)}(map(f -> Persistence.load_field(store, f), IndexEngine.extra_state_fields(kind)))
         state = (kind=kind, common..., extra...)
-        IndexEngine.restore_engine(state; on_change)
+        IndexEngine.restore_engine(state; on_change, log_io=nothing)
     end
     return EmbeddedEngine(workdir, dataset, dir, project, engine, store, pending_flush, schema_version, dense_vectors)
 end
@@ -556,9 +561,9 @@ _current_size(engine::IndexEngine.SearchGraphEngine) = length(SimilaritySearch.d
 _current_size(engine::Union{IndexEngine.BM25Engine, IndexEngine.InvertedFileEngine}) = length(engine.staged)
 _current_size(engine::IndexEngine.AbstractSearchEngine) = length(engine.index)
 
-function _search_with_filter(engine::IndexEngine.AbstractSearchEngine, project::Project.ProjectManager, query, k::Int, predicate; minrecall=nothing)
+function _search_with_filter(engine::IndexEngine.AbstractSearchEngine, project::Project.ProjectManager, query, k::Int, predicate; minrecall)
     overfetch = max(k * 5, k + 20)
-    raw = IndexEngine.search_live(engine, query, overfetch; minrecall)
+    raw = IndexEngine.search_live(engine, query, overfetch; bs_override=nothing, minrecall, policy=nothing)
 
     ids = Int32[]
     dists = Float32[]
@@ -652,7 +657,7 @@ function search(handle::EmbeddedEngine, vector, k::Int=10; filter=nothing, minre
     query = convert(Vector{Float32}, vector)
     needs_save = minrecall !== nothing && handle.engine isa IndexEngine.SearchGraphEngine && isempty(handle.engine.opt_beamsearch)
     res_knn = filter === nothing ?
-        IndexEngine.search_live(handle.engine, query, k; minrecall) :
+        IndexEngine.search_live(handle.engine, query, k; bs_override=nothing, minrecall, policy=nothing) :
         _search_with_filter(handle.engine, handle.project, query, k, filter; minrecall)
     needs_save && Persistence.save_field!(handle.store, :opt_beamsearch, handle.engine.opt_beamsearch)
     return _hydrate_results(handle.project, res_knn)
@@ -677,7 +682,7 @@ for one built on a profile that preserves them. Use [`ftexplain`](@ref) to see w
 was actually searched as.
 """
 function ftsearch(handle::EmbeddedEngine, text::AbstractString, k::Int=10; minrecall=nothing, policy::QueryPolicy=QueryPolicy())
-    res_knn = IndexEngine.search_live(handle.engine, text, k; minrecall, policy)
+    res_knn = IndexEngine.search_live(handle.engine, text, k; bs_override=nothing, minrecall, policy)
     return _hydrate_results(handle.project, res_knn)
 end
 

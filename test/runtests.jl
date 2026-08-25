@@ -41,6 +41,8 @@ const ACCENT_ITEMS = vcat(
 
 @testset "SimilaritySearchEngine.jl" begin
 
+    include("policy.jl")
+
     @testset "dense dataset: append (stage), index!, search, calibrate, allknn, delete, fetch" begin
         mktempworkdir() do workdir
             items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:100]]

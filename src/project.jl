@@ -117,7 +117,7 @@ end
 _id_key(id::Int32) = collect(reinterpret(UInt8, [id]))
 
 """
-    put_metadata!(manager::ProjectManager, record::MetadataRecord, meta=nothing)
+    put_metadata!(manager::ProjectManager, record::MetadataRecord, meta)
 
 Inserts or updates `record` (and its accompanying free-form `meta`, if any -- see
 [`Schema.metadata_record`](@ref)) in the project, keyed by `record._id` in both `cf_records`
@@ -134,7 +134,7 @@ for the append-mostly, rarely-updated workloads this targets, not a general upse
   anything else `Schema.encode_meta` accepts) -- omitted entirely from `cf_meta` when
   `nothing` (not written as a JSON `null`).
 """
-function put_metadata!(manager::ProjectManager, record::MetadataRecord, meta=nothing)
+function put_metadata!(manager::ProjectManager, record::MetadataRecord, meta)
     key_bytes = _id_key(record._id)
     record_bytes = JSON3.write(record)
 

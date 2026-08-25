@@ -20,7 +20,7 @@ export DumpRecord, write_dump_records, read_dump_records
 # ---------------------------------------------------------
 
 _save_key!(dict, key::String, value) = (dict[key] = value; nothing)
-_load_key(dict, key::String, default=nothing) = get(dict, key, default)
+_load_key(dict, key::String, default) = get(dict, key, default)
 
 """
     _be_key(id::Integer) -> Vector{UInt8}
@@ -91,11 +91,11 @@ Writes just `value` under `field`'s key, leaving every other field's key untouch
 save_field!(store::EngineStore, field::Symbol, value) = _save_key!(store.dict, String(field), value)
 
 """
-    load_field(store::EngineStore, field::Symbol, default=nothing)
+    load_field(store::EngineStore, field::Symbol, default)
 
 Reads back the value last saved under `field`'s key, or `default` if it was never saved.
 """
-load_field(store::EngineStore, field::Symbol, default=nothing) = _load_key(store.dict, String(field), default)
+load_field(store::EngineStore, field::Symbol, default) = _load_key(store.dict, String(field), default)
 
 """
     has_field(store::EngineStore, field::Symbol) -> Bool
@@ -212,14 +212,14 @@ The on-disk path of a project's dense-vector file (see [`open_dense_vectors`](@r
 dense_vectors_path(dir::String) = joinpath(dir, DENSE_VECTORS_FILENAME)
 
 """
-    open_dense_vectors(dir::String; read_only::Bool=false) -> Union{SimilaritySearch.MMapMatrixDatabase, Nothing}
+    open_dense_vectors(dir::String; read_only::Bool) -> Union{SimilaritySearch.MMapMatrixDatabase, Nothing}
 
 Reopens this project's dense-vector file if it exists, or `nothing` if it doesn't -- which
 is the normal state for a project that has never had a dense item appended yet (the file
 is created lazily, on the very first append, since its dimension isn't known before then;
 see `embedded.jl`'s `_searchgraph_on_change`), not an error condition.
 """
-function open_dense_vectors(dir::String; read_only::Bool=false)
+function open_dense_vectors(dir::String; read_only::Bool)
     path = dense_vectors_path(dir)
     isfile(path) || return nothing
     MMapMatrixDatabase(path; read_only)

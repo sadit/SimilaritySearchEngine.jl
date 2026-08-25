@@ -940,7 +940,7 @@ end
 # event with exactly the range the library reports, with no batching or throttling.
 # `log_io` is an optional extra `IO` (an open file handle, or `stdout`/`stderr`) that gets
 # its own `InformativeLog` *reporter* alongside the default one on `stderr`.
-function _engine_logging(on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}=nothing)
+function _engine_logging(on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
     reporters = log_io === nothing ? [InformativeLog()] : [InformativeLog(), InformativeLog(log_io)]
     observers = on_change === nothing ? [] : [CallbackLog(on_change)]
     (; reporters, observers)
@@ -956,9 +956,34 @@ _searchgraph_context(minrecall::Nothing, logging) = SearchGraphContext(; hyperpa
 _searchgraph_context(minrecall::Real, logging) = SearchGraphContext(; hyperparameters_callback=OptimizeParameters(MinRecall(Float32(minrecall))), logging...)
 
 """
-    create_engine(::Type{SearchGraph}; distance=SimilaritySearch.Dist.SqL2(), minrecall::Union{Nothing,Real}=0.9, on_change=nothing, log_io=nothing) -> SearchGraphEngine
-    create_engine(::Type{ExhaustiveSearch}; distance=SimilaritySearch.Dist.SqL2(), on_change=nothing, log_io=nothing) -> GenericEngine{ExhaustiveSearch}
-    create_engine(::Type{ParallelExhaustiveSearch}; distance=SimilaritySearch.Dist.SqL2(), on_change=nothing, log_io=nothing) -> GenericEngine{ParallelExhaustiveSearch}
+    default_distance(index_type::Type) -> PreMetric
+
+The distance an index kind is built with when the caller does not name one.
+
+It lives here, as a function of the index kind, because the alternative is what this package
+had: a default on `create_engine` *and* a `distance=nothing` sentinel on `create_project`,
+with the caller branching on which of the two to let win. Two defaults for one decision, and a
+`?:` at the call site to arbitrate them. Now `create_project` resolves the sentinel through
+this function once and always passes a real distance down, which is also why nothing below the
+public surface carries a default any more (see DEVELOPMENT_STRATEGY.md).
+"""
+default_distance(::Type{SearchGraph}) = SimilaritySearch.Dist.SqL2()
+default_distance(::Type{ExhaustiveSearch}) = SimilaritySearch.Dist.SqL2()
+default_distance(::Type{ParallelExhaustiveSearch}) = SimilaritySearch.Dist.SqL2()
+default_distance(::Type{InvertedFile}) = SimilaritySearch.Dist.NormCosine()
+default_distance(::Type{TextInvertedFile}) = SimilaritySearch.Dist.NormCosine()
+# BM25 scores through its own `bm25score`; there is no distance to choose, and `nothing` is the
+# honest answer rather than a placeholder metric nothing consults.
+default_distance(::Type{BM25InvertedFile}) = nothing
+
+"""
+    create_engine(::Type{SearchGraph}; distance, minrecall, textmodel, on_change, log_io) -> SearchGraphEngine
+    create_engine(::Type{ExhaustiveSearch}; distance, minrecall, textmodel, on_change, log_io) -> GenericEngine{ExhaustiveSearch}
+    create_engine(::Type{ParallelExhaustiveSearch}; distance, minrecall, textmodel, on_change, log_io) -> GenericEngine{ParallelExhaustiveSearch}
+
+Every keyword is required, and none of them has a default here -- see
+[`default_distance`](@ref) and DEVELOPMENT_STRATEGY.md. `create_project` is the public
+boundary that chooses; this function is told.
 
 Creates a new, empty dense search engine of the given index type, built immediately
 against `distance`. `minrecall` only means anything for a `SearchGraph`; it's accepted
@@ -974,23 +999,23 @@ every `:add!` event a `push_item!`/`append_items!` call reports -- e.g. to persi
 handle or `stdout`/`stderr` both work; purely informative, and being a reporter rather than an
 observer it changes nothing about what gets persisted.
 """
-function create_engine(::Type{SearchGraph}; distance=SimilaritySearch.Dist.SqL2(), minrecall::Union{Nothing,Real}=0.9, textmodel=nothing, on_change::Union{Nothing,Function}=nothing, log_io::Union{Nothing,IO}=nothing)
+function create_engine(::Type{SearchGraph}; distance, minrecall::Union{Nothing,Real}, textmodel, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
     _reject_textmodel(SearchGraph, textmodel)
     mr = minrecall === nothing ? nothing : Float32(minrecall)
     return SearchGraphEngine(SearchGraph(distance, VectorDatabase()), _searchgraph_context(mr, _engine_logging(on_change, log_io)), mr, OptBeamSearch(), ContextPool(SearchGraphContext()), Set{UInt32}(), ReadWriteLock())
 end
-function create_engine(::Type{ExhaustiveSearch}; distance=SimilaritySearch.Dist.SqL2(), minrecall=nothing, textmodel=nothing, on_change::Union{Nothing,Function}=nothing, log_io::Union{Nothing,IO}=nothing)
+function create_engine(::Type{ExhaustiveSearch}; distance, minrecall, textmodel, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
     _reject_textmodel(ExhaustiveSearch, textmodel)
     GenericEngine{ExhaustiveSearch}(ExhaustiveSearch(distance, VectorDatabase()), GenericContext(; _engine_logging(on_change, log_io)...), ContextPool(GenericContext()), Set{UInt32}(), ReadWriteLock())
 end
-function create_engine(::Type{ParallelExhaustiveSearch}; distance=SimilaritySearch.Dist.SqL2(), minrecall=nothing, textmodel=nothing, on_change::Union{Nothing,Function}=nothing, log_io::Union{Nothing,IO}=nothing)
+function create_engine(::Type{ParallelExhaustiveSearch}; distance, minrecall, textmodel, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
     _reject_textmodel(ParallelExhaustiveSearch, textmodel)
     GenericEngine{ParallelExhaustiveSearch}(ParallelExhaustiveSearch(distance, VectorDatabase()), GenericContext(; _engine_logging(on_change, log_io)...), ContextPool(GenericContext()), Set{UInt32}(), ReadWriteLock())
 end
 
 """
-    create_engine(::Type{BM25InvertedFile}; textmodel, distance=nothing, minrecall=nothing, on_change=nothing, log_io=nothing) -> BM25Engine
-    create_engine(::Type{InvertedFile}; textmodel, distance=SimilaritySearch.Dist.NormCosine(), minrecall=nothing, on_change=nothing, log_io=nothing) -> InvertedFileEngine
+    create_engine(::Type{BM25InvertedFile}; textmodel, distance, minrecall, on_change, log_io) -> BM25Engine
+    create_engine(::Type{InvertedFile}; textmodel, distance, minrecall, on_change, log_io) -> InvertedFileEngine
     create_engine(::Type{TextInvertedFile}; ...) -> InvertedFileEngine
 
 Creates a new, empty text search engine of the given index type. `minrecall` is accepted and
@@ -1017,9 +1042,9 @@ held is out-of-vocabulary and silently dropped from then on. Nothing about a pro
 behaviour later reveals that this choice was made by omission, which is exactly why it cannot
 be.
 """
-function create_engine(::Type{BM25InvertedFile}; distance=nothing, minrecall=nothing,
-                       textmodel::Union{Nothing,AbstractTextModelSpec}=nothing,
-                       on_change::Union{Nothing,Function}=nothing, log_io::Union{Nothing,IO}=nothing)
+function create_engine(::Type{BM25InvertedFile}; distance, minrecall,
+                       textmodel::Union{Nothing,AbstractTextModelSpec},
+                       on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
     spec = _require_textmodel(BM25InvertedFile, textmodel)
     profile = _initial_profile(spec)
     index = profile === nothing ? nothing : BM25InvertedFile(profile.model.voc)
@@ -1028,9 +1053,9 @@ function create_engine(::Type{BM25InvertedFile}; distance=nothing, minrecall=not
                ContextPool(InvertedFileContext()), Set{UInt32}(), ReadWriteLock())
 end
 
-function create_engine(::Type{InvertedFile}; distance=SimilaritySearch.Dist.NormCosine(), minrecall=nothing,
-                       textmodel::Union{Nothing,AbstractTextModelSpec}=nothing,
-                       on_change::Union{Nothing,Function}=nothing, log_io::Union{Nothing,IO}=nothing)
+function create_engine(::Type{InvertedFile}; distance, minrecall,
+                       textmodel::Union{Nothing,AbstractTextModelSpec},
+                       on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
     spec = _require_textmodel(InvertedFile, textmodel)
     profile = _initial_profile(spec)
     index = profile === nothing ? nothing : _new_textinvertedfile(profile, distance)
@@ -1102,7 +1127,7 @@ distance/vocabulary + insertion-block-sequence path instead.
 extra_state_fields(::Type) = ()
 
 """
-    restore_engine(state; on_change=nothing, log_io=nothing) -> AbstractSearchEngine
+    restore_engine(state; on_change, log_io) -> AbstractSearchEngine
 
 Rebuilds a concrete engine from `state` (as produced by [`snapshot_state`](@ref), or
 assembled field-by-field via [`extra_state_fields`](@ref) from an `EngineStore`),
@@ -1128,24 +1153,24 @@ None of `SearchGraphEngine`/`BM25Engine`/`InvertedFileEngine`'s `state` carries 
 - `InvertedFileEngine`: `profile`, `fitspec`, `distance`, `object_blocks`, `staged`
   likewise -- see [`build_textinvertedfile`](@ref).
 """
-restore_engine(state; on_change::Union{Nothing,Function}=nothing, log_io::Union{Nothing,IO}=nothing) = restore_engine(state.kind, state; on_change, log_io)
+restore_engine(state; on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}) = restore_engine(state.kind, state; on_change, log_io)
 
-function restore_engine(::Type{SearchGraphEngine}, state; on_change::Union{Nothing,Function}=nothing, log_io::Union{Nothing,IO}=nothing)
+function restore_engine(::Type{SearchGraphEngine}, state; on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
     index = build_searchgraph(state.distance, state.vector_blocks, state.load_neighbors, state.graph_len)
     return SearchGraphEngine(index, _searchgraph_context(state.minrecall, _engine_logging(on_change, log_io)), state.minrecall, state.opt_beamsearch, ContextPool(SearchGraphContext()), state.deleted_ids, ReadWriteLock())
 end
 
-function restore_engine(::Type{IndexType}, state; on_change::Union{Nothing,Function}=nothing, log_io::Union{Nothing,IO}=nothing) where {IndexType}
+function restore_engine(::Type{IndexType}, state; on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}) where {IndexType}
     return GenericEngine{IndexType}(state.index, GenericContext(; _engine_logging(on_change, log_io)...), ContextPool(GenericContext()), state.deleted_ids, ReadWriteLock())
 end
 
-function restore_engine(::Type{BM25Engine}, state; on_change::Union{Nothing,Function}=nothing, log_io::Union{Nothing,IO}=nothing)
+function restore_engine(::Type{BM25Engine}, state; on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
     profile = state.profile
     index = profile === nothing ? nothing : build_bm25invertedfile(profile.model.voc, state.object_blocks)
     return BM25Engine(index, profile, state.fitspec, _derive_variants(profile), state.staged, InvertedFileContext(; _engine_logging(on_change, log_io)...), ContextPool(InvertedFileContext()), state.deleted_ids, ReadWriteLock())
 end
 
-function restore_engine(::Type{InvertedFileEngine}, state; on_change::Union{Nothing,Function}=nothing, log_io::Union{Nothing,IO}=nothing)
+function restore_engine(::Type{InvertedFileEngine}, state; on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
     profile = state.profile
     index = profile === nothing ? nothing : build_textinvertedfile(state.distance, profile, state.object_blocks)
     return InvertedFileEngine(index, profile, state.fitspec, _derive_variants(profile), state.distance, state.staged, InvertedFileContext(; _engine_logging(on_change, log_io)...), ContextPool(InvertedFileContext()), state.deleted_ids, ReadWriteLock())
@@ -1418,7 +1443,7 @@ function stored_payload(engine::Union{SearchGraphEngine, GenericEngine}, id::Int
 end
 
 """
-    query_pipeline(engine, policy::QueryPolicy=QueryPolicy()) -> TextSearch.QueryPipeline
+    query_pipeline(engine, policy::QueryPolicy) -> TextSearch.QueryPipeline
 
 How this engine should treat a query, as the one value `TextSearch` takes for it: the caller's
 `policy`, this engine's cached variant map, and the profile's expansion network with its
@@ -1433,7 +1458,7 @@ The network is included only when the profile *applies* it. A fitted profile car
 without applying it -- computing an artifact and deciding to use it are different acts -- and
 `QueryPipeline` reads a network it is given as the request to expand with it.
 """
-function query_pipeline(engine::Union{BM25Engine, InvertedFileEngine}, policy::QueryPolicy=QueryPolicy())
+function query_pipeline(engine::Union{BM25Engine, InvertedFileEngine}, policy::QueryPolicy)
     profile = engine.profile
     profile === nothing && error("this text engine has not been trained yet -- index! at least one staged item, or create it with a profile, before building a query")
     expansion = (profile.applied.query_expansion && !isempty(profile.query_expansion)) ?
@@ -1448,7 +1473,7 @@ function query_pipeline(engine::Union{BM25Engine, InvertedFileEngine}, policy::Q
 end
 
 """
-    resolve_query(engine, text::AbstractString, policy::QueryPolicy=QueryPolicy()) -> TextSearch.ResolvedQuery
+    resolve_query(engine, text::AbstractString, policy::QueryPolicy) -> TextSearch.ResolvedQuery
 
 Runs `text` through `TextSearch`'s query pipeline under this engine's
 [`query_pipeline`](@ref): tokenized by the profile's own `TextConfig` -- the same normalization,
@@ -1479,7 +1504,7 @@ deliberate there:
 
 Errors if `engine` has no profile yet -- nothing indexed, so no vocabulary to resolve against.
 """
-resolve_query(engine::Union{BM25Engine, InvertedFileEngine}, text::AbstractString, policy::QueryPolicy=QueryPolicy()) =
+resolve_query(engine::Union{BM25Engine, InvertedFileEngine}, text::AbstractString, policy::QueryPolicy) =
     TextSearch.query_tokens(engine.profile.model.voc, text, query_pipeline(engine, policy))
 
 # Whether `dist` makes an inverted file score token membership rather than weighted vectors, in
@@ -1489,7 +1514,7 @@ resolve_query(engine::Union{BM25Engine, InvertedFileEngine}, text::AbstractStrin
 _is_set_distance(dist) = parentmodule(typeof(dist)) === SimilaritySearch.Dist.Sets
 
 """
-    search_live(engine::AbstractSearchEngine, query, k::Int; bs_override=nothing) -> (id=..., dist=..., deleted=...)
+    search_live(engine::AbstractSearchEngine, query, k::Int; bs_override, minrecall, policy) -> (id=..., dist=..., deleted=...)
 
 Performs a plain top-`k` search and reports each candidate's soft-delete status instead of
 hiding deleted candidates and silently backfilling behind them: `deleted[i]` tells the
@@ -1547,7 +1572,7 @@ above this one, which is also where such a policy belongs.
     reserved for insertion, itself already exclusive via `write_lock`, so sharing it
     *there* is fine) or allocating a brand-new context on every single call.
 """
-function search_live(engine::SearchGraphEngine, query, k::Int; bs_override=nothing, minrecall=nothing, policy=nothing)
+function search_live(engine::SearchGraphEngine, query, k::Int; bs_override, minrecall, policy)
     # Resolved (and, if needed, `calibrate!`'s own write lock acquired) *before* taking our
     # own read lock below -- see `ReadWriteLock`'s deadlock warning for why this can't be
     # nested inside the `read_lock` block instead.
@@ -1572,7 +1597,7 @@ function search_live(engine::SearchGraphEngine, query, k::Int; bs_override=nothi
     end
 end
 
-function search_live(engine::GenericEngine, query, k::Int; bs_override=nothing, minrecall=nothing, policy=nothing)
+function search_live(engine::GenericEngine, query, k::Int; bs_override, minrecall, policy)
     read_lock(engine.lock) do
         ctx = checkout!(engine.search_ctx_pool)
         try
@@ -1587,7 +1612,7 @@ function search_live(engine::GenericEngine, query, k::Int; bs_override=nothing, 
     end
 end
 
-function search_live(engine::BM25Engine, query, k::Int; bs_override=nothing, minrecall=nothing, policy::QueryPolicy=QueryPolicy())
+function search_live(engine::BM25Engine, query, k::Int; bs_override, minrecall, policy::QueryPolicy)
     read_lock(engine.lock) do
         profile = engine.profile
         profile === nothing && return (id=Int32[], dist=Float32[], deleted=Bool[], distance_evaluations=0)
@@ -1609,7 +1634,7 @@ function search_live(engine::BM25Engine, query, k::Int; bs_override=nothing, min
     end
 end
 
-function search_live(engine::InvertedFileEngine, query, k::Int; bs_override=nothing, minrecall=nothing, policy::QueryPolicy=QueryPolicy())
+function search_live(engine::InvertedFileEngine, query, k::Int; bs_override, minrecall, policy::QueryPolicy)
     read_lock(engine.lock) do
         profile = engine.profile
         profile === nothing && return (id=Int32[], dist=Float32[], deleted=Bool[], distance_evaluations=0)
@@ -1632,7 +1657,7 @@ function search_live(engine::InvertedFileEngine, query, k::Int; bs_override=noth
     end
 end
 
-function _collect_live(engine::AbstractSearchEngine, res, evals=0)
+function _collect_live(engine::AbstractSearchEngine, res, evals)
     ids = view(res.ids, res.sp:res.ep)
     dists = view(res.dists, res.sp:res.ep)
     deleted = [id in engine.deleted_ids for id in ids]
