@@ -1,6 +1,6 @@
 using Test
 using SimilaritySearchEngine
-using SimilaritySearch: SearchGraph, Dist
+using SimilaritySearch: SearchGraph, Dist, MatrixDatabase
 using TextSearch: BM25InvertedFile, InvertedFile, TextInvertedFile, NormalizationConfig,
                   AppliedArtifacts, vocsize, gettrainsize, gettextconfig,
                   lineage_summary, token2id
@@ -124,6 +124,56 @@ const ACCENT_ITEMS = vcat(
             filtered = search(h, items[1]["vector"], 5; filter=(record, meta) -> record.doc_id == "frankenstein_1")
             @test length(filtered) == 1
             @test filtered[1].doc_id == "frankenstein_1"
+
+            close_project!(h)
+        end
+    end
+
+    @testset "whole-dataset operations: fft, dnet, neardup, closestpairs, bichromatic_kclosestpairs" begin
+        mktempworkdir() do workdir
+            items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:60]]
+            h = create_project(workdir, "dense_ops")
+            append_items!(h, dense_items(items))
+            index!(h)
+
+            # fft: Farthest-First Traversal
+            r_fft = fft(h, 6; verbose=false)
+            @test r_fft isa CenterSelectionResult
+            @test r_fft isa FFTResult
+            @test length(r_fft.centers) == 6
+            @test length(r_fft.assign) == 60
+            @test all(a -> 1 <= a <= 6, r_fft.assign)
+            @test all(d -> d >= 0f0, r_fft.assigndist)
+            @test r_fft.covering >= 0f0
+            @test r_fft.separation >= 0f0
+
+            # dnet: density net
+            r_dnet = dnet(h, 6; verbose=false)
+            @test r_dnet isa CenterSelectionResult
+            @test length(r_dnet.centers) >= 5
+            @test length(r_dnet.assign) == 60
+            @test all(d -> d >= 0f0, r_dnet.assigndist)
+
+            # neardup: near-duplicate extraction by epsilon
+            r_nd = neardup(h, 0.3; verbose=false)
+            @test r_nd isa NearDupResult
+            @test length(r_nd.centers) <= 60
+            @test length(r_nd.assign) == 60
+            @test r_nd.epsilon == 0.3f0
+            @test all(d -> d <= r_nd.epsilon + 1e-5, r_nd.assigndist)
+
+            # closestpairs
+            cp = closestpairs(h; k=5)
+            @test length(cp) == 5
+            @test all(p -> p[1] != p[2], cp)
+            @test issorted(cp; by=p -> p[3])
+
+            # bichromatic_kclosestpairs against another database
+            other_vectors = [Float32.(it["vector"]) for it in items[1:10]]
+            other_db = MatrixDatabase(hcat(other_vectors...))
+            bcp = bichromatic_kclosestpairs(h, other_db; k=3)
+            @test length(bcp) == 3
+            @test issorted(bcp; by=p -> p[3])
 
             close_project!(h)
         end
@@ -513,12 +563,16 @@ const ACCENT_ITEMS = vcat(
         # An unknown language is refused at construction, naming the ones that are known --
         # there is nothing to look up and no point deferring the error to index! time.
         @test_throws ArgumentError DefaultProfile(:xx)
-        for lang in (:en, :es, :pt)
+        for lang in (:en, :es, :eu, :fr, :it, :pt, :ru)
             @test haskey(DEFAULT_PROFILE_NICKNAMES, lang)
             @test DefaultProfile(lang).nickname == DEFAULT_PROFILE_NICKNAMES[lang]
         end
         # a nickname overrides the per-language default, for a refit of your own or another snapshot
         @test DefaultProfile(:es; nickname="mine").nickname == "mine"
+
+        # Re-exported remote profile functions
+        @test isdefined(SimilaritySearchEngine, :download_profile)
+        @test isdefined(SimilaritySearchEngine, :list_remote_profiles)
 
         # Resolution is by convention over $TEXTSEARCH_HOME, and a missing profile is an error
         # carrying the command that installs it -- "no such file" under ~/.textsearch is not
@@ -533,11 +587,16 @@ const ACCENT_ITEMS = vcat(
                     sprint(showerror, e)
                 end
                 @test occursin("not installed", msg)
-                @test occursin("textsearch install", msg)
+                @test occursin("download_profile", msg)
+                @test occursin("textsearch", msg)
                 @test occursin(spec.nickname, msg)
 
-                # and it resolves once the file is there
+                # it resolves if the legacy paragraph nickname is present
                 mkpath(joinpath(home, "profiles"))
+                touch(joinpath(home, "profiles", "wiki20231101-es-paragraphs.zip"))
+                @test default_profile_path(spec) == joinpath(home, "profiles", "wiki20231101-es-paragraphs.zip")
+
+                # and the official nickname takes priority once present
                 touch(joinpath(home, "profiles", spec.nickname * ".zip"))
                 @test default_profile_path(spec) == joinpath(home, "profiles", spec.nickname * ".zip")
             end

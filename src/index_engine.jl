@@ -380,15 +380,16 @@ end
     DEFAULT_PROFILE_NICKNAMES
 
 The installed-profile nickname [`DefaultProfile`](@ref) looks for, per language.
-
-Paragraph-level profiles, matching what a project built out of paragraphs indexes: a document
-frequency counted over paragraphs separates a real stopword from an artifact, where one counted
-over whole articles says almost nothing. English is the `-partial` build, which is what exists.
+Official published profiles are available for `:en`, `:es`, `:eu`, `:fr`, `:it`, `:pt`, and `:ru`.
 """
 const DEFAULT_PROFILE_NICKNAMES = Dict{Symbol,String}(
-    :en => "wiki20231101-en-paragraphs-partial",
-    :es => "wiki20231101-es-paragraphs",
-    :pt => "wiki20231101-pt-paragraphs",
+    :en => "en",
+    :es => "es",
+    :eu => "eu",
+    :fr => "fr",
+    :it => "it",
+    :pt => "pt",
+    :ru => "ru",
 )
 
 """
@@ -408,19 +409,36 @@ textsearch_home() = get(ENV, "TEXTSEARCH_HOME", joinpath(homedir(), ".textsearch
 
 The installed profile file `spec` names, under [`textsearch_home`](@ref).
 
-Raises if it is not installed, and the message carries the command that installs it: "no such
-file" naming a path under `~/.textsearch` is not actionable to someone who has never run the
-CLI, and this is the most likely first thing a caller of [`DefaultProfile`](@ref) hits.
+Raises if it is not installed, and the message carries the command that installs or downloads it:
+"no such file" naming a path under `~/.textsearch` is not actionable to someone who has never run
+the CLI, and this is the most likely first thing a caller of [`DefaultProfile`](@ref) hits.
 """
 function default_profile_path(spec::DefaultProfile)
     path = joinpath(textsearch_home(), "profiles", spec.nickname * ".zip")
     isfile(path) && return path
+
+    # Check fallback legacy paragraph nicknames if language is in (:en, :es, :pt)
+    legacy = if spec.language === :es
+        "wiki20231101-es-paragraphs"
+    elseif spec.language === :en
+        "wiki20231101-en-paragraphs-partial"
+    elseif spec.language === :pt
+        "wiki20231101-pt-paragraphs"
+    else
+        nothing
+    end
+    if legacy !== nothing
+        legacy_path = joinpath(textsearch_home(), "profiles", legacy * ".zip")
+        isfile(legacy_path) && return legacy_path
+    end
+
     error("""
         the default profile for $(repr(spec.language)) is not installed: no $path
-        Install it from a profile zip (they are 70-160 MB, so nothing here downloads one for you):
+        Install it by calling `download_profile($(repr(spec.nickname)))` or using the textsearch CLI:
+            textsearch download $(spec.nickname)
+        or from a local profile zip:
             textsearch install path/to/$(spec.nickname).zip $(spec.nickname)
-        TextSearch ships builds under corpus-profiles/profiles/. To skip the profile library \
-        entirely, pass the file directly instead:
+        To skip the profile library entirely, pass the file directly instead:
             textmodel = BaseProfile(load_profile("path/to/$(spec.nickname).zip"))""")
 end
 

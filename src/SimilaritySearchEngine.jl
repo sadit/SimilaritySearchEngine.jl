@@ -42,7 +42,7 @@ include("embedded.jl")
 
 export EmbeddedEngine, create_project, open_project, close_project!, append_items!, index!,
        search, ftsearch, ftexplain, delete_item!, fetch_items, exists, calibrate!, allknn,
-       fft, closestpairs, bichromatic_kclosestpairs,
+       fft, dnet, neardup, closestpairs, bichromatic_kclosestpairs,
        get_metadata, get_meta, get_raw_meta
 
 # The typed data contract: what goes in, what comes back. This package does not take a
@@ -50,7 +50,7 @@ export EmbeddedEngine, create_project, open_project, close_project!, append_item
 # see `Schema.AbstractItem`. `get_raw_meta` above is the single exception, reserved for an HTTP
 # layer forwarding stored metadata bytes it never inspects.
 export AbstractItem, DenseItem, SparseItem, TextItem, MetadataRecord, StoredItem, payload
-export SearchResult, ExistsResult, KnnRow, FFTResult
+export SearchResult, ExistsResult, KnnRow, FFTResult, CenterSelectionResult, NearDupResult
 
 # Re-exported from TextSearch.jl, not defined here: they are the vocabulary a caller needs to
 # say anything to a *text* project -- `textmodel=FitFromCorpus(TextConfig(language=:es))`,
@@ -58,7 +58,8 @@ export SearchResult, ExistsResult, KnnRow, FFTResult
 # `ftsearch(h, q; policy=QueryPolicy(correction=:off))`. Re-exporting them keeps a script that
 # only ever does `using SimilaritySearchEngine` from needing a second `using` line to reach the
 # arguments this package's own API asks for.
-export TextConfig, TextProfile, QueryPolicy, load_profile, save_profile
+export TextConfig, TextProfile, QueryPolicy, load_profile, save_profile,
+       download_profile, list_remote_profiles
 
 # Defined in the IndexEngine submodule and re-exported here (embedded.jl adds the
 # `EmbeddedEngine` method to `text_profile` by extension, so it is one generic function, not a

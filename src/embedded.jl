@@ -57,11 +57,11 @@ struct KnnRow
 end
 
 """
-    FFTResult
+    CenterSelectionResult
 
-What [`fft`](@ref) returns: the chosen `centers`, which center each item was assigned to
-(`assign`) and its distance to it (`assigndist`), the two radii describing the selection, and
-the two cost counters `SimilaritySearch.fft` reports.
+What [`fft`](@ref) and [`dnet`](@ref) return: the chosen `centers`, which center each item was
+assigned to (`assign`) and its distance to it (`assigndist`), the two radii describing the
+selection (`covering` and `separation`), and the two cost counters.
 
 A faithful, typed restatement of `SimilaritySearch.CenterSelection`, with ids as `Int32` to
 match every other id this package hands back.
@@ -73,12 +73,34 @@ match every other id this package hands back.
 - `separation` is the smallest distance between two centers. These two are different numbers
   and used to be conflated under one name; see `SimilaritySearch.CenterSelection`.
 """
-struct FFTResult
+struct CenterSelectionResult
     centers::Vector{Int32}
     assign::Vector{Int32}
     assigndist::Vector{Float32}
     covering::Float32
     separation::Float32
+    costdists::Int
+    costblocks::Int
+end
+
+const FFTResult = CenterSelectionResult
+
+"""
+    NearDupResult
+
+What [`neardup`](@ref) returns: the selected `centers` (the ϵ-net of surviving non-duplicate
+objects), which center covers each object (`assign`) and its distance to it (`assigndist`),
+the threshold radius `epsilon` and the maximum covering radius `covering`, plus the cost counters.
+
+A faithful, typed restatement of `SimilaritySearch.NearDupSelection`, with ids as `Int32` to
+match every other id this package hands back.
+"""
+struct NearDupResult
+    centers::Vector{Int32}
+    assign::Vector{Int32}
+    assigndist::Vector{Float32}
+    covering::Float32
+    epsilon::Float32
     costdists::Int
     costblocks::Int
 end
@@ -990,9 +1012,50 @@ function fft(handle::EmbeddedEngine, k::Integer; start::Int=0, verbose::Bool=fal
         error("fft requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
     length(engine.backend.index) == 0 && error("fft requires a non-empty dense index")
     r = SimilaritySearch.fft(SimilaritySearch.distance(engine.backend.index), SimilaritySearch.database(engine.backend.index), k; start, verbose)
-    FFTResult(Int32.(r.centers), Int32.(r.assign), Float32.(r.assigndist),
-              Float32(r.covering), Float32(r.separation),
-              Int(r.costdists), Int(r.costblocks))
+    CenterSelectionResult(Int32.(r.centers), Int32.(r.assign), Float32.(r.assigndist),
+                          Float32(r.covering), Float32(r.separation),
+                          Int(r.costdists), Int(r.costblocks))
+end
+
+"""
+    dnet(handle::EmbeddedEngine, k::Integer; verbose::Bool=false) -> CenterSelectionResult
+
+Runs `SimilaritySearch.dnet` (density-based ball partitioning) synchronously against the
+project's dense index -- selects representative centers by carving the database into balls of
+approximately `length(db) ÷ k` elements. Errors if the project is not a dense index or is empty.
+
+Returns a [`CenterSelectionResult`](@ref).
+"""
+function dnet(handle::EmbeddedEngine, k::Integer; verbose::Bool=false)
+    engine = handle.engine
+    IndexEngine.payload_kind(engine) === :dense ||
+        error("dnet requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
+    length(engine.backend.index) == 0 && error("dnet requires a non-empty dense index")
+    r = SimilaritySearch.dnet(SimilaritySearch.distance(engine.backend.index), SimilaritySearch.database(engine.backend.index), k; verbose)
+    CenterSelectionResult(Int32.(r.centers), Int32.(r.assign), Float32.(r.assigndist),
+                          Float32(r.covering), Float32(r.separation),
+                          Int(r.costdists), Int(r.costblocks))
+end
+
+"""
+    neardup(handle::EmbeddedEngine, epsilon::Real; verbose::Bool=false, recall::Real=1.0) -> NearDupResult
+
+Runs `SimilaritySearch.neardup` synchronously against the project's dense index --
+finds the ``ϵ``-net of non-duplicate objects whose mutual distances are at least `epsilon`.
+Objects closer than `epsilon` to an existing center are considered near-duplicates and assigned to it.
+Errors if the project is not a dense index or is empty.
+
+Returns a [`NearDupResult`](@ref).
+"""
+function neardup(handle::EmbeddedEngine, epsilon::Real; verbose::Bool=false, recall::Real=1.0)
+    engine = handle.engine
+    IndexEngine.payload_kind(engine) === :dense ||
+        error("neardup requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
+    length(engine.backend.index) == 0 && error("neardup requires a non-empty dense index")
+    r = SimilaritySearch.neardup(SimilaritySearch.distance(engine.backend.index), SimilaritySearch.database(engine.backend.index), Float32(epsilon); verbose, recall=Float32(recall))
+    NearDupResult(Int32.(r.centers), Int32.(r.assign), Float32.(r.assigndist),
+                  Float32(r.covering), Float32(r.epsilon),
+                  Int(r.costdists), Int(r.costblocks))
 end
 
 """
