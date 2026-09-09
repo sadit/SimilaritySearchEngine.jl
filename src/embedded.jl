@@ -972,7 +972,7 @@ function allknn(handle::EmbeddedEngine; k::Int=10)
         error("allknn requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
     length(engine.backend.index) == 0 && error("allknn requires a non-empty dense index")
 
-    ids, dists = SimilaritySearch.allknn(engine.backend.index, engine.backend.ctx, k)
+    ids, dists = IndexEngine.allknn_live(engine, k)
     n = size(ids, 2)
     results = KnnRow[]
     for i in 1:n
@@ -1011,7 +1011,7 @@ function fft(handle::EmbeddedEngine, k::Integer; start::Int=0, verbose::Bool=fal
     IndexEngine.payload_kind(engine) === :dense ||
         error("fft requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
     length(engine.backend.index) == 0 && error("fft requires a non-empty dense index")
-    r = SimilaritySearch.fft(SimilaritySearch.distance(engine.backend.index), SimilaritySearch.database(engine.backend.index), k; start, verbose)
+    r = IndexEngine.fft_live(engine, k, start, verbose)
     CenterSelectionResult(Int32.(r.centers), Int32.(r.assign), Float32.(r.assigndist),
                           Float32(r.covering), Float32(r.separation),
                           Int(r.costdists), Int(r.costblocks))
@@ -1031,7 +1031,7 @@ function dnet(handle::EmbeddedEngine, k::Integer; verbose::Bool=false)
     IndexEngine.payload_kind(engine) === :dense ||
         error("dnet requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
     length(engine.backend.index) == 0 && error("dnet requires a non-empty dense index")
-    r = SimilaritySearch.dnet(SimilaritySearch.distance(engine.backend.index), SimilaritySearch.database(engine.backend.index), k; verbose)
+    r = IndexEngine.dnet_live(engine, k, verbose)
     CenterSelectionResult(Int32.(r.centers), Int32.(r.assign), Float32.(r.assigndist),
                           Float32(r.covering), Float32(r.separation),
                           Int(r.costdists), Int(r.costblocks))
@@ -1052,7 +1052,7 @@ function neardup(handle::EmbeddedEngine, epsilon::Real; verbose::Bool=false, rec
     IndexEngine.payload_kind(engine) === :dense ||
         error("neardup requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
     length(engine.backend.index) == 0 && error("neardup requires a non-empty dense index")
-    r = SimilaritySearch.neardup(SimilaritySearch.distance(engine.backend.index), SimilaritySearch.database(engine.backend.index), Float32(epsilon); verbose, recall=Float32(recall))
+    r = IndexEngine.neardup_live(engine, Float32(epsilon), verbose, Float32(recall))
     NearDupResult(Int32.(r.centers), Int32.(r.assign), Float32.(r.assigndist),
                   Float32(r.covering), Float32(r.epsilon),
                   Int(r.costdists), Int(r.costblocks))
@@ -1075,7 +1075,7 @@ function closestpairs(handle::EmbeddedEngine; k::Int=1, min_k::Int=max(k, 8))
     IndexEngine.payload_kind(engine) === :dense ||
         error("closestpairs requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
     length(engine.backend.index) == 0 && error("closestpairs requires a non-empty dense index")
-    SimilaritySearch.closestpairs(engine.backend.index, engine.backend.ctx; k, min_k)
+    IndexEngine.closestpairs_live(engine, k, min_k)
 end
 
 """
@@ -1103,5 +1103,5 @@ function bichromatic_kclosestpairs(handle::EmbeddedEngine, B; k::Int=1, min_k::I
     IndexEngine.payload_kind(engine) === :dense ||
         error("bichromatic_kclosestpairs requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
     length(engine.backend.index) == 0 && error("bichromatic_kclosestpairs requires a non-empty dense index")
-    SimilaritySearch.bichromatic_kclosestpairs(engine.backend.index, engine.backend.ctx, B; k, min_k)
+    IndexEngine.bichromatic_kclosestpairs_live(engine, B, k, min_k)
 end

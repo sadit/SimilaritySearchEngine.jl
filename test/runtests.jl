@@ -179,6 +179,69 @@ const ACCENT_ITEMS = vcat(
         end
     end
 
+    @testset "whole-dataset operations run safely concurrently with append_items!/index!" begin
+        mktempworkdir() do workdir
+            items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:60]]
+            more_items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[61:80]]
+            h = create_project(workdir, "dense_concurrent")
+            append_items!(h, dense_items(items))
+            index!(h)
+
+            # Found live 2026-09-09: allknn/fft/dnet/neardup/closestpairs/bichromatic_kclosestpairs
+            # used to read engine.backend.ctx directly with no lock at all -- a scan racing a
+            # mutating add_item!/index!. Fixing that with a read_lock (matching search_live) was
+            # NOT enough: this very test, run against that fix, failed immediately with "`@threads
+            # :static` cannot be used concurrently or nested" -- these six all parallelize
+            # internally via @BATCHES, and read_lock lets several of them run at once, which
+            # collides with itself regardless of locking. See allknn_live's docstring in
+            # index_engine.jl for why they take write_lock instead (full exclusivity, including
+            # from each other, not just from writes). This drives real concurrent traffic through
+            # both sides at once instead of only ever calling these serially like every other test
+            # in this file does -- it's what caught the :static problem in the first place, and
+            # then a second, unrelated bug (see `_require_no_backlog`'s docstring): a reader can
+            # legitimately observe a nonzero append_items!/index! backlog here (the writer task
+            # below deliberately interleaves the two), which is an EXPECTED refusal
+            # (`ErrorException`, "requires no pending backlog"), not a crash -- only some OTHER
+            # exception type indicates the fix actually failed.
+            had_error = Threads.Atomic{Bool}(false)
+            errlock = ReentrantLock()
+            first_error = Ref{Any}(nothing)
+            record_error!(e) = (had_error[] = true; lock(() -> (first_error[] === nothing && (first_error[] = e)), errlock))
+            _is_expected_backlog_refusal(e) = e isa ErrorException && occursin("requires no pending backlog", e.msg)
+
+            @sync begin
+                for _ in 1:8
+                    Threads.@spawn begin
+                        try
+                            for _ in 1:20
+                                allknn(h; k=5)
+                                fft(h, 5)
+                                dnet(h, 5)
+                                closestpairs(h; k=3)
+                            end
+                        catch e
+                            _is_expected_backlog_refusal(e) || record_error!(e)
+                        end
+                    end
+                end
+                Threads.@spawn begin
+                    try
+                        for it in more_items
+                            append_items!(h, dense_items([it]))
+                            index!(h)
+                        end
+                    catch e
+                        record_error!(e)
+                    end
+                end
+            end
+            had_error[] && @error "concurrent whole-dataset op failed" exception=first_error[]
+            @test !had_error[]
+
+            close_project!(h)
+        end
+    end
+
     @testset "sparse dataset: caller-encoded vectors, no vocabulary anywhere" begin
         mktempworkdir() do workdir
             items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:100]]

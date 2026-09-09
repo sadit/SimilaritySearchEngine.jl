@@ -1792,4 +1792,104 @@ function _collect_live(engine::AbstractSearchEngine, res, evals)
     return (id=ids, dist=dists, deleted=deleted, distance_evaluations=evals)
 end
 
+"""
+    allknn_live(engine::DenseEngine, k::Int)
+    closestpairs_live(engine::DenseEngine, k::Int, min_k::Int)
+    bichromatic_kclosestpairs_live(engine::DenseEngine, B, k::Int, min_k::Int)
+    fft_live(engine::DenseEngine, k::Integer, start::Int, verbose::Bool)
+    dnet_live(engine::DenseEngine, k::Integer, verbose::Bool)
+    neardup_live(engine::DenseEngine, epsilon::Float32, verbose::Bool, recall::Float32)
+
+Write-locked wrappers around `SimilaritySearch.allknn`/`fft`/`dnet`/`neardup`/`closestpairs`/
+`bichromatic_kclosestpairs` -- found live, 2026-09-09, that `embedded.jl`'s whole-dataset
+operations called these directly with no lock at all, an obvious first hazard: a scan racing
+an `add_item!`/`index!` resizing the same `index.adj`/`index.db` it reads.
+
+**Not a [`read_lock`](@ref), unlike [`search_live`](@ref) -- these six need FULL exclusivity,
+including from each other, not just from writes.** Tried `read_lock` first (matching
+`search_live`'s "any number of concurrent reads" model) and it is NOT safe here: confirmed live
+with a concurrent-access test spawning several of these at once, which failed immediately with
+`` `@threads :static` cannot be used concurrently or nested ``. All six parallelize internally
+via `@BATCHES`, and the global scheduler defaults to `:static`
+(`SimilaritySearch.get_batch_scheduler()`) -- Julia's `@threads :static` refuses to run two
+such regions at the same time on the same thread pool, full stop, regardless of what data each
+one touches. A single `search_live` query never hits this (one query's beam search is plain
+sequential, no `@threads` involved), which is exactly why *that* docstring's "concurrent reads
+are fine" claim holds for searches but does not extend to these whole-dataset scans. So these
+take [`write_lock`](@ref) instead: only one of the six (and no ordinary search) runs at a time,
+each with the full machine free to parallelize internally -- appropriate for what these already
+are throughout this package's docs, occasional heavyweight admin-style calls, not a hot
+per-request path. Full exclusivity also means it's safe to reuse `engine.backend.ctx` directly
+here (same reasoning `search_live`'s own docstring gives for why insertion may reuse it under
+`write_lock`) -- no [`ContextPool`](@ref) needed, since nothing else can be touching it at the
+same time.
+
+**A second, unrelated bug found by the same concurrency test, fixed by [`_require_no_backlog`](@ref):**
+even under full `write_lock` exclusivity, `closestpairs` still crashed -- `BoundsError` deep in
+`SimilaritySearch.Bichromatic.bichromatic_search!`, reading past the end of `SearchGraph`'s own
+adjacency list. Root cause has nothing to do with locking: `closestpairs(idx, ctx)` is
+`bichromatic_kclosestpairs(idx, ctx, database(idx))` (self-comparison), so its loop runs over
+`1:length(database(idx))` -- the *staged* count, which grows the instant `append_items!` runs --
+while the adjacency list it reads is only as large as `length(idx)` (`g.len[]`, the *connected*
+count, which only grows when an [`index!`](@ref index!(::DenseEngine{GraphBackend})) call catches
+the backlog up). This package's own "Decoupled Staging and Indexing" design (see the README) makes
+a nonzero gap between those two counts a normal, supported state, not an edge case -- calling
+`closestpairs` while any items are staged-but-not-yet-indexed was already unsafe before this
+change, sequentially, with no concurrency involved at all; the new concurrency test is simply the
+first thing that ever happened to call it in that state. Fixed by refusing to run rather than
+crashing confusingly, applied to all six for the same reason the non-empty guard already covers
+all six uniformly, even though only `closestpairs`/a self-comparing `bichromatic_kclosestpairs`
+are actually known to read the adjacency list this way today.
+"""
+function _require_no_backlog(engine::DenseEngine, opname::AbstractString)
+    n_connected = length(engine.backend.index)
+    n_staged = length(SimilaritySearch.database(engine.backend.index))
+    n_connected == n_staged ||
+        error("$opname requires no pending backlog: $(n_staged - n_connected) item(s) staged " *
+              "since the last index! call -- call index!(handle) first")
+    return nothing
+end
+
+function allknn_live(engine::DenseEngine, k::Int)
+    write_lock(engine.lock) do
+        _require_no_backlog(engine, "allknn")
+        SimilaritySearch.allknn(engine.backend.index, engine.backend.ctx, k)
+    end
+end
+
+function closestpairs_live(engine::DenseEngine, k::Int, min_k::Int)
+    write_lock(engine.lock) do
+        _require_no_backlog(engine, "closestpairs")
+        SimilaritySearch.closestpairs(engine.backend.index, engine.backend.ctx; k, min_k)
+    end
+end
+
+function bichromatic_kclosestpairs_live(engine::DenseEngine, B, k::Int, min_k::Int)
+    write_lock(engine.lock) do
+        _require_no_backlog(engine, "bichromatic_kclosestpairs")
+        SimilaritySearch.bichromatic_kclosestpairs(engine.backend.index, engine.backend.ctx, B; k, min_k)
+    end
+end
+
+function fft_live(engine::DenseEngine, k::Integer, start::Int, verbose::Bool)
+    write_lock(engine.lock) do
+        _require_no_backlog(engine, "fft")
+        SimilaritySearch.fft(SimilaritySearch.distance(engine.backend.index), SimilaritySearch.database(engine.backend.index), k; start, verbose)
+    end
+end
+
+function dnet_live(engine::DenseEngine, k::Integer, verbose::Bool)
+    write_lock(engine.lock) do
+        _require_no_backlog(engine, "dnet")
+        SimilaritySearch.dnet(SimilaritySearch.distance(engine.backend.index), SimilaritySearch.database(engine.backend.index), k; verbose)
+    end
+end
+
+function neardup_live(engine::DenseEngine, epsilon::Float32, verbose::Bool, recall::Float32)
+    write_lock(engine.lock) do
+        _require_no_backlog(engine, "neardup")
+        SimilaritySearch.neardup(SimilaritySearch.distance(engine.backend.index), SimilaritySearch.database(engine.backend.index), epsilon; verbose, recall)
+    end
+end
+
 end # module
