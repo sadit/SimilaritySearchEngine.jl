@@ -757,14 +757,31 @@ get their saved direct neighbor list restored (`load_neighbors(i)`, typically
 `index.len[]` to `graph_len`, not to the full staged count, so a later explicit `index!`
 call picks up exactly where indexing left off, over the *same* `.db` (already fully
 restored here) it would have seen pre-restart.
+
+**The `load_neighbors(i)` loop runs in parallel via [`@BATCHES`](@ref) (2026-09-09).**
+Measured live at a realistic scale (200K items, warm/no-compilation reopen): this loop --
+one RocksDB point-read per object -- cost 1.2-1.6s sequentially, comparable to or larger
+than `connect_reverse_links!` right after it (0.9-1.1s, itself already `@BATCHES`-parallel
+in SimilaritySearch 1.4.1) -- together the dominant fraction of a warm reopen's total
+~2.3-2.5s. Safe to parallelize: `AbstractAdjList.add!` documents itself as thread-safe
+(guarded by its own `glock`), and a RocksDB point-read (`Base.get`, in `RocksDB.jl`) shares
+no mutable state across calls -- each call converts its own key to bytes and reads into its
+own freshly-allocated output buffer, so concurrent reads against the same `DB` handle don't
+contend on anything Julia-level; RocksDB's own C++ engine is built for concurrent reads
+against one handle in the first place. `index.adj` is resized to its final `graph_len` once,
+up front, specifically so no `add!` call needs to trigger `resize!` itself under load --
+`add!`'s own lock only ever has to guard a plain `append!` this way, not a growth check too.
 """
 function build_searchgraph(distance, vector_blocks, load_neighbors::Function, graph_len::Integer)
     index = SearchGraph(distance, VectorDatabase())
     for block in vector_blocks
         apply_searchgraph_vectors!(index, block)
     end
-    for i in 1:graph_len
-        add!(index.adj, i, load_neighbors(i))
+    if graph_len > 0
+        resize!(index.adj, graph_len)
+        @BATCHES getminbatch(Int(graph_len)) for i in 1:graph_len
+            add!(index.adj, i, load_neighbors(i))
+        end
     end
     index.len[] = graph_len
     graph_len > 0 && SimilaritySearch.connect_reverse_links!(index.adj, 1, graph_len)
