@@ -931,17 +931,24 @@ end
 
 Rebuilds a `BM25InvertedFile` against a trained `voc` by replaying every saved raw object
 (as produced incrementally via [`invertedfile_objects`](@ref) and read back via
-`Persistence.load_object_blocks`) through the library's own `push_item!`, in order -- a
-full rebuild-by-reinsertion, not an incremental deserialize (see
+`Persistence.load_object_blocks`) through the library's own batch `append_items!`, in one
+call -- a full rebuild-by-reinsertion, not an incremental deserialize (see
 `Persistence.InvertedFileObjectStore`'s docstring for why, and its documented scaling
 limits).
+
+**Batch `append_items!`, not one `push_item!` per object (2026-09-09).** `push_item!`
+documents itself as "not thread-safe" -- one call per object, in a plain loop, is exactly
+that: fully sequential. `append_items!(idx, ctx, ::AbstractDatabase, n)` is the library's
+own batch entry point, and it parallelizes internally via `@BATCHES` (both the per-object
+encode step and the postings-sort step, see `TextSearch.jl`'s `_bm25_fused_index_and_grow!`)
+-- the same category of win already measured and landed for
+[`build_searchgraph`](@ref)'s restore loop.
 """
 function build_bm25invertedfile(profile::TextProfile, object_blocks)
     index = BM25InvertedFile(profile)
     ctx = InvertedFileContext()
-    for block in object_blocks, obj in block
-        push_item!(index, ctx, obj)
-    end
+    objs = collect(Iterators.flatten(object_blocks))
+    isempty(objs) || append_items!(index, ctx, VectorDatabase(objs))
     return index
 end
 
@@ -949,8 +956,9 @@ end
     build_sparseinvertedfile(distance, dimension, object_blocks) -> InvertedFile
 
 Rebuilds a [`SparseEngine`](@ref)'s inverted file by replaying every saved sparse vector through
-the library's own `push_item!`, in order -- see [`build_bm25invertedfile`](@ref) for the same
-rebuild-by-reinsertion approach and its scaling caveat.
+the library's own batch `append_items!` -- see [`build_bm25invertedfile`](@ref) for the same
+rebuild-by-reinsertion approach, its scaling caveat, and why a batch call replaces a
+per-object `push_item!` loop.
 
 `dimension` comes from the saved state rather than from the vectors: an empty project has none
 to read it off, and one whose blocks happen to hold no nonzero in the last position would
@@ -959,9 +967,8 @@ otherwise come back a different shape than it was created with.
 function build_sparseinvertedfile(distance, dimension::Integer, object_blocks)
     index = InvertedFile(Int(dimension), distance)
     ctx = InvertedFileContext()
-    for block in object_blocks, obj in block
-        push_item!(index, ctx, obj)
-    end
+    objs = collect(Iterators.flatten(object_blocks))
+    isempty(objs) || append_items!(index, ctx, VectorDatabase(objs))
     return index
 end
 
@@ -969,21 +976,21 @@ end
     build_textinvertedfile(distance, profile::TextProfile, object_blocks) -> TextInvertedFile
 
 Rebuilds a `TextInvertedFile` against `distance` and `profile`'s `VectorModel` by replaying
-every saved raw object through the library's own `push_item!`, in order -- see
-[`build_bm25invertedfile`](@ref) (same rebuild-by-reinsertion approach and scaling caveat).
+every saved raw object through the library's own batch `append_items!` -- see
+[`build_bm25invertedfile`](@ref) (same rebuild-by-reinsertion approach, scaling caveat, and
+batch-over-per-object rationale).
 
-The saved objects are already-vectorized `SparseVector`s, not text, so they take
-`TextInvertedFile`'s generic `push_item!` (which forwards straight to the wrapped
-`InvertedFile`) rather than its vectorizing `AbstractString`/`TokenizedText` overload --
-replaying them must not re-run a vectorization that already happened, and would not be able
-to anyway.
+The saved objects are already-vectorized `SparseVector`s, not text, so this takes
+`TextInvertedFile`'s generic `append_items!` (inherited from `AbstractInvertedFile`, which
+forwards straight to the wrapped `InvertedFile`) rather than its vectorizing
+`AbstractString`/`TokenizedText` overload -- replaying them must not re-run a vectorization
+that already happened, and would not be able to anyway.
 """
 function build_textinvertedfile(distance, profile::TextProfile, object_blocks)
     index = TextInvertedFile(profile; dist=distance)
     ctx = InvertedFileContext()
-    for block in object_blocks, obj in block
-        push_item!(index, ctx, obj)
-    end
+    objs = collect(Iterators.flatten(object_blocks))
+    isempty(objs) || append_items!(index, ctx, VectorDatabase(objs))
     return index
 end
 
