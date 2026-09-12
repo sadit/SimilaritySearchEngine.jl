@@ -8,6 +8,36 @@ using JSON
 using RocksDB
 using SparseArrays: sparsevec, SparseVector, nonzeros, nonzeroinds
 
+# ---------------------------------------------------------------------------------------
+# Two levels: a light run on every change, the full one before a release.
+#
+#     julia --project -e 'using Pkg; Pkg.test()'                       # light (the default)
+#     julia --project -e 'using Pkg; Pkg.test(test_args=["full"])'     # everything
+#     SSE_TEST_LEVEL=full julia --project -e 'using Pkg; Pkg.test()'   # same, from CI
+#
+# What goes in the full run is decided by the clock, not by importance: measured 2026-09-12,
+# the whole suite takes 90s and five testsets account for ~50s of it -- the whole-dataset
+# algorithms (29.2s), the concurrency stress, and the text testsets that fit a profile from a
+# corpus (7.2s, 5.7s, 2.5s). Everything they cover is covered in the light run too, at a size
+# that runs in a second; what the full run adds is scale, real corpora, and contention.
+#
+# A skipped testset is named at the end of the run rather than silently absent: a light run
+# that looks identical to a full one is how a suite quietly stops testing something.
+const FULL = "full" in ARGS || lowercase(get(ENV, "SSE_TEST_LEVEL", "light")) == "full"
+const SKIPPED_HEAVY = String[]
+
+macro heavy(name, body)
+    # The whole quote is escaped rather than each argument: `@testset` wants its block as a
+    # literal `begin ... end`, and an `esc(...)`-wrapped one is not something it recognizes.
+    esc(quote
+        if FULL
+            @testset $name $body
+        else
+            push!(SKIPPED_HEAVY, $name)
+        end
+    end)
+end
+
 const FRANKENSTEIN_PATH = joinpath(@__DIR__, "data", "frankenstein.jsonl")
 
 function mktempworkdir(f)
@@ -60,7 +90,7 @@ const ACCENT_ITEMS = vcat(
     [TextItem("la m\u00fasica cl\u00e1sica de la ciudad $i"; doc_id="acc_$i") for i in 1:60],
     [TextItem("una musica rara sin acento"; doc_id="bare")])
 
-@testset "SimilaritySearchEngine.jl" begin
+@testset verbose = true "SimilaritySearchEngine.jl" begin
 
     include("policy.jl")
 
@@ -129,7 +159,7 @@ const ACCENT_ITEMS = vcat(
         end
     end
 
-    @testset "whole-dataset operations: fft, dnet, neardup, closestpairs, bichromatic_kclosestpairs" begin
+    @heavy "whole-dataset operations: fft, dnet, neardup, closestpairs, bichromatic_kclosestpairs" begin
         mktempworkdir() do workdir
             items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:60]]
             h = create_project(workdir, "dense_ops")
@@ -179,7 +209,7 @@ const ACCENT_ITEMS = vcat(
         end
     end
 
-    @testset "whole-dataset operations run safely concurrently with append_items!/index!" begin
+    @heavy "whole-dataset operations run safely concurrently with append_items!/index!" begin
         mktempworkdir() do workdir
             items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:60]]
             more_items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[61:80]]
@@ -207,7 +237,8 @@ const ACCENT_ITEMS = vcat(
             errlock = ReentrantLock()
             first_error = Ref{Any}(nothing)
             record_error!(e) = (had_error[] = true; lock(() -> (first_error[] === nothing && (first_error[] = e)), errlock))
-            _is_expected_backlog_refusal(e) = e isa ErrorException && occursin("requires no pending backlog", e.msg)
+            # The point of typing the errors: this used to match on the message text.
+            _is_expected_backlog_refusal(e) = e isa PendingBacklog
 
             @sync begin
                 for _ in 1:8
@@ -279,8 +310,8 @@ const ACCENT_ITEMS = vcat(
             @test length(filtered) == 1 && filtered[1].doc_id == "frankenstein_1"
 
             # a project of sparse vectors takes SparseItems and nothing else
-            @test_throws ErrorException append_items!(h, dense_items(items[1:1]))
-            @test_throws ErrorException append_items!(h, text_items(items[1:1]))
+            @test_throws PayloadMismatch append_items!(h, dense_items(items[1:1]))
+            @test_throws PayloadMismatch append_items!(h, text_items(items[1:1]))
             close_project!(h)
 
             h2 = open_project(workdir, "sparse_ds")
@@ -301,8 +332,8 @@ const ACCENT_ITEMS = vcat(
             append_items!(h, items)
             # A dense query would `convert` cleanly and then die inside the library on a Float32
             # used as a posting-list index, so it is refused here where the message can say why.
-            @test_throws ErrorException search(h, rand(Float32, SPARSE_DIM), 5)
-            @test_throws ErrorException search(h, sparsevec(Int32[1, 2], Float32[1, 0], 8), 5)
+            @test_throws PayloadMismatch search(h, rand(Float32, SPARSE_DIM), 5)
+            @test_throws WrongDimension search(h, sparsevec(Int32[1, 2], Float32[1, 0], 8), 5)
             @test length(search(h, payload(items[1]), 3)) == 3
             close_project!(h)
         end
@@ -330,29 +361,30 @@ const ACCENT_ITEMS = vcat(
             for (engine, backends) in BACKENDS, b in backends
                 @test SimilaritySearchEngine.IndexEngine.validate_backend(engine, b) === b
             end
-            @test_throws ErrorException SimilaritySearchEngine.IndexEngine.validate_backend(SparseEngine, SearchGraph)
-            @test_throws ErrorException SimilaritySearchEngine.IndexEngine.validate_backend(DenseEngine, BM25InvertedFile)
+            @test_throws UnknownBackend SimilaritySearchEngine.IndexEngine.validate_backend(SparseEngine, SearchGraph)
+            @test_throws UnknownBackend SimilaritySearchEngine.IndexEngine.validate_backend(DenseEngine, BM25InvertedFile)
 
             # a sparse project has to be sized; nothing else may be
-            @test_throws ErrorException create_project(workdir, "nodim"; engine=SparseEngine)
-            @test_throws ErrorException create_project(workdir, "dim_on_dense"; dimension=16)
-            @test_throws ErrorException create_project(workdir, "dim_on_text"; engine=FullTextEngine,
+            @test_throws InvalidOption create_project(workdir, "nodim"; engine=SparseEngine)
+            @test_throws InvalidOption create_project(workdir, "dim_on_dense"; dimension=16)
+            @test_throws InvalidOption create_project(workdir, "dim_on_text"; engine=FullTextEngine,
                                                        textmodel=FitFromCorpus(), dimension=16)
             @test_throws ArgumentError create_project(workdir, "zerodim"; engine=SparseEngine, dimension=0)
 
             # a text model belongs to a text project only -- and the check is the engine's, not
             # the backend's, because InvertedFile is a legal backend for both kinds
-            @test_throws ErrorException create_project(workdir, "sparse_model"; engine=SparseEngine,
+            @test_throws InvalidOption create_project(workdir, "sparse_model"; engine=SparseEngine,
                                                        dimension=16, textmodel=FitFromCorpus())
             @test !isdir(joinpath(workdir, "sparse_model"))
 
             # the pre-restructuring keyword names its replacement instead of being ignored
             err = try; create_project(workdir, "old"; index_type=SearchGraph); catch e; e end
-            @test err isa ErrorException
+            @test err isa InvalidOption
+            @test err.option === :index_type
             @test occursin("engine=", err.msg) && occursin("backend=", err.msg)
             @test !isdir(joinpath(workdir, "old"))
 
-            @test_throws ErrorException create_project(workdir, "bad_engine"; engine=Int)
+            @test_throws UnknownBackend create_project(workdir, "bad_engine"; engine=Int)
         end
     end
 
@@ -515,7 +547,7 @@ const ACCENT_ITEMS = vcat(
         mktempworkdir() do workdir
             # omitting it on a text project is an error rather than a silent default, because
             # the default it would have to pick freezes the vocabulary at the first index! call
-            @test_throws ErrorException create_project(workdir, "no_model"; engine=FullTextEngine, backend=BM25InvertedFile)
+            @test_throws InvalidOption create_project(workdir, "no_model"; engine=FullTextEngine, backend=BM25InvertedFile)
 
             msg = try
                 create_project(workdir, "no_model"; engine=FullTextEngine, backend=BM25InvertedFile)
@@ -532,13 +564,13 @@ const ACCENT_ITEMS = vcat(
             close_project!(h)
 
             # handing a text model to a dense project is an error too, not an ignored keyword
-            @test_throws ErrorException create_project(workdir, "dense_model"; engine=DenseEngine, backend=SearchGraph,
+            @test_throws InvalidOption create_project(workdir, "dense_model"; engine=DenseEngine, backend=SearchGraph,
                                                        textmodel=FitFromCorpus())
             @test !isdir(joinpath(workdir, "dense_model"))
         end
     end
 
-    @testset "text project: FitFromCorpus options drive the fit" begin
+    @heavy "text project: FitFromCorpus options drive the fit" begin
         mktempworkdir() do workdir
             # "comun" is in every document (a stopword by frequency); "singularidad" and
             # "irrepetible" are in exactly one (hapaxes, what a frequency floor is for)
@@ -699,7 +731,7 @@ const ACCENT_ITEMS = vcat(
         end
     end
 
-    @testset "text project: a pre-fitted profile fixes the out-of-vocabulary limitation" begin
+    @heavy "text project: a pre-fitted profile fixes the out-of-vocabulary limitation" begin
         mktempworkdir() do workdir
             corpus = vcat(["documento comun numero $i sobre temas generales" for i in 1:10],
                           ["aparicion tardia del termino zeppelin en el corpus $i" for i in 11:20])
@@ -734,7 +766,7 @@ const ACCENT_ITEMS = vcat(
         end
     end
 
-    @testset "text project: a set distance encodes queries as bags, like its documents" begin
+    @heavy "text project: a set distance encodes queries as bags, like its documents" begin
         mktempworkdir() do workdir
             corpus = vcat(["el perro ladra en el patio $i" for i in 1:10],
                           ["la bicicleta oxidada del vecino $i" for i in 11:20])
@@ -935,7 +967,7 @@ const ACCENT_ITEMS = vcat(
 
             # Staged but not indexed: refused rather than read past the adjacency list.
             append_items!(h, [DenseItem(Float32[99, 1, 2, 3]; doc_id="g_new")])
-            @test_throws ErrorException searchbatch(h, vectors[1:3], 4)
+            @test_throws PendingBacklog searchbatch(h, vectors[1:3], 4)
             index!(h)
             @test size(searchbatch(h, vectors[1:3], 4)[1]) == (4, 3)
             close_project!(h)
@@ -944,7 +976,7 @@ const ACCENT_ITEMS = vcat(
                                 backend=BM25InvertedFile, textmodel=FitFromCorpus())
             append_items!(ht, [TextItem("some text number $i"; doc_id="t$i") for i in 1:20])
             index!(ht)
-            @test_throws ErrorException searchbatch(ht, ["some text", "other text"], 3)
+            @test_throws UnsupportedOperation searchbatch(ht, ["some text", "other text"], 3)
             close_project!(ht)
         end
     end
@@ -1055,7 +1087,7 @@ const ACCENT_ITEMS = vcat(
             h2 = open_project(workdir, "rebuild_ds")
             @test h2.engine.backend.index === nothing
             # Searching says what to do instead of answering an empty result set.
-            @test_throws ErrorException ftsearch(h2, items[5]["text"], 5)
+            @test_throws NoIndex ftsearch(h2, items[5]["text"], 5)
             msg = try ftsearch(h2, items[5]["text"], 5); "" catch e; sprint(showerror, e) end
             @test occursin("index!", msg)
 
@@ -1146,4 +1178,6 @@ const ACCENT_ITEMS = vcat(
         end
     end
 
+
+    isempty(SKIPPED_HEAVY) || @info "light run: $(length(SKIPPED_HEAVY)) heavy testset(s) skipped; run with test_args=[\"full\"] before a release" SKIPPED_HEAVY
 end

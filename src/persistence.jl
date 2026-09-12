@@ -7,6 +7,7 @@ using TextSearch
 using SparseArrays: SparseArrays, AbstractSparseVector
 using ..Schema
 import ..IndexEngine
+using ..Errors
 
 export EngineStore, ENGINE_CF, open_engine_store, save_field!, load_field, has_field, save_fields!
 export AdjacencyStore, ADJACENCY_CF, open_adjacency_store, save_neighbors!, load_neighbors
@@ -489,7 +490,7 @@ Writes `records` as an Avro object container file. Errors if `records` is empty 
 dump must be handled by the caller before reaching here (see `execute_dump`).
 """
 function write_dump_records(filepath::String, records::Vector{DumpRecord})
-    isempty(records) && error("write_dump_records: cannot write an Avro file with zero rows (nothing to infer a schema from)")
+    isempty(records) && invalid_option(:records, "write_dump_records: cannot write an Avro file with zero rows (nothing to infer a schema from)")
     Avro.writetable(filepath, records)
     return filepath
 end
@@ -661,7 +662,7 @@ function _decode_docvec(bytes::Vector{UInt8})
         return DocVec(Int(n), nzind, nzval)
     end
     tag == _DOCVEC_TAG_WEIGHT ||
-        error("unknown document-vector tag $(repr(tag)) in $(INVFILE_DOCVECS_CF)")
+        corrupted_storage("unknown document-vector tag $(repr(tag)) in $(INVFILE_DOCVECS_CF)")
     nzval = Vector{Float32}(undef, nnz)
     read!(io, nzval)
     SparseArrays.sparsevec(nzind, nzval, Int(n))
@@ -801,7 +802,7 @@ end
 
 function LazyPostings(store::InvertedIndexStore, vocsize::Integer, maxlists::Integer, baselists::Integer)
     baselists <= maxlists ||
-        error("the posting cache's base size ($baselists) cannot exceed its maximum ($maxlists)")
+        invalid_option(:postings_cache_base, "the posting cache's base size ($baselists) cannot exceed its maximum ($maxlists)")
     LazyPostings(store, Int(vocsize), Dict{UInt32,Vector{UInt32}}(), Dict{UInt32,Int}(),
                  Threads.ReentrantLock(), Int(maxlists), Int(baselists))
 end
@@ -829,7 +830,7 @@ Base.eachindex(a::LazyPostings) = Base.OneTo(a.n)
 Base.length(a::LazyPostings) = a.n
 
 SimilaritySearch.add!(::LazyPostings, args...) =
-    error("LazyPostings is read-only from the index's side: a block's new postings are written " *
+    unsupported_operation(:add!, "LazyPostings is read-only from the index's side: a block's new postings are written " *
           "by Persistence.write_invfile_block! and reach this list through invalidate_postings!")
 
 """

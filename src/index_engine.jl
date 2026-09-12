@@ -8,6 +8,7 @@ using TextSearch
 using Base.Threads
 using SparseArrays: SparseVector
 using Dates: Dates
+using ..Errors
 
 export AbstractSearchEngine, DenseEngine, SparseEngine, FullTextEngine
 export GraphBackend, ExactBackend, SparseBackend, TextBackend, backend_tag, payload_kind
@@ -432,7 +433,7 @@ function default_profile_path(spec::DefaultProfile)
         isfile(legacy_path) && return legacy_path
     end
 
-    error("""
+    profile_not_installed(spec.nickname, """
         the default profile for $(repr(spec.language)) is not installed: no $path
         Install it by calling `download_profile($(repr(spec.nickname)))` or using the textsearch CLI:
             textsearch download $(spec.nickname)
@@ -484,7 +485,7 @@ _deferred_fit(spec::DeferredFit) = spec
 
 function _require_textmodel(IndexType::Type, textmodel)
     textmodel isa AbstractTextModelSpec && return textmodel
-    textmodel === nothing && error("""
+    textmodel === nothing && invalid_option(:textmodel, """
         a text project ($(nameof(IndexType))) needs an explicit `textmodel`, because the ways to get a \
         vocabulary are not interchangeable and the cheap one cannot be undone later:
           textmodel=DefaultProfile(:es)  -- recommended. The published profile for a language, refitted \
@@ -495,12 +496,12 @@ function _require_textmodel(IndexType::Type, textmodel)
           textmodel=FitFromCorpus(TextConfig())  -- no base profile: fit one here, from at most \
         max_documents of this project's own corpus. Bounded in cost and thin in vocabulary, so every \
         term appended later that the sample never held is out-of-vocabulary and silently dropped""")
-    error("textmodel must be a BaseProfile or a FitFromCorpus; got $(typeof(textmodel))")
+    invalid_option(:textmodel, "textmodel must be a BaseProfile or a FitFromCorpus; got $(typeof(textmodel))")
 end
 
 function _reject_textmodel(IndexType::Type, textmodel)
     textmodel === nothing && return nothing
-    error("`textmodel` only applies to a text index kind (BM25InvertedFile/TextInvertedFile/InvertedFile); " *
+    invalid_option(:textmodel, "`textmodel` only applies to a text index kind (BM25InvertedFile/TextInvertedFile/InvertedFile); " *
           "$(nameof(IndexType)) is a dense index, with no text to tokenize and no vocabulary to fit")
 end
 
@@ -1063,7 +1064,7 @@ function engine_kind(engine::Type)
     engine === DenseEngine && return :dense
     engine === SparseEngine && return :sparse
     engine === FullTextEngine && return :text
-    error("unknown engine $(nameof(engine)); expected DenseEngine, SparseEngine or FullTextEngine")
+    unknown_backend("unknown engine $(nameof(engine)); expected DenseEngine, SparseEngine or FullTextEngine")
 end
 
 """
@@ -1083,15 +1084,15 @@ there on a `MethodError` about keyword arguments, naming nothing a caller could 
 """
 function default_backend(engine::Type)
     haskey(BACKENDS, engine) ||
-        error("unknown engine $(nameof(engine)); expected DenseEngine, SparseEngine or FullTextEngine")
+        unknown_backend("unknown engine $(nameof(engine)); expected DenseEngine, SparseEngine or FullTextEngine")
     first(BACKENDS[engine])
 end
 
 function validate_backend(engine::Type, backend::Type)
     haskey(BACKENDS, engine) ||
-        error("unknown engine $(nameof(engine)); expected DenseEngine, SparseEngine or FullTextEngine")
+        unknown_backend("unknown engine $(nameof(engine)); expected DenseEngine, SparseEngine or FullTextEngine")
     backend in BACKENDS[engine] && return backend
-    error("$(nameof(backend)) is not a backend for $(nameof(engine)); it takes " *
+    unknown_backend("$(nameof(backend)) is not a backend for $(nameof(engine)); it takes " *
           join(("$(nameof(b))" for b in BACKENDS[engine]), ", ", " or "))
 end
 
@@ -1372,7 +1373,7 @@ function restore_engine(::Val{:dense}, state; on_change::Union{Nothing,Function}
         return DenseEngine(backend, ContextPool(SearchGraphContext()), state.deleted_ids, ReadWriteLock())
     end
     state.backend in (:exhaustive, :parallel_exhaustive) ||
-        error("unknown dense backend $(repr(state.backend)); expected :graph, :exhaustive or :parallel_exhaustive")
+        corrupted_storage("unknown dense backend $(repr(state.backend)); expected :graph, :exhaustive or :parallel_exhaustive")
     backend = ExactBackend(state.index, GenericContext(; _engine_logging(on_change, log_io)...))
     DenseEngine(backend, ContextPool(GenericContext()), state.deleted_ids, ReadWriteLock())
 end
@@ -1388,7 +1389,7 @@ function restore_engine(::Val{:text}, state; on_change::Union{Nothing,Function},
     profile = state.profile
     kind = state.backend === :bm25 ? BM25InvertedFile :
            state.backend === :text_inverted_file ? TextInvertedFile :
-           error("unknown text backend $(repr(state.backend)); expected :bm25 or :text_inverted_file")
+           corrupted_storage("unknown text backend $(repr(state.backend)); expected :bm25 or :text_inverted_file")
     # A text project's index is assembled from what was persisted (posting lists on disk,
     # document vectors resident -- see `Persistence.InvertedIndexStore`) or it does not exist
     # yet, in which case `index!` is what builds one from the staged text. Nothing is ever
@@ -1401,7 +1402,7 @@ function restore_engine(::Val{:text}, state; on_change::Union{Nothing,Function},
 end
 
 restore_engine(::Val{K}, state; on_change, log_io) where {K} =
-    error("unknown project kind $(repr(K)); this version restores :dense, :sparse and :text. A " *
+    corrupted_storage("unknown project kind $(repr(K)); this version restores :dense, :sparse and :text. A " *
           "project written before the engine kinds were restructured records a Julia type there " *
           "instead of a symbol, and cannot be read by this version.")
 
@@ -1462,7 +1463,7 @@ have to keep the old format readable.
 function index!(engine::FullTextEngine)
     write_lock(engine.lock) do
         n = length(engine.staged)
-        n == 0 && error("this text project has nothing staged yet -- add_item!/append_items! at least one item before calling index!")
+        n == 0 && nothing_staged("this text project has nothing staged yet -- add_item!/append_items! at least one item before calling index!")
         already = engine.backend.index === nothing ? 0 : length(engine.backend.index)
         if engine.profile === nothing
             engine.profile = train_profile(engine.fitspec, engine.staged)
@@ -1583,7 +1584,7 @@ function calibrate!(engine::DenseEngine{GraphBackend}; levels=DEFAULT_MINRECALL_
 
     return engine.backend.opt_beamsearch
 end
-calibrate!(::AbstractSearchEngine; kwargs...) = error("calibrate! only applies to a dense project on a SearchGraph backend -- nothing else has a BeamSearch to tune")
+calibrate!(::AbstractSearchEngine; kwargs...) = unsupported_operation(:calibrate!, "calibrate! only applies to a dense project on a SearchGraph backend -- nothing else has a BeamSearch to tune")
 
 """
     _nearest_beamsearch(engine::DenseEngine{GraphBackend}, minrecall::Real) -> BeamSearch
@@ -1660,7 +1661,7 @@ Errors if `engine.backend.index.db` is completely empty (nothing has ever been s
 function index!(engine::DenseEngine{GraphBackend})
     write_lock(engine.lock) do
         n = length(database(engine.backend.index))
-        n == 0 && error("DenseEngine{GraphBackend} has nothing staged yet -- add_item!/append_items! at least one vector before calling index!")
+        n == 0 && nothing_staged("DenseEngine{GraphBackend} has nothing staged yet -- add_item!/append_items! at least one vector before calling index!")
         SimilaritySearch.index!(engine.backend.index, engine.backend.ctx)
     end
     return engine
@@ -1763,7 +1764,7 @@ where the profile-taking constructor put it.
 Errors if `engine` has no profile yet -- nothing indexed, so no vocabulary to resolve against.
 """
 function resolve_query(engine::FullTextEngine, text::AbstractString, policy::QueryPolicy)
-    engine.profile === nothing && error("this text engine has not been trained yet -- index! at least one staged item, or create it with a profile, before resolving a query")
+    engine.profile === nothing && not_trained("this text engine has not been trained yet -- index! at least one staged item, or create it with a profile, before resolving a query")
     voc = engine.profile.model.voc
     TextSearch.query_tokens(voc, text, engine.backend.index.query; policy)
 end
@@ -1875,7 +1876,7 @@ function search_live(engine::FullTextEngine, query, k::Int; bs_override, minreca
         # instead of the index, and nothing here rebuilds one. Saying so beats answering an empty
         # result set that looks like a corpus with no matches.
         engine.backend.index === nothing &&
-            error("this text project has a profile but no index on disk: it was written before " *
+            no_index("this text project has a profile but no index on disk: it was written before " *
                   "the index was persisted. Call index!(handle) once to build it from the staged " *
                   "text, which is still there.")
         ctx = checkout!(engine.search_ctx_pool)
@@ -1962,7 +1963,8 @@ function _require_no_backlog(engine::DenseEngine, opname::AbstractString)
     n_connected = length(engine.backend.index)
     n_staged = length(SimilaritySearch.database(engine.backend.index))
     n_connected == n_staged ||
-        error("$opname requires no pending backlog: $(n_staged - n_connected) item(s) staged " *
+        pending_backlog(Symbol(opname), n_staged, n_connected,
+              "$opname requires no pending backlog: $(n_staged - n_connected) item(s) staged " *
               "since the last index! call -- call index!(handle) first")
     return nothing
 end

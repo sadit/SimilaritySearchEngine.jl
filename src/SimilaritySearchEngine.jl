@@ -15,6 +15,10 @@ using SparseArrays: SparseArrays, SparseVector, AbstractSparseVector, sparsevec
 # package (Jobs/Cursors/Tokens/Telemetry/Executors/Server are HTTP/CLI-specific glue that
 # stayed behind). Schema before Project (Project needs it); IndexEngine/Persistence are
 # independent of both and of each other.
+# Errors first: every submodule below raises them, and a consumer maps them (see
+# DEVELOPMENT_STRATEGY.md, "Errors: typed in the engine, mapped at each boundary").
+include("errors.jl")
+using .Errors
 include("schema.jl")
 include("project.jl")
 include("index_engine.jl")
@@ -93,6 +97,13 @@ export BM25InvertedFile, TextInvertedFile
 # TextItem) and `open_project` is free to be handed a directory whose kind it did not choose.
 export payload_kind
 
+# The error contract, re-exported so a caller writing `catch e; e isa NotFound` does not have
+# to reach into a submodule for the name.
+export EngineError, InvalidRequest, NotFound, ConflictingState, StorageFailure
+export PayloadMismatch, WrongDimension, UnknownBackend, InvalidOption, UnsupportedOperation
+export ProfileNotInstalled, PendingBacklog, NothingStaged, NoIndex, NotTrained, EmptyProject
+export CorruptedStorage
+
 # ---------------------------------------------------------------------------------------
 # Precompilation workload.
 #
@@ -122,9 +133,11 @@ using PrecompileTools: @setup_workload, @compile_workload
         try
             workdir = mktempdir()
             # The engine's default reporter narrates every insertion, and a package that
-            # narrates its own precompilation into the user's terminal is just noise.
+            # narrates its own precompilation into the user's terminal is just noise. Both
+            # streams: the progress lines go to stderr, the rest to stdout.
             try
                 redirect_stdout(devnull) do
+                redirect_stderr(devnull) do
                 h = create_project(workdir, "pc_dense"; engine=DenseEngine, backend=SearchGraph)
                 append_items!(h, [DenseItem(v; doc_id="d$i") for (i, v) in enumerate(vectors)])
                 index!(h)
@@ -150,6 +163,7 @@ using PrecompileTools: @setup_workload, @compile_workload
                 index!(ht)
                 ftsearch(ht, "cat mat", 3)
                 close_project!(ht)
+            end
             end
             finally
                 rm(workdir; force=true, recursive=true)

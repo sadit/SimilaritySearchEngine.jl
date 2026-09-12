@@ -356,7 +356,7 @@ function create_project(workdir::String, dataset::String;
                         textmodel::Union{Nothing,IndexEngine.AbstractTextModelSpec}=nothing,
                         index_type=nothing, schema_version::Int=1,
                         postings_cache_max::Int=4096, postings_cache_base::Int=2048)
-    index_type === nothing || error("""
+    index_type === nothing || invalid_option(:index_type, """
         `index_type` is gone: a project now names the kind of data it holds and, separately, the
         index that holds it.
             create_project(w, ds; engine=DenseEngine,    backend=SearchGraph, distance=SqL2())
@@ -376,16 +376,16 @@ function create_project(workdir::String, dataset::String;
         # Not delegated to `validate_textmodel`, which checks a *backend*: `InvertedFile` is a
         # legal backend for both a sparse and a text project, so the backend alone cannot answer
         # whether a text model belongs here. The engine can, and it is the thing the caller named.
-        error("`textmodel` only applies to a text project; $(nameof(engine)) indexes $kind " *
+        invalid_option(:textmodel, "`textmodel` only applies to a text project; $(nameof(engine)) indexes $kind " *
               "vectors, which have no text to tokenize and no vocabulary to fit")
     end
     if kind === :sparse
         dimension === nothing &&
-            error("a sparse project needs `dimension`: an InvertedFile is a fixed array of " *
+            invalid_option(:dimension, "a sparse project needs `dimension`: an InvertedFile is a fixed array of " *
                   "posting lists, so it has to be sized before the first item, and every " *
                   "SparseItem appended has to agree with it")
     elseif dimension !== nothing
-        error("`dimension` only applies to a sparse project; $(nameof(engine)) does not take one")
+        invalid_option(:dimension, "`dimension` only applies to a sparse project; $(nameof(engine)) does not take one")
     end
 
     dir = joinpath(workdir, dataset)
@@ -533,7 +533,7 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
         )
         IndexEngine.restore_engine(state; on_change=nothing, log_io=nothing)
     else
-        error("""
+        corrupted_storage("""
             this project records kind $(repr(kind)), which this version does not know how to \
             restore -- it reads :dense, :sparse and :text. A project written before the engine \
             kinds were restructured stored a Julia type there instead of a symbol, and has to be \
@@ -713,7 +713,7 @@ const _ITEM_KIND = Dict(Schema.DenseItem => :dense, Schema.SparseItem => :sparse
 const _KIND_ITEM = Dict(v => k for (k, v) in _ITEM_KIND)
 
 _check_item(engine, item::Schema.AbstractItem) =
-    _ITEM_KIND[typeof(item)] === IndexEngine.payload_kind(engine) || error(
+    _ITEM_KIND[typeof(item)] === IndexEngine.payload_kind(engine) || payload_mismatch(
         "this project indexes $(IndexEngine.payload_kind(engine)), so it takes " *
         "$(nameof(_KIND_ITEM[IndexEngine.payload_kind(engine)]))s; got a $(typeof(item))" *
         (item.doc_id === nothing ? "" : " (doc_id $(item.doc_id))"))
@@ -887,13 +887,14 @@ whatever the values happened to be.
 function _search_query(engine::IndexEngine.AbstractSearchEngine, vector)
     kind = IndexEngine.payload_kind(engine)
     kind === :dense && return convert(Vector{Float32}, vector)
-    kind === :sparse || error("search(handle, vector) needs a dense or sparse project; this one holds $kind")
+    kind === :sparse || payload_mismatch("search(handle, vector) needs a dense or sparse project; this one holds $kind")
     vector isa AbstractSparseVector ||
-        error("a sparse project searches with a SparseVector{Float32,Int32}, not a $(typeof(vector)); " *
+        payload_mismatch("a sparse project searches with a SparseVector{Float32,Int32}, not a $(typeof(vector)); " *
               "build one with `sparsevec(indices, values, dimension)` over the same dimension the " *
               "project was created with ($(engine.backend.dimension))")
     length(vector) == engine.backend.dimension ||
-        error("query dimension $(length(vector)) does not match the project's $(engine.backend.dimension)")
+        wrong_dimension(engine.backend.dimension, length(vector),
+              "query dimension $(length(vector)) does not match the project's $(engine.backend.dimension)")
     convert(SparseVector{Float32,Int32}, vector)
 end
 
@@ -960,16 +961,17 @@ single query rejects (wrong payload kind, wrong dimension) and says the same thi
 does -- the batch entry point is not a second, laxer door into the same index.
 """
 function _batch_query_database(engine::IndexEngine.AbstractSearchEngine, queries)
-    isempty(queries) && error("searchbatch needs at least one query")
+    isempty(queries) && invalid_option(:queries, "searchbatch needs at least one query")
     kind = IndexEngine.payload_kind(engine)
     kind === :text &&
-        error("searchbatch is for dense and sparse projects; a text project answers strings, " *
+        unsupported_operation(:searchbatch, "searchbatch is for dense and sparse projects; a text project answers strings, " *
               "so batch it with `[ftsearch(h, q, k) for q in queries]` (one query at a time)")
     prepared = [_search_query(engine, q) for q in queries]
     if kind === :dense
         dim = length(first(prepared))
         all(q -> length(q) == dim, prepared) ||
-            error("every query in a batch must have the project's dimension ($dim)")
+            wrong_dimension(dim, length(first(prepared)),
+                  "every query in a batch must have the project's dimension ($dim)")
         M = Matrix{Float32}(undef, dim, length(prepared))
         for (j, q) in enumerate(prepared)
             M[:, j] = q
@@ -1111,7 +1113,7 @@ Errors for a project whose text engine has not been trained yet, and for a dense
 function ftexplain(handle::EmbeddedEngine, text::AbstractString; policy::QueryPolicy=QueryPolicy())
     engine = handle.engine
     IndexEngine.payload_kind(engine) === :text ||
-        error("ftexplain is only meaningful for a text project (BM25InvertedFile/InvertedFile); this one is $(typeof(engine))")
+        unsupported_operation(:ftexplain, "ftexplain is only meaningful for a text project (BM25InvertedFile/InvertedFile); this one is $(typeof(engine))")
     return TextSearch.explain(IndexEngine.resolve_query(engine, text, policy).resolution)
 end
 
@@ -1219,8 +1221,8 @@ stops at the first one rather than reporting a neighbour that does not exist.
 function allknn(handle::EmbeddedEngine; k::Int=10)
     engine = handle.engine
     IndexEngine.payload_kind(engine) === :dense ||
-        error("allknn requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
-    length(engine.backend.index) == 0 && error("allknn requires a non-empty dense index")
+        unsupported_operation(:allknn, "allknn requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
+    length(engine.backend.index) == 0 && empty_project(:allknn, "allknn requires a non-empty dense index")
 
     ids, dists = IndexEngine.allknn_live(engine, k)
     n = size(ids, 2)
@@ -1259,8 +1261,8 @@ it. `assign[i]` is a position in `centers`, so item `i`'s center is `centers[ass
 function fft(handle::EmbeddedEngine, k::Integer; start::Int=0, verbose::Bool=false)
     engine = handle.engine
     IndexEngine.payload_kind(engine) === :dense ||
-        error("fft requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
-    length(engine.backend.index) == 0 && error("fft requires a non-empty dense index")
+        unsupported_operation(:fft, "fft requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
+    length(engine.backend.index) == 0 && empty_project(:fft, "fft requires a non-empty dense index")
     r = IndexEngine.fft_live(engine, k, start, verbose)
     CenterSelectionResult(Int32.(r.centers), Int32.(r.assign), Float32.(r.assigndist),
                           Float32(r.covering), Float32(r.separation),
@@ -1279,8 +1281,8 @@ Returns a [`CenterSelectionResult`](@ref).
 function dnet(handle::EmbeddedEngine, k::Integer; verbose::Bool=false)
     engine = handle.engine
     IndexEngine.payload_kind(engine) === :dense ||
-        error("dnet requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
-    length(engine.backend.index) == 0 && error("dnet requires a non-empty dense index")
+        unsupported_operation(:dnet, "dnet requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
+    length(engine.backend.index) == 0 && empty_project(:dnet, "dnet requires a non-empty dense index")
     r = IndexEngine.dnet_live(engine, k, verbose)
     CenterSelectionResult(Int32.(r.centers), Int32.(r.assign), Float32.(r.assigndist),
                           Float32(r.covering), Float32(r.separation),
@@ -1300,8 +1302,8 @@ Returns a [`NearDupResult`](@ref).
 function neardup(handle::EmbeddedEngine, epsilon::Real; verbose::Bool=false, recall::Real=1.0)
     engine = handle.engine
     IndexEngine.payload_kind(engine) === :dense ||
-        error("neardup requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
-    length(engine.backend.index) == 0 && error("neardup requires a non-empty dense index")
+        unsupported_operation(:neardup, "neardup requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
+    length(engine.backend.index) == 0 && empty_project(:neardup, "neardup requires a non-empty dense index")
     r = IndexEngine.neardup_live(engine, Float32(epsilon), verbose, Float32(recall))
     NearDupResult(Int32.(r.centers), Int32.(r.assign), Float32.(r.assigndist),
                   Float32(r.covering), Float32(r.epsilon),
@@ -1323,8 +1325,8 @@ Returns up to `k` `(i, j, dist)` tuples, ascending by distance -- `i`/`j` are in
 function closestpairs(handle::EmbeddedEngine; k::Int=1, min_k::Int=max(k, 8))
     engine = handle.engine
     IndexEngine.payload_kind(engine) === :dense ||
-        error("closestpairs requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
-    length(engine.backend.index) == 0 && error("closestpairs requires a non-empty dense index")
+        unsupported_operation(:closestpairs, "closestpairs requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
+    length(engine.backend.index) == 0 && empty_project(:closestpairs, "closestpairs requires a non-empty dense index")
     IndexEngine.closestpairs_live(engine, k, min_k)
 end
 
@@ -1351,7 +1353,7 @@ own internal `_id` (in `idxA`), `j` is `B`'s own position (1-based, in `B`'s own
 function bichromatic_kclosestpairs(handle::EmbeddedEngine, B; k::Int=1, min_k::Int=max(k, 8))
     engine = handle.engine
     IndexEngine.payload_kind(engine) === :dense ||
-        error("bichromatic_kclosestpairs requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
-    length(engine.backend.index) == 0 && error("bichromatic_kclosestpairs requires a non-empty dense index")
+        unsupported_operation(:bichromatic_kclosestpairs, "bichromatic_kclosestpairs requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
+    length(engine.backend.index) == 0 && empty_project(:bichromatic_kclosestpairs, "bichromatic_kclosestpairs requires a non-empty dense index")
     IndexEngine.bichromatic_kclosestpairs_live(engine, B, k, min_k)
 end
