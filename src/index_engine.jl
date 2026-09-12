@@ -17,7 +17,7 @@ export create_engine, create_sparse_engine, restore_engine, snapshot_state, extr
 export stored_payload
 export calibrate!, current_beamsearch, OptBeamSearch, DEFAULT_MINRECALL_LEVELS
 export direct_neighbors, apply_searchgraph_vectors!, build_searchgraph
-export invertedfile_objects, build_bm25invertedfile, build_textinvertedfile, build_sparseinvertedfile
+export invertedfile_objects, build_sparseinvertedfile
 export text_profile, text_vocabulary, resolve_query
 export AbstractTextModelSpec, BaseProfile, FitFromCorpus, DefaultProfile
 export DEFAULT_PROFILE_NICKNAMES, default_profile_path, train_profile
@@ -577,7 +577,40 @@ mutable struct TextBackend
     ctx::InvertedFileContext
     kind::Type
     distance::Union{Nothing, SimilaritySearch.PreMetric}
+    adj_factory::Union{Nothing, Function}
 end
+
+"""
+    persist_block!(adj, base::Int, docvecs, postings::Dict{UInt32,Vector{UInt32}})
+
+Records one block's new postings against `adj`, whatever kind of adjacency list that is.
+
+The generic method here is the in-memory one: it simply appends each token's new document ids
+to the list it already holds. A persistent adjacency list (`Persistence.LazyPostings`) adds a
+method that writes the block to storage instead -- which is why this is a function call and
+not an `if`: `IndexEngine` has no dependency on `Persistence`, and does not acquire one by
+being able to hand a block to whatever adjacency list its index was built with.
+
+`base` is the id of the last document indexed before this block, and `docvecs` are the block's
+own term vectors, both ignored by the in-memory method (the caller has already spliced them
+into the live index) and both needed by a persistent one.
+"""
+function persist_block!(adj::SimilaritySearch.AbstractAdjList, base::Int, docvecs, postings::Dict{UInt32,Vector{UInt32}})
+    for (token, ids) in postings
+        SimilaritySearch.add!(adj, token, ids)
+    end
+    return nothing
+end
+
+"""
+    maybe_trim_cache!(adj) -> Any
+
+Gives an adjacency list that caches something the chance to shed it, once a query has fully
+resolved. The generic method does nothing; `Persistence.LazyPostings` adds one that evicts its
+least frequently used posting lists. Called from [`search_live`](@ref) *after* the search
+returns -- never during one.
+"""
+maybe_trim_cache!(adj) = nothing
 
 """
     DenseEngine{B}
@@ -921,44 +954,43 @@ the index, is the whole reason that field is gone.
 `distance` is ignored for BM25, which scores through its own `bm25score` and has no metric to
 choose (see [`default_distance`](@ref)).
 """ 
-function _text_index(profile::TextProfile, kind::Type, distance)
-    kind === BM25InvertedFile && return BM25InvertedFile(profile)
-    TextInvertedFile(profile; dist=distance)
-end
-
-"""
-    build_bm25invertedfile(profile::TextProfile, object_blocks) -> BM25InvertedFile
-
-Rebuilds a `BM25InvertedFile` against a trained `voc` by replaying every saved raw object
-(as produced incrementally via [`invertedfile_objects`](@ref) and read back via
-`Persistence.load_object_blocks`) through the library's own batch `append_items!`, in one
-call -- a full rebuild-by-reinsertion, not an incremental deserialize (see
-`Persistence.InvertedFileObjectStore`'s docstring for why, and its documented scaling
-limits).
-
-**Batch `append_items!`, not one `push_item!` per object (2026-09-09).** `push_item!`
-documents itself as "not thread-safe" -- one call per object, in a plain loop, is exactly
-that: fully sequential. `append_items!(idx, ctx, ::AbstractDatabase, n)` is the library's
-own batch entry point, and it parallelizes internally via `@BATCHES` (both the per-object
-encode step and the postings-sort step, see `TextSearch.jl`'s `_bm25_fused_index_and_grow!`)
--- the same category of win already measured and landed for
-[`build_searchgraph`](@ref)'s restore loop.
-"""
-function build_bm25invertedfile(profile::TextProfile, object_blocks)
-    index = BM25InvertedFile(profile)
-    ctx = InvertedFileContext()
-    objs = collect(Iterators.flatten(object_blocks))
-    isempty(objs) || append_items!(index, ctx, VectorDatabase(objs))
-    return index
+function _text_index(profile::TextProfile, kind::Type, distance, adj_factory::Union{Nothing,Function})
+    if kind === BM25InvertedFile
+        index = BM25InvertedFile(profile)
+        adj_factory === nothing && return index
+        # The library exposes no keyword for injecting an adjacency list, so the index is built
+        # its own way first and then rebuilt around the caller's: same voc, same scorer, same
+        # query pipeline, a different place for the posting lists to live. This is the one call
+        # in this package that depends on `BM25InvertedFile`'s *field order*
+        # (voc, bm25, adj, doclens, db, len, query), which is why Project.toml pins
+        # TextSearch to an exact version and `test/runtests.jl` exercises this path.
+        return BM25InvertedFile(index.voc, index.bm25, adj_factory(vocsize(index.voc)),
+                                index.doclens, index.db, index.len, index.query)
+    end
+    index = TextInvertedFile(profile; dist=distance)
+    adj_factory === nothing && return index
+    # Same surgery, one level deeper: a TextInvertedFile wraps a plain InvertedFile, and it is
+    # that inner index whose posting lists move to storage. Its field order
+    # (dist, adj, sizes, db, len) is the second internal this package depends on.
+    inner = index.invfile
+    rebuilt = InvertedFile(inner.dist, adj_factory(length(inner.adj)), inner.sizes,
+                                            inner.db, inner.len)
+    TextInvertedFile(index.model, rebuilt, index.query)
 end
 
 """
     build_sparseinvertedfile(distance, dimension, object_blocks) -> InvertedFile
 
 Rebuilds a [`SparseEngine`](@ref)'s inverted file by replaying every saved sparse vector through
-the library's own batch `append_items!` -- see [`build_bm25invertedfile`](@ref) for the same
-rebuild-by-reinsertion approach, its scaling caveat, and why a batch call replaces a
-per-object `push_item!` loop.
+the library's own batch `append_items!` -- a full rebuild-by-reinsertion on every open, which is
+what a text project stopped doing when it began persisting its index
+(`Persistence.InvertedIndexStore`). A sparse project still does it: its items are vectors the
+caller encoded, so the objects it saves *are* what it would have to write anyway, and the same
+treatment is a follow-up rather than a difference of principle.
+
+Batch `append_items!`, not one `push_item!` per object: `push_item!` documents itself as not
+thread-safe -- one call per object, in a plain loop, is fully sequential -- while
+`append_items!(idx, ctx, ::AbstractDatabase, n)` parallelizes internally via `@BATCHES`.
 
 `dimension` comes from the saved state rather than from the vectors: an empty project has none
 to read it off, and one whose blocks happen to hold no nonzero in the last position would
@@ -966,28 +998,6 @@ otherwise come back a different shape than it was created with.
 """
 function build_sparseinvertedfile(distance, dimension::Integer, object_blocks)
     index = InvertedFile(Int(dimension), distance)
-    ctx = InvertedFileContext()
-    objs = collect(Iterators.flatten(object_blocks))
-    isempty(objs) || append_items!(index, ctx, VectorDatabase(objs))
-    return index
-end
-
-"""
-    build_textinvertedfile(distance, profile::TextProfile, object_blocks) -> TextInvertedFile
-
-Rebuilds a `TextInvertedFile` against `distance` and `profile`'s `VectorModel` by replaying
-every saved raw object through the library's own batch `append_items!` -- see
-[`build_bm25invertedfile`](@ref) (same rebuild-by-reinsertion approach, scaling caveat, and
-batch-over-per-object rationale).
-
-The saved objects are already-vectorized `SparseVector`s, not text, so this takes
-`TextInvertedFile`'s generic `append_items!` (inherited from `AbstractInvertedFile`, which
-forwards straight to the wrapped `InvertedFile`) rather than its vectorizing
-`AbstractString`/`TokenizedText` overload -- replaying them must not re-run a vectorization
-that already happened, and would not be able to anyway.
-"""
-function build_textinvertedfile(distance, profile::TextProfile, object_blocks)
-    index = TextInvertedFile(profile; dist=distance)
     ctx = InvertedFileContext()
     objs = collect(Iterators.flatten(object_blocks))
     isempty(objs) || append_items!(index, ctx, VectorDatabase(objs))
@@ -1129,7 +1139,7 @@ every `:add!` event a `push_item!`/`append_items!` call reports -- e.g. to persi
 handle or `stdout`/`stderr` both work; purely informative, and being a reporter rather than an
 observer it changes nothing about what gets persisted.
 """
-function create_engine(::Type{SearchGraph}; distance, minrecall::Union{Nothing,Real}, textmodel, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
+function create_engine(::Type{SearchGraph}; distance, minrecall::Union{Nothing,Real}, textmodel, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function})
     _reject_textmodel(SearchGraph, textmodel)
     mr = minrecall === nothing ? nothing : Float32(minrecall)
     backend = GraphBackend(SearchGraph(distance, VectorDatabase()),
@@ -1149,9 +1159,9 @@ function _create_exact_engine(IndexType::Type, distance, textmodel,
     DenseEngine(backend, ContextPool(GenericContext()), Set{UInt32}(), ReadWriteLock())
 end
 
-create_engine(::Type{ExhaustiveSearch}; distance, minrecall, textmodel, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}) =
+create_engine(::Type{ExhaustiveSearch}; distance, minrecall, textmodel, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function}) =
     _create_exact_engine(ExhaustiveSearch, distance, textmodel, on_change, log_io)
-create_engine(::Type{ParallelExhaustiveSearch}; distance, minrecall, textmodel, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}) =
+create_engine(::Type{ParallelExhaustiveSearch}; distance, minrecall, textmodel, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function}) =
     _create_exact_engine(ParallelExhaustiveSearch, distance, textmodel, on_change, log_io)
 
 """
@@ -1188,24 +1198,25 @@ be.
 # `TextInvertedFile` name the same backend; the former is kept because it is what a caller
 # reaching for "a weighted inverted file" writes.
 function _create_text_engine(selector::Type, distance, textmodel,
-                             on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
+                             on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO},
+                             adj_factory::Union{Nothing,Function})
     spec = _require_textmodel(selector, textmodel)
     kind = selector === BM25InvertedFile ? BM25InvertedFile : TextInvertedFile
     dist = kind === BM25InvertedFile ? nothing : distance
     profile = _initial_profile(spec)
-    index = profile === nothing ? nothing : _text_index(profile, kind, dist)
+    index = profile === nothing ? nothing : _text_index(profile, kind, dist, adj_factory)
     backend = TextBackend(index, InvertedFileContext(; _engine_logging(on_change, log_io)...),
-                          kind, dist)
+                          kind, dist, adj_factory)
     FullTextEngine(backend, profile, _deferred_fit(spec), String[],
                    ContextPool(InvertedFileContext()), Set{UInt32}(), ReadWriteLock())
 end
 
-create_engine(::Type{BM25InvertedFile}; distance, minrecall, textmodel::Union{Nothing,AbstractTextModelSpec}, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}) =
-    _create_text_engine(BM25InvertedFile, distance, textmodel, on_change, log_io)
-create_engine(::Type{InvertedFile}; distance, minrecall, textmodel::Union{Nothing,AbstractTextModelSpec}, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}) =
-    _create_text_engine(InvertedFile, distance, textmodel, on_change, log_io)
-create_engine(::Type{TextInvertedFile}; distance, minrecall, textmodel::Union{Nothing,AbstractTextModelSpec}, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}) =
-    _create_text_engine(TextInvertedFile, distance, textmodel, on_change, log_io)
+create_engine(::Type{BM25InvertedFile}; distance, minrecall, textmodel::Union{Nothing,AbstractTextModelSpec}, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function}) =
+    _create_text_engine(BM25InvertedFile, distance, textmodel, on_change, log_io, adj_factory)
+create_engine(::Type{InvertedFile}; distance, minrecall, textmodel::Union{Nothing,AbstractTextModelSpec}, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function}) =
+    _create_text_engine(InvertedFile, distance, textmodel, on_change, log_io, adj_factory)
+create_engine(::Type{TextInvertedFile}; distance, minrecall, textmodel::Union{Nothing,AbstractTextModelSpec}, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function}) =
+    _create_text_engine(TextInvertedFile, distance, textmodel, on_change, log_io, adj_factory)
 
 """
     create_engine(::Type{InvertedFile}; distance, dimension, on_change, log_io) -> SparseEngine
@@ -1273,7 +1284,7 @@ insertion blocks:
 - a sparse project: `distance` and `dimension` -- structural, since an `InvertedFile` is a fixed
   array of posting lists and cannot be rebuilt without its size;
 - a text project: `profile`, `fitspec` and `distance` (see
-  [`invertedfile_objects`](@ref)/[`build_bm25invertedfile`](@ref)/[`build_textinvertedfile`](@ref)).
+  [`invertedfile_objects`](@ref)).
 
 A text project saves one `profile` where two engines used to save a `voc`/`model` pair: a
 `TextSearch.TextProfile` holds both, along with the artifacts and lineage neither of them
@@ -1336,14 +1347,13 @@ own `build_*` function needs instead:
   restored `.db` if some staged vectors were never caught up by an explicit
   [`index!`](@ref index!(::DenseEngine{GraphBackend})) call before the project last closed) -- see
   [`build_searchgraph`](@ref).
-- `FullTextEngine`: `profile`, `fitspec`, `object_blocks`
-  (`Persistence.load_object_blocks(obj_store)`, or `nothing`/empty if `profile === nothing`,
-  i.e. never trained), `staged` (every raw text ever staged, flattened from
-  `Persistence.load_staged_text_blocks`, which can be longer than `object_blocks`'s total
-  count if a backlog was still pending an [`index!`](@ref index!(::FullTextEngine)) call when the
-  project last closed) -- see [`build_bm25invertedfile`](@ref).
-  A `TextInvertedFile`-backed project carries the same fields and is rebuilt by
-  [`build_textinvertedfile`](@ref) instead -- `state.backend` is what says which.
+- `FullTextEngine`: `profile`, `fitspec`, `prebuilt_index` (the index assembled from what was
+  persisted, or `nothing` when the project has none yet), `adj_factory` (what a *new* index's
+  posting lists are built around, since a project trained by its first
+  [`index!`](@ref index!(::FullTextEngine)) has no index at restore time), `distance`, and
+  `staged` (every raw text ever staged, flattened from `Persistence.load_staged_text_blocks`,
+  which can be longer than what the index holds if a backlog was still pending an `index!` call
+  when the project last closed). Nothing is rebuilt here: a text index is assembled or absent.
 - `SparseEngine`: `distance`, `dimension`, and `object_blocks` -- the same encoded posting-list
   blocks a text project replays, minus the profile there is no vocabulary for.
 """
@@ -1379,11 +1389,13 @@ function restore_engine(::Val{:text}, state; on_change::Union{Nothing,Function},
     kind = state.backend === :bm25 ? BM25InvertedFile :
            state.backend === :text_inverted_file ? TextInvertedFile :
            error("unknown text backend $(repr(state.backend)); expected :bm25 or :text_inverted_file")
-    index = profile === nothing ? nothing :
-            kind === BM25InvertedFile ? build_bm25invertedfile(profile, state.object_blocks) :
-                                        build_textinvertedfile(state.distance, profile, state.object_blocks)
+    # A text project's index is assembled from what was persisted (posting lists on disk,
+    # document vectors resident -- see `Persistence.InvertedIndexStore`) or it does not exist
+    # yet, in which case `index!` is what builds one from the staged text. Nothing is ever
+    # recomputed here.
+    index = state.prebuilt_index
     backend = TextBackend(index, InvertedFileContext(; _engine_logging(on_change, log_io)...),
-                          kind, state.distance)
+                          kind, state.distance, state.adj_factory)
     FullTextEngine(backend, profile, state.fitspec, state.staged,
                    ContextPool(InvertedFileContext()), state.deleted_ids, ReadWriteLock())
 end
@@ -1429,6 +1441,23 @@ has no `index!` method of its own.
 
 Errors if `engine.staged` is completely empty (nothing has ever been staged) -- mirrors
 `index!(engine::DenseEngine{GraphBackend})`'s empty-`.db` error.
+
+# Rebuilding a project written before the index was persisted
+
+A text project persists its index (`Persistence.InvertedIndexStore`); one written before that
+has only the raw objects it saved, which nothing reads anymore. Such a project opens with its
+profile and its staged text intact and no index at all, and one call rebuilds it:
+
+```julia
+h = open_project(workdir, dataset)
+index!(h)     # re-indexes every staged text, and persists the result
+```
+
+That works because the staged text was always persisted in full, independently of the index,
+so the rebuild has the same input the original indexing had. It is a deliberate one-line
+procedure rather than an automatic migration: this package has no released version and no
+project large enough to make an invisible, once-per-project rebuild worth the code that would
+have to keep the old format readable.
 """
 function index!(engine::FullTextEngine)
     write_lock(engine.lock) do
@@ -1436,19 +1465,71 @@ function index!(engine::FullTextEngine)
         n == 0 && error("this text project has nothing staged yet -- add_item!/append_items! at least one item before calling index!")
         already = engine.backend.index === nothing ? 0 : length(engine.backend.index)
         if engine.profile === nothing
-            profile = train_profile(engine.fitspec, engine.staged)
-            engine.profile = profile
-            engine.backend.index = _text_index(profile, engine.backend.kind, engine.backend.distance)
+            engine.profile = train_profile(engine.fitspec, engine.staged)
         end
-        for i in already+1:n
-            # The staged text goes in as text, whichever backend this is. Both take it and both
-            # encode it their own way -- `BM25InvertedFile` into the bag its scorer reads,
-            # `TextInvertedFile` into a weighted vector through the profile's model -- which is
-            # why one loop serves both and why neither encoding is spelled out here. This module
-            # used to do the encoding, in two methods that differed in nothing else.
-            push_item!(engine.backend.index, engine.backend.ctx, engine.staged[i])
+        if engine.backend.index === nothing
+            # Either the profile was just trained (a project's first index! call), or the project
+            # has a profile and no persisted index -- the pre-persistence shape this rebuilds from
+            # staged text. One statement covers both: an engine with a profile and no index gets
+            # one, and the block below then indexes everything staged.
+            engine.backend.index = _text_index(engine.profile, engine.backend.kind,
+                                               engine.backend.distance, engine.backend.adj_factory)
+            already = 0
         end
+        already < n || return engine
+        texts = view(engine.staged, already+1:n)
+        _index_text_block!(engine, texts, already)
     end
+    return engine
+end
+
+"""
+    _index_text_block!(engine::FullTextEngine, texts, base::Int)
+
+Indexes `texts` as one block, as documents `base+1 …`, whichever text backend this is.
+
+Builds the block as its own small index first, then splices the result into the live one:
+document vectors and lengths are appended, and the block's posting lists -- their ids shifted
+from block-local to global -- are handed to [`persist_block!`](@ref), which either merges them
+into an in-memory adjacency list or writes them to storage, depending on what kind the live
+index was built with.
+
+Why a scratch index rather than `push_item!` per text, which is what this used to do: the
+library's batch path encodes a whole block in parallel (`@BATCHES` inside
+`append_items!`), while `push_item!` is sequential by contract. The indirection through a
+second index buys that parallelism without teaching this module how a document is encoded --
+it still doesn't know, it just asks for a block and takes the result apart.
+
+Both text backends take the same shape here because their posting lists hold the same thing --
+document ids -- and they differ only in what each document is stored *as* (term frequencies
+against BM25, model weights against the weighted one) and in the per-document number each keeps
+beside it (`doclens`, `sizes`).
+"""
+function _index_text_block!(engine::FullTextEngine, texts, base::Int)
+    live = engine.backend.index
+    is_bm25 = engine.backend.kind === BM25InvertedFile
+    scratch = is_bm25 ? BM25InvertedFile(engine.profile) :
+                        TextInvertedFile(engine.profile; dist=engine.backend.distance)
+    append_items!(scratch, engine.backend.ctx, collect(texts))
+
+    postings = Dict{UInt32,Vector{UInt32}}()
+    for token in eachindex(scratch.adj)
+        P = SimilaritySearch.neighbors(scratch.adj, token)
+        (P === nothing || isempty(P)) && continue
+        postings[UInt32(token)] = UInt32[base + p for p in P]
+    end
+
+    docvecs = [scratch.db[i] for i in 1:length(scratch.db)]
+    if is_bm25
+        append!(live.doclens, scratch.doclens)
+    else
+        append!(live.sizes, scratch.sizes)
+    end
+    for v in docvecs
+        push_item!(live.db, v)
+    end
+    live.len[] = base + length(docvecs)
+    persist_block!(live.adj, base, docvecs, postings)
     return engine
 end
 
@@ -1790,6 +1871,13 @@ function search_live(engine::FullTextEngine, query, k::Int; bs_override, minreca
     read_lock(engine.lock) do
         profile = engine.profile
         profile === nothing && return (id=Int32[], dist=Float32[], deleted=Bool[], distance_evaluations=0)
+        # Trained but with no index: the project was written by a version that stored the objects
+        # instead of the index, and nothing here rebuilds one. Saying so beats answering an empty
+        # result set that looks like a corpus with no matches.
+        engine.backend.index === nothing &&
+            error("this text project has a profile but no index on disk: it was written before " *
+                  "the index was persisted. Call index!(handle) once to build it from the staged " *
+                  "text, which is still there.")
         ctx = checkout!(engine.search_ctx_pool)
         try
             snap = copy(ctx.costdists)
@@ -1800,7 +1888,12 @@ function search_live(engine::FullTextEngine, query, k::Int; bs_override, minreca
             # itself, and keep a second variant map, only to be able to vary the policy.
             search(engine.backend.index, ctx, query, res; policy)
             evals = SimilaritySearch.distance_evaluations(ctx, snap)
-            return _collect_live(engine, res, evals)
+            out = _collect_live(engine, res, evals)
+            # The query is resolved: nothing is still walking a posting list this call read, so
+            # this is the one moment a cache in front of them may drop anything. See
+            # [`maybe_trim_cache!`](@ref).
+            maybe_trim_cache!(engine.backend.index.adj)
+            return out
         finally
             checkin!(engine.search_ctx_pool, ctx)
         end

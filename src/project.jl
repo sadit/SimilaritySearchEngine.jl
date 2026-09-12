@@ -186,13 +186,11 @@ function compact_all!(manager::ProjectManager)
     return nothing
 end
 
-# `collect` materializes a concrete Vector{UInt8} rather than a lazy reinterpret view
-# over a temporary array -- WriteBatch defers the actual write until write!(), and a lazy
-# view isn't reliably kept alive/rooted across that gap, causing intermittent
-# silently-dropped keys under GC pressure (confirmed via a targeted 200-key round-trip
-# repro: a handful of keys came back missing on `get` every run, with materialized keys
-# the issue disappears).
-_id_key(id::Int32) = collect(reinterpret(UInt8, [id]))
+# Every integer key in this package is big-endian, for the one reason `Schema.be_key`
+# documents: RocksDB sorts keys bytewise, so this is what makes a range of ids iterate in
+# numeric order. These keys used to be native little-endian, which only ever ordered
+# correctly below 256.
+_id_key(id::Int32) = Schema.be_key(id)
 
 """
     docid_key(doc_id::AbstractString, id::Int32) -> Vector{UInt8}
@@ -336,7 +334,7 @@ function find_all_by_doc_id(manager::ProjectManager, doc_id::AbstractString)
         # Keys are sorted bytewise, so the first one that stops carrying this prefix ends
         # the run that could possibly contain this doc_id's entries.
         (length(k) >= n && view(k, 1:n) == dbytes) || break
-        length(k) == n + 4 && push!(ids, only(reinterpret(Int32, k[end-3:end])))
+        length(k) == n + 4 && push!(ids, Int32(Schema.decode_be_key(view(k, (length(k)-3):length(k)))))
         RocksDB.advance!(it)
     end
 

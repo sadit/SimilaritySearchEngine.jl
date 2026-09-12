@@ -18,11 +18,15 @@
 - **Dense Vector Search**: Approximate nearest-neighbor search via `SearchGraph` with dynamic beam-search tuning, or exact brute-force search via `ExhaustiveSearch`.
 - **Sparse Vector Search**: Direct indexing of user-provided sparse representations with fixed dimensionality via `InvertedFile`, evaluated under cosine distance or discrete set metrics (`Dist.Sets.*`).
 - **Full-Text Retrieval**: Lexical search with BM25 (`BM25InvertedFile`) or cosine-weighted TF-IDF (`TextInvertedFile`), configured through linguistic profiles (`TextProfile`).
+- **Persisted Text Index**: A text project -- BM25 or weighted TF-IDF -- stores its inverted index itself, posting lists and per-document vectors in dedicated column families, instead of storing the indexed objects and recomputing the index on every open. Reopening 265,000 Project Gutenberg paragraphs costs 1.4 s against 20.4 s, and indexing them 25.7 s against 147.3 s. Posting lists are read from storage on demand behind a least-frequently-used cache; document vectors stay resident, because scoring reads a vector per candidate.
 - **Decoupled Staging and Indexing**: Items are appended and made durable immediately via `append_items!`, while computationally demanding index construction (graph building or full-text vocabulary encoding) is deferred to explicit `index!` calls.
 - **Linguistic Profiles & Query Policies**: Explicit text modeling via `DefaultProfile`, `BaseProfile`, or `FitFromCorpus`, combined with query-time orthographic correction and semantic expansion via `QueryPolicy`.
 - **Logical Deletions**: Non-destructive soft deletes via `delete_item!`, reporting candidate deletion states without requiring costly index rebuilds.
 - **Target Recall Calibration**: Optimization of graph traversal hyperparameters via `calibrate!` to guarantee minimum recall constraints (`minrecall`).
+- **Batch Query Execution**: `searchbatch` answers many queries in one parallel pass -- 39,000 queries/s against 3,600/s query-by-query, measured over 50,000 dense vectors on 8 threads -- returning raw `(ids, dists)` matrices, while `search(handle, queries, k)` returns the same results hydrated.
 - **Whole-Dataset Metric Operations**: In-process execution of all-pairs nearest neighbors (`allknn`), diverse center sampling (`fft`), closest pair discovery (`closestpairs`), and cross-dataset closest pairs (`bichromatic_kclosestpairs`).
+- **Indexed External Identifiers**: `doc_id` lookups resolve through a dedicated column family (0.12 ms against 59 ms for a scan, at 50,000 items) and are not required to be unique -- `fetch_items` returns every item carrying the requested identifier.
+- **Storage Compaction**: `close_project!` compacts the project after a session that wrote, which is what keeps the next open fast (0.28 s against 2.97 s); `compact_project!` runs it mid-session.
 - **Granular Storage Persistence**: High-throughput persistence utilizing a hybrid layout of RocksDB column families and dedicated memory-mapped vector files (`dense_vectors.mmapdb`).
 
 ---
@@ -45,7 +49,13 @@ your own checkouts with `Pkg.develop(path=...)` when you need to.
 ```julia
 using Pkg
 Pkg.develop(path="path/to/SimilaritySearchEngine.jl")
+```
 
+---
+
+## Quickstart
+
+```julia
 using SimilaritySearchEngine
 
 # 1. Initialize a working directory and create a dense project

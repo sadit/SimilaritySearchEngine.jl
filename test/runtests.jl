@@ -974,4 +974,176 @@ const ACCENT_ITEMS = vcat(
         end
     end
 
+
+    @testset "a text project persists its index and reopens without recomputing it" begin
+        for backend in (BM25InvertedFile, TextInvertedFile)
+            mktempworkdir() do workdir
+                P = SimilaritySearchEngine.Persistence
+                items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:120]]
+
+                h = create_project(workdir, "lazy_ds"; engine=FullTextEngine, backend=backend,
+                                   textmodel=FitFromCorpus())
+                append_items!(h, text_items(items))
+                index!(h)
+                before = [r.doc_id for r in ftsearch(h, items[7]["text"], 5)]
+                @test before[1] == items[7]["doc_id"]
+                # The building session keeps its posting lists on disk too: one index, one shape.
+                @test h.engine.backend.index.adj isa P.LazyPostings
+                close_project!(h)
+
+                h2 = open_project(workdir, "lazy_ds")
+                # Reopening assembles the index from storage rather than replaying every object
+                # back through the indexer, and the answers are identical.
+                @test h2.engine.backend.index.adj isa P.LazyPostings
+                @test length(h2.engine.backend.index) == length(items)
+                @test [r.doc_id for r in ftsearch(h2, items[7]["text"], 5)] == before
+                close_project!(h2)
+            end
+        end
+    end
+
+    @testset "a second block reaches the persisted index, incrementally" begin
+        for backend in (BM25InvertedFile, TextInvertedFile)
+            mktempworkdir() do workdir
+                items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:120]]
+                h = create_project(workdir, "incr_ds"; engine=FullTextEngine, backend=backend,
+                                   textmodel=FitFromCorpus())
+                # Everything is staged before the first index! so the whole vocabulary is fitted;
+                # what the second index! call exercises is the incremental write, not the fit.
+                append_items!(h, text_items(items))
+                index!(h)
+                first_len = length(h.engine.backend.index)
+
+                append_items!(h, text_items(items[1:20]))   # same words, new documents
+                index!(h)
+                @test length(h.engine.backend.index) == first_len + 20
+                # The duplicate of item 3 is retrievable under its new id: its postings are in.
+                live = [r._id for r in ftsearch(h, items[3]["text"], 60)]
+                @test any(id -> id > first_len, live)
+                close_project!(h)
+
+                h2 = open_project(workdir, "incr_ds")
+                @test length(h2.engine.backend.index) == first_len + 20
+                @test [r._id for r in ftsearch(h2, items[3]["text"], 60)] == live
+                close_project!(h2)
+            end
+        end
+    end
+
+    @testset "a project with no persisted index is rebuilt by one index! call" begin
+        mktempworkdir() do workdir
+            P = SimilaritySearchEngine.Persistence
+            items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:80]]
+
+            h = create_project(workdir, "rebuild_ds"; engine=FullTextEngine, backend=BM25InvertedFile,
+                               textmodel=FitFromCorpus())
+            append_items!(h, text_items(items))
+            index!(h)
+            before = [r.doc_id for r in ftsearch(h, items[5]["text"], 5)]
+
+            # What a project written before the index was persisted looks like: profile and staged
+            # text on disk, no index. Nothing in this version rebuilds one behind the caller's back.
+            for cf in (P.INVFILE_POSTINGS_CF, P.INVFILE_DOCVECS_CF)
+                handle = h.project.db.column_families[cf]
+                for k in [k for (k, _) in RocksDB.DBIterator(h.project.db; cf=handle)]
+                    delete!(h.project.db, k, cf=handle)
+                end
+            end
+            @test !P.has_inverted_index(P.open_inverted_index_store(h.project.db))
+            close_project!(h)
+
+            h2 = open_project(workdir, "rebuild_ds")
+            @test h2.engine.backend.index === nothing
+            # Searching says what to do instead of answering an empty result set.
+            @test_throws ErrorException ftsearch(h2, items[5]["text"], 5)
+            msg = try ftsearch(h2, items[5]["text"], 5); "" catch e; sprint(showerror, e) end
+            @test occursin("index!", msg)
+
+            index!(h2)          # the documented procedure, in one call
+            @test [r.doc_id for r in ftsearch(h2, items[5]["text"], 5)] == before
+            close_project!(h2)
+
+            h3 = open_project(workdir, "rebuild_ds")
+            @test [r.doc_id for r in ftsearch(h3, items[5]["text"], 5)] == before
+            close_project!(h3)
+        end
+    end
+
+    @testset "the posting cache evicts by use, and only between queries" begin
+        mktempworkdir() do workdir
+            P = SimilaritySearchEngine.Persistence
+            items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:120]]
+            h = create_project(workdir, "cache_ds"; engine=FullTextEngine, backend=BM25InvertedFile,
+                               textmodel=FitFromCorpus(), postings_cache_max=8, postings_cache_base=4)
+            append_items!(h, text_items(items))
+            index!(h)
+            adj = h.engine.backend.index.adj
+            @test adj.maxlists == 8 && adj.baselists == 4
+
+            # One query asks for more lists than the cache may hold: they are all cached while it
+            # runs (nothing is evicted mid-query), and trimmed back to `baselists` afterwards.
+            ftsearch(h, join([it["text"] for it in items[1:12]], " "), 5)
+            @test length(adj.cache) == adj.baselists
+
+            # The surviving entries are the most used ones: a repeated query keeps its lists.
+            empty!(adj.cache); empty!(adj.uses)
+            for _ in 1:5
+                ftsearch(h, items[3]["text"], 5)
+            end
+            hot = copy(adj.cache)
+            ftsearch(h, join([it["text"] for it in items[1:12]], " "), 5)
+            @test length(adj.cache) == adj.baselists
+            @test any(t -> haskey(adj.cache, t), keys(hot))
+            close_project!(h)
+        end
+    end
+
+
+    @testset "integer storage keys sort the way their numbers do" begin
+        P = SimilaritySearchEngine.Persistence
+        S = SimilaritySearchEngine.Schema
+        ids = [1, 2, 255, 256, 257, 1000, 65535, 65536, 2^20]
+        keys = [P._be_key(i) for i in ids]
+        @test [Int(P._decode_be_key(k)) for k in keys] == ids
+        # One encoding for the whole package: the metadata column families key their records
+        # the same way the index does (they used to differ, little-endian against big-endian).
+        @test keys == [S.be_key(i) for i in ids]
+        @test [SimilaritySearchEngine.Project._id_key(Int32(i)) for i in ids] == keys
+        # RocksDB compares keys bytewise, so the encoding is what decides iteration order. This
+        # is the property the loaders used to depend on implicitly (and that a little-endian
+        # key silently breaks past 255 -- [65536, 256, 1, 257, ...] rather than sorted).
+        @test sortperm(keys) == sortperm(ids)
+    end
+
+    @testset "documents past the first 256 keep their identity across a reopen" begin
+        mktempworkdir() do workdir
+            # 300 documents on purpose: a one-byte id is where a key-encoding mistake hides, and
+            # the fixtures used elsewhere (80-120 documents) never reach it.
+            #
+            # Each document is made unique by a letter code, not by its number: `TextConfig`
+            # normalizes every run of digits to a single "0", so "documento numero 7" and
+            # "documento numero 200" tokenize identically and every document would be the same
+            # bag of words -- which is exactly how the first version of this test failed.
+            code(i) = String([Char('a' + d) for d in digits(i, base=26, pad=3)])
+            texts = ["documento $(code(i)) sobre el tema comun y algun otro asunto" for i in 1:300]
+            h = create_project(workdir, "wide_ds"; engine=FullTextEngine, backend=BM25InvertedFile,
+                               textmodel=FitFromCorpus())
+            append_items!(h, [TextItem(t; doc_id="w$i") for (i, t) in enumerate(texts)])
+            index!(h)
+            close_project!(h)
+
+            h2 = open_project(workdir, "wide_ds")
+            @test length(h2.engine.backend.index) == 300
+            # A document vector filed under the wrong id would not fail: it would quietly score
+            # the wrong document. Asking each probe document for itself is what exposes that.
+            for i in (1, 200, 255, 256, 257, 299, 300)
+                hit = first(ftsearch(h2, texts[i], 1))
+                @test hit.doc_id == "w$i"
+                @test hit._id == i
+            end
+            @test [it.doc_id for it in fetch_items(h2, [256, 257])] == ["w256", "w257"]
+            close_project!(h2)
+        end
+    end
+
 end

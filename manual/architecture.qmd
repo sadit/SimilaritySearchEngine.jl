@@ -224,10 +224,13 @@ flowchart TB
         oplog[("op_log")]
         idxkw[("idx_keywords<br/><small>keyword → _ids</small>")]
         idxrefs[("idx_refs<br/><small>referenced doc_id → _ids</small>")]
+        idxdoc[("idx_docid<br/><small>doc_id → _ids</small>")]
         engine[("engine<br/><small>Field-level engine state</small>")]
         adj[("searchgraph_adj<br/><small>object_id → direct neighbors</small>")]
         stagedtext[("staged_text<br/><small>Raw text blocks</small>")]
         sparsedb[("sparse_db<br/><small>Encoded object blocks</small>")]
+        postings[("invfile_postings<br/><small>token → document ids</small>")]
+        docvecs[("invfile_docvecs<br/><small>document → indexed vector</small>")]
     end
     mmapfile[["dense_vectors.mmapdb<br/><small>Memory-Mapped Vector File</small>"]]
 
@@ -235,13 +238,47 @@ flowchart TB
     ProjectManager -- "Unstructured Meta" --> meta
     ProjectManager -- "Secondary Indices" --> idxkw
     ProjectManager -- "Secondary Indices" --> idxrefs
+    ProjectManager -- "Secondary Indices" --> idxdoc
     EngineStore -- "save_field! / load_field" --> engine
     AdjacencyStore -- "save_neighbors! / load_neighbors" --> adj
     StagedTextStore -- "append_staged_texts!" --> stagedtext
     InvertedFileObjectStore -- "append_objects!" --> sparsedb
+    InvertedIndexStore -- "write_invfile_block!" --> postings
+    InvertedIndexStore -- "write_invfile_block! / load_invfile_docvecs" --> docvecs
     append_dense["append_items! (Dense)"] --> mmapfile
     append_text["append_items! (Text)"] --> stagedtext
 ```
+
+### The Persisted Text Index
+
+A text project stores its *index*: posting lists in `invfile_postings`, per-document vectors in `invfile_docvecs`. This covers both text backends -- their posting lists hold the same thing, document ids, and they differ only in what each document is stored *as*. Three shapes occur, and each stored value carries a one-byte tag saying which: integer term frequencies (BM25), `Float32` model weights (the weighted backend), and bags of words (the weighted backend under a set distance, which reads membership rather than weights). A sparse project still stores the *objects* it indexed, in `sparse_db`, and reconstructs its index on every open; its items are vectors the caller encoded, so what it saves is already what it would have to write, and giving it the same treatment is a follow-up rather than a difference of principle.
+
+The difference is not small at scale: over 265,000 Project Gutenberg paragraphs, reconstruction costs 20.4 s and assembly from storage 1.4 s on BM25 and 1.7 s on the weighted backend (measured 2026-09-11 and 2026-09-12). Indexing the same corpus costs 25.7 s and 26.4 s respectively, against 147.3 s before, because a block is now encoded by the library's parallel batch path rather than one document at a time.
+
+Writing is incremental and blockwise. Each `index!` call encodes its backlog as one block, splices the block's document vectors and lengths into the live index, and hands its posting lists -- ids shifted from block-local to global -- to `IndexEngine.persist_block!`. The storage-backed implementation of that function performs a read-modify-write per token the block touched: appending is sound precisely because document ids grow monotonically, so a block's ids are larger than every id already stored and the ascending order the query-time merge depends on is preserved. `IndexEngine` never names RocksDB; it dispatches on the kind of adjacency list its index was built with.
+
+The unit of that write is the block, and its size has a cost: a token's list is rewritten once per block that touches it, so the same 50,000 documents cost 5.8 s indexed in one block, 6.8 s in ten, and 10.1 s in fifty (measured 2026-09-12). Indexing in large blocks is therefore worth preferring, which is what `append_items!` followed by a single `index!` already does.
+
+**Posting lists are lazy; document vectors are not**, and the asymmetry is measured rather than assumed. A query reads one posting list per query *term*, so serving them from storage costs 1.8% in latency (66.8 ms against 68.0 ms) while removing 55.8 MB of 237.5 MB from memory. Scoring, by contrast, reads a *candidate's* term vector (`bm25score(..., idx.db[docID])`), and the merge makes every document containing any query token a candidate -- so a query with a frequent term turns lazy document vectors into one point read per document in the collection: 1,771.9 ms against 66.8 ms for the same query. Document vectors are therefore read into memory at open (0.76 s for that corpus).
+
+The lazy posting lists sit behind a least-frequently-used cache bounded by a maximum number of cached lists, trimmed back to a base size when it is exceeded. Eviction happens only after a query has fully resolved, never inside one: concurrent searches hold read locks, not exclusive ones, and a list dropped mid-query would be re-read by whichever of them was still walking it.
+
+**There is no migration path from the previous format, deliberately.** A project written before the index was persisted opens with its profile and its staged text intact and no index at all; searching it says so, and one `index!` call rebuilds it from that staged text, which was always persisted independently of the index. Keeping the old format readable would mean keeping the whole rebuild-by-reinsertion path alive to serve projects that, with no released version, do not yet exist -- so the procedure is explicit and costs a line:
+
+```julia
+h = open_project(workdir, dataset)
+index!(h)
+```
+
+### External Identifier Resolution
+
+`doc_id` is the caller's own identifier, and it is resolved through the `idx_docid` column family rather than by scanning `records`. Keys are composite (`doc_id` bytes followed by the four bytes of `_id`), which is what allows several items to share one `doc_id`: `fetch_items` returns every record carrying the requested identifier, in ascending `_id` order, and `exists` reports it as deleted only when all of them are. Measured on a 50,000-item project, resolving an external identifier costs 0.12 ms through this index against 59 ms for the full scan it replaces.
+
+A project written before this index existed is migrated on its first writable open: `Project.backfill_docid_index!` performs a single pass over `records` and writes a marker key so no later open repeats it. A read-only handle opened against an unmigrated project falls back to the scan.
+
+### Compaction
+
+Bulk writes leave a write-ahead log that the *next* open must replay, so compaction is an open-latency concern rather than a write-latency one. `close_project!` therefore compacts every column family of the project before closing, unless the handle is read-only, the session performed no writes, or the caller passes `compact=false`; `compact_project!` exposes the same operation mid-session. Measured on a 50,000-vector dense project, reopening costs 2.97 s without compaction and 0.28 s with it, for a compaction that itself takes 0.03 s.
 
 ### Storage Subsystems
 

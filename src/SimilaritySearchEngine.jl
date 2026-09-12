@@ -7,7 +7,7 @@ using TextSearch
 using RocksDB
 # For the sparse half of the public surface: a sparse project's items and its queries are
 # `SparseVector{Float32,Int32}`, so the names have to be in scope where that surface is defined.
-using SparseArrays: SparseVector, AbstractSparseVector, sparsevec
+using SparseArrays: SparseArrays, SparseVector, AbstractSparseVector, sparsevec
 
 # Extracted verbatim from SimilaritySearchServer.jl (PLAN.md §8.5, chunk 22) -- these four
 # modules were already the real shared engine both `similarity-search` (CLI) and

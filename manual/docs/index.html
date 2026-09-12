@@ -23,6 +23,41 @@ ul.task-list li input[type="checkbox"] {
   margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
   vertical-align: middle;
 }
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
 </style>
 
 
@@ -126,9 +161,10 @@ ul.task-list li input[type="checkbox"] {
     <h2 id="toc-title">On this page</h2>
    
   <ul>
-  <li><a href="#what-it-gives-you" id="toc-what-it-gives-you" class="nav-link active" data-scroll-target="#what-it-gives-you">What it gives you</a></li>
-  <li><a href="#where-this-fits" id="toc-where-this-fits" class="nav-link" data-scroll-target="#where-this-fits">Where this fits</a></li>
-  <li><a href="#where-to-go-next" id="toc-where-to-go-next" class="nav-link" data-scroll-target="#where-to-go-next">Where to go next</a></li>
+  <li><a href="#installation" id="toc-installation" class="nav-link active" data-scroll-target="#installation">Installation</a></li>
+  <li><a href="#core-capabilities" id="toc-core-capabilities" class="nav-link" data-scroll-target="#core-capabilities">Core Capabilities</a></li>
+  <li><a href="#ecosystem-role" id="toc-ecosystem-role" class="nav-link" data-scroll-target="#ecosystem-role">Ecosystem Role</a></li>
+  <li><a href="#manual-navigation" id="toc-manual-navigation" class="nav-link" data-scroll-target="#manual-navigation">Manual Navigation</a></li>
   </ul>
 </nav>
     </div>
@@ -154,34 +190,57 @@ ul.task-list li input[type="checkbox"] {
 </header>
 
 
-<p><code>SimilaritySearchEngine.jl</code> is an embedded, no-HTTP-required Julia API for running similarity search <em>projects</em>: named, persistent collections of dense vectors, sparse vectors or text documents backed by <a href="https://github.com/sadit/SimilaritySearch.jl">SimilaritySearch.jl</a>, <a href="https://github.com/sadit/TextSearch.jl">TextSearch.jl</a>, and <a href="https://github.com/sadit/RocksDB.jl">RocksDB.jl</a>. A script does <code>using SimilaritySearchEngine</code> and calls its functions directly — no running server, no CLI subprocess, no job queue. The trust boundary is just OS file permissions on a working directory, the same as any other embedded database.</p>
-<section id="what-it-gives-you" class="level2">
-<h2 class="anchored" data-anchor-id="what-it-gives-you">What it gives you</h2>
+<p><code>SimilaritySearchEngine.jl</code> is an embedded, in-process library for similarity search and information retrieval in Julia. It provides transactional, persistent storage for collections of dense vectors, sparse representations, and text documents, backed by <a href="https://github.com/sadit/SimilaritySearch.jl">SimilaritySearch.jl</a>, <a href="https://github.com/sadit/TextSearch.jl">TextSearch.jl</a>, and <a href="https://github.com/sadit/RocksDB.jl">RocksDB.jl</a>.</p>
+<p>By executing directly within the host process, <code>SimilaritySearchEngine.jl</code> eliminates the operational overhead of HTTP servers, background daemons, and inter-process communication layers. Access control is managed directly through standard operating system file permissions on the working directory.</p>
+<hr>
+<section id="installation" class="level2">
+<h2 class="anchored" data-anchor-id="installation">Installation</h2>
+<p><code>SimilaritySearchEngine.jl</code> is not in the General registry yet, so it is installed from its repository. Its dependencies — <code>SimilaritySearch.jl</code>, <code>TextSearch.jl</code>, <code>RocksDB.jl</code> and the <code>RocksDB_jll</code> binaries — are all registered, so nothing else has to be cloned or built:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="im">using</span> <span class="bu">Pkg</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="bu">Pkg</span>.<span class="fu">add</span>(url<span class="op">=</span><span class="st">"https://github.com/sadit/SimilaritySearchEngine.jl"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Julia 1.10 or later is required. To modify the package, clone the repository and <code>Pkg.develop(path=...)</code> the clone; no <code>Manifest.toml</code> is committed, so <code>Pkg.instantiate()</code> resolves the base libraries from the registry unless you develop them by path as well.</p>
+<hr>
+</section>
+<section id="core-capabilities" class="level2">
+<h2 class="anchored" data-anchor-id="core-capabilities">Core Capabilities</h2>
 <ul>
-<li><strong>Project lifecycle</strong>: <code>create_project</code>, <code>open_project</code>, <code>close_project!</code> manage a project’s on-disk RocksDB directory and the live search engine backing it.</li>
-<li><strong>A project says what it holds, and separately what holds it</strong>: <code>engine=</code> is <code>DenseEngine</code>, <code>SparseEngine</code> or <code>FullTextEngine</code> — dense vectors, sparse vectors, text — and <code>backend=</code> is the index underneath it, defaulting to that engine’s own (<code>SearchGraph</code>, <code>InvertedFile</code>, <code>BM25InvertedFile</code>). <code>payload_kind(engine)</code> answers the first question for a project you opened; <code>BACKENDS</code> lists the legal pairings.</li>
-<li><strong>Dense vector search</strong> over a <code>SearchGraph</code> (an approximate, self-tuning graph index), or an exact <code>ExhaustiveSearch</code>/<code>ParallelExhaustiveSearch</code>, all sharing the same <code>append_items!</code>/<code>search</code> surface — for a <code>SearchGraph</code>, <code>append_items!</code> only stages raw vectors, and the (expensive) graph-connection step happens in a separate, explicit <code>index!</code> call, so a caller controls when that cost is paid.</li>
-<li><strong>Sparse vector search</strong> over an <code>InvertedFile</code>, for vectors <em>you</em> encoded — a learned sparse retriever, a feature table, a set of ids. It takes <code>SparseItem</code>s of a dimension fixed at creation, under any distance that reads a sparse vector (cosine over the weights, or one of <code>Dist.Sets.*</code> over the nonzero positions), and there is no vocabulary, no profile and no tokenizer anywhere in it. BM25 is deliberately not among its distances: it scores from corpus statistics rather than from a vector, so it belongs to a text project.</li>
-<li><strong>Full-text search</strong>, where this package does the encoding, over a <code>BM25InvertedFile</code> or a weighted <code>TextInvertedFile</code>, sharing the same <code>append_items!</code>(stage)/<code>index!</code>(build)/<code>ftsearch</code> surface as the dense case — the first <code>index!</code> call on a text project also fits its <code>TextProfile</code> from whatever’s been staged so far, so there’s no separate training step to call first.</li>
-<li><strong>A text model stated explicitly</strong>: creating a text project requires a <code>textmodel</code>, and there is no default. Prefer <code>DefaultProfile(:es)</code> — the published profile for a language, refitted to your own corpus at the first <code>index!</code> call, so your weights are calibrated over millions of paragraphs and the stopwords, lemmas and query-expansion network are inherited rather than derived (<code>refit=false</code> keeps the base’s language-wide vocabulary instead). <code>BaseProfile(p)</code> uses a profile you already hold. <code>FitFromCorpus(TextConfig(language=:es))</code> is the explicit “no base profile” escape, delegated to <code>TextSearch.fit_profile</code> and capped at <code>max_documents</code> to bound its cost — which makes its vocabulary thin, and that is not a decision to arrive at by omission. Queries then travel with a <code>QueryPolicy</code>: whether to correct their spelling against the vocabulary (<code>ftexplain</code> reports what was corrected, <code>correction=:off</code> undoes it) and whether to widen them with the profile’s expansion network.</li>
-<li><strong>Typed in, typed out</strong>: items are <code>DenseItem</code>/<code>SparseItem</code>/<code>TextItem</code> values and results are <code>SearchResult</code>/<code>StoredItem</code>/<code>ExistsResult</code>. No JSON-shaped dictionary is taken apart by key name on the way in or assembled on the way out; <code>meta</code> stays a free-form <code>Dict{String,Any}</code>, and <code>get_raw_meta</code> is the one raw path, reserved for the HTTP server.</li>
-<li><strong>Soft deletes</strong>: <code>delete_item!</code> marks a document as logically deleted without touching the underlying index; search reports a <code>deleted</code> marker per candidate instead of silently hiding or backfilling it.</li>
-<li><strong>Recall calibration</strong>: <code>calibrate!</code> runs <code>SimilaritySearch.jl</code>’s real hyperparameter search so later queries can ask for <code>minrecall=0.95</code> (or any other target) and get back a <code>BeamSearch</code> tuned for it.</li>
-<li><strong>Whole-dataset operations</strong>: <code>allknn</code>, <code>fft</code> (diverse sampling), <code>closestpairs</code> (near-duplicate detection), and <code>bichromatic_kclosestpairs</code> (closest pairs across two collections) all run synchronously, in-process, against a dense project’s index.</li>
-<li><strong>Incremental, per-field persistence</strong>: every mutation writes only the storage it actually touched — a <code>SearchGraph</code>’s raw vectors go straight into a memory-mapped file, a soft delete never rewrites the index, and routine inserts never rewrite the whole engine state. See <a href="./architecture.html">Architecture</a> for the on-disk layout.</li>
+<li><strong>Project Lifecycle Management</strong>: Functions <code>create_project</code>, <code>open_project</code>, and <code>close_project!</code> manage the on-disk RocksDB directory and the associated live search engine.</li>
+<li><strong>Engine and Backend Separation</strong>:
+<ul>
+<li><strong>Payload Engines</strong>: <code>DenseEngine</code>, <code>SparseEngine</code>, and <code>FullTextEngine</code> specify the stored data domain.</li>
+<li><strong>Index Backends</strong>: <code>SearchGraph</code>, <code>ExhaustiveSearch</code>, <code>InvertedFile</code>, and <code>BM25InvertedFile</code> define the underlying indexing data structures.</li>
+<li>The function <code>payload_kind(engine)</code> identifies the data domain, and the <code>BACKENDS</code> registry enforces valid engine-backend pairings.</li>
+</ul></li>
+<li><strong>Dense Vector Search</strong>: Approximate nearest-neighbor search via <code>SearchGraph</code> with dynamic beam-search tuning, or exact brute-force search via <code>ExhaustiveSearch</code> and <code>ParallelExhaustiveSearch</code>. For <code>SearchGraph</code>, insertions (<code>append_items!</code>) and graph construction (<code>index!</code>) are decoupled to give callers explicit control over indexing latency.</li>
+<li><strong>Sparse Vector Search</strong>: Native inverted index search (<code>InvertedFile</code>) over user-encoded sparse representations of fixed dimension. Distance functions include cosine distance over weights and discrete set metrics (<code>Dist.Sets.*</code>) over non-zero coordinate supports.</li>
+<li><strong>Full-Text Retrieval</strong>: Lexical search backed by <code>BM25InvertedFile</code> or TF-IDF-weighted <code>TextInvertedFile</code>. The initial <code>index!</code> call fits or initializes a <code>TextProfile</code> from staged texts, establishing the vocabulary and linguistic weighting model.</li>
+<li><strong>Explicit Text Modeling</strong>: Text projects require an explicit <code>AbstractTextModelSpec</code>:
+<ul>
+<li><code>DefaultProfile(:lang)</code>: Resolves a pre-trained language profile and refits vocabulary frequencies against the staged corpus.</li>
+<li><code>BaseProfile(p)</code>: Utilizes an existing, pre-computed <code>TextProfile</code>.</li>
+<li><code>FitFromCorpus(cfg)</code>: Fits a new profile directly from the staged corpus, bounded by <code>max_documents</code>.</li>
+<li>Query execution accepts a <code>QueryPolicy</code> to control automatic orthographic correction and semantic query expansion.</li>
+</ul></li>
+<li><strong>Strongly Typed Interface</strong>: Inputs are encapsulated in typed containers (<code>DenseItem</code>, <code>SparseItem</code>, <code>TextItem</code>), and queries return structured results (<code>SearchResult</code>, <code>StoredItem</code>, <code>ExistsResult</code>).</li>
+<li><strong>Logical Deletions</strong>: The <code>delete_item!</code> function marks documents as logically deleted without mutating the underlying search index. Queries return candidates alongside an explicit <code>deleted</code> flag.</li>
+<li><strong>Target Recall Calibration</strong>: The <code>calibrate!</code> function executes hyperparameter optimization to calibrate beam-search configurations for target recall constraints (<code>minrecall</code>).</li>
+<li><strong>Whole-Dataset Metric Operations</strong>: Synchronous, in-process execution of all-pairs nearest neighbors (<code>allknn</code>), diverse center selection (<code>fft</code>), closest pair discovery (<code>closestpairs</code>), and cross-dataset closest pairs (<code>bichromatic_kclosestpairs</code>).</li>
+<li><strong>Granular Storage Persistence</strong>: High-throughput persistence utilizing a hybrid layout of RocksDB column families and dedicated memory-mapped vector files (<code>dense_vectors.mmapdb</code>).</li>
 </ul>
+<hr>
 </section>
-<section id="where-this-fits" class="level2">
-<h2 class="anchored" data-anchor-id="where-this-fits">Where this fits</h2>
-<p>This package is deliberately scoped to project lifecycle, core CRUD, calibration, and the whole-dataset operations (<code>allknn</code>, <code>fft</code>, <code>closestpairs</code>, <code>bichromatic_kclosestpairs</code>).</p>
-<p>It has two kinds of user, and the embedded API is the surface for both. A <strong>Julia program</strong> does <code>using SimilaritySearchEngine</code> and calls these functions directly — that is a first-class use, not a testing convenience, which is why the API takes and returns typed Julia values rather than JSON-shaped dictionaries. The sibling <strong><code>SimilaritySearchServer</code></strong> is the other: it wraps this same engine in a CLI and an HTTP server, and it is a <em>consumer</em> of this package rather than the reason it exists. Development happens here first, at the engine level, and is ported there afterwards — so a capability can exist here before it has a server counterpart (sparse projects do today), and a project touched through either stays readable by the other, same on-disk layout and same insertion/search/persistence semantics.</p>
+<section id="ecosystem-role" class="level2">
+<h2 class="anchored" data-anchor-id="ecosystem-role">Ecosystem Role</h2>
+<p><code>SimilaritySearchEngine.jl</code> provides the core embedded engine functionality. Higher-level services—such as HTTP REST APIs, asynchronous task workers, and command-line interfaces—are provided by the sibling package <code>SimilaritySearchServer.jl</code>, which uses this embedded engine directly.</p>
+<hr>
 </section>
-<section id="where-to-go-next" class="level2">
-<h2 class="anchored" data-anchor-id="where-to-go-next">Where to go next</h2>
+<section id="manual-navigation" class="level2">
+<h2 class="anchored" data-anchor-id="manual-navigation">Manual Navigation</h2>
 <ul>
-<li><a href="./architecture.html">Architecture</a> — the module map, the engine type hierarchy, the staging-vs-indexing split, the concurrency model, and the RocksDB-plus-mmap-file persistence layout, each with a diagram.</li>
-<li><a href="./tutorials/index.html">Tutorial</a> — a hands-on walkthrough: create a dense project and a text project, insert, search, soft-delete, calibrate, and reopen.</li>
-<li><strong>API reference</strong> — generated from the source docstrings with <a href="https://documenter.juliadocs.org/">Documenter.jl</a>, in <code>docs/</code> (the standard location for a Julia package’s reference docs), not on this site.</li>
+<li><strong><a href="./architecture.html">Architecture</a></strong>: Detailed specifications of the module architecture, engine type hierarchy, staging-indexing split, concurrency model, and on-disk layout.</li>
+<li><strong><a href="./tutorials/getting-started.html">Getting Started Tutorial</a></strong>: Step-by-step tutorial covering dense vectors, sparse indexing, BM25 text search, filtering, calibration, and whole-dataset operations.</li>
+<li><strong><a href="./tutorials/paragraph-search.html">Multilingual Paragraph Search</a></strong>: Comprehensive evaluation over multilingual Project Gutenberg corpora and Wikipedia.</li>
+<li><strong><a href="../api.html">API Reference</a></strong>: Comprehensive API documentation generated with Documenter.jl.</li>
 </ul>
 
 

@@ -4,13 +4,18 @@ using Avro
 using RocksDB
 using SimilaritySearch
 using TextSearch
+using SparseArrays: SparseArrays, AbstractSparseVector
 using ..Schema
+import ..IndexEngine
 
 export EngineStore, ENGINE_CF, open_engine_store, save_field!, load_field, has_field, save_fields!
 export AdjacencyStore, ADJACENCY_CF, open_adjacency_store, save_neighbors!, load_neighbors
 export DENSE_VECTORS_FILENAME, dense_vectors_path, open_dense_vectors, load_dense_vector_blocks
 export InvertedFileObjectStore, INVFILE_DB_CF, open_invertedfile_object_store, append_objects!, load_object_blocks
 export StagedTextStore, STAGED_TEXT_CF, open_staged_text_store, append_staged_texts!, load_staged_text_blocks
+export InvertedIndexStore, INVFILE_POSTINGS_CF, INVFILE_DOCVECS_CF, open_inverted_index_store, has_inverted_index,
+       write_invfile_block!, load_invfile_docvecs, docvec_nnz, DocVec, WeightedDocVec, BagDocVec
+export LazyPostings, trim_postings_cache!, invalidate_postings!
 export DumpRecord, write_dump_records, read_dump_records
 
 # ---------------------------------------------------------
@@ -22,28 +27,11 @@ export DumpRecord, write_dump_records, read_dump_records
 _save_key!(dict, key::String, value) = (dict[key] = value; nothing)
 _load_key(dict, key::String, default) = get(dict, key, default)
 
-"""
-    _be_key(id::Integer) -> Vector{UInt8}
+# The one key encoding, defined once in `Schema.be_key` (which documents why it is big-endian)
+# and aliased here so this module's own call sites read as they always did.
+const _be_key = Schema.be_key
+const _decode_be_key = Schema.decode_be_key
 
-Big-endian (`hton`) bytes of `UInt32(id)`, for a `RocksDBDict{Vector{UInt8},Any}` keyed
-directly by a batch's/object's own numeric id (see [`InvertedFileObjectStore`](@ref))
-instead of a composite `"<prefix>:block:<0-padded index>"` string plus a separate
-`"<prefix>:block_count"` counter key. Neither piece of that older scheme is needed once a
-store has its *own* dedicated column family and keys each block by its own numeric
-position: there is no `prefix` to disambiguate (nothing else shares this column family)
-and no counter to maintain, since `getindex`/iteration already needs the block's
-position, not a count -- big-endian specifically (*not*
-`reinterpret(UInt8, [UInt32(id)])`, which is native/little-endian on every platform this
-runs on) so that RocksDB's own byte-lexicographic key ordering already matches ascending
-numeric order -- iterating the column family directly (see `RocksDBDict`'s own "iteration
-order is sorted key order") yields entries in the right sequence with no re-sorting after
-the fact. `EngineStore` still can't use this scheme for its own per-field keys, since it
-*does* share one column family across every engine struct field -- but nothing in this
-package currently needs an appending/growing field there (a `DenseEngine{GraphBackend}`'s vectors
-now live in their own `MMapMatrixDatabase` file, see below, not RocksDB blocks), so that
-generic composite-key scheme has been removed rather than kept around unused.
-"""
-_be_key(id::Integer) = collect(reinterpret(UInt8, [hton(UInt32(id))]))
 
 # ---------------------------------------------------------
 # Per-field engine persistence (RocksDB column family)
@@ -276,9 +264,11 @@ Unlike a `SearchGraph`, an inverted file's posting lists have no direct/reverse-
 split to worry about -- `push_item!` fully finalizes each object's contribution before
 `LOG` even fires (see `SimilaritySearch.CallbackLog`'s docstring), so what's saved here is
 simply every object ever indexed, in insertion order; reloading rebuilds the whole index
-by replaying them through the library's own `push_item!` again (see
-`IndexEngine.build_bm25invertedfile`/`build_textinvertedfile`) rather than trying to persist
-posting lists directly.
+by replaying them through the library's own `append_items!` again (see
+`IndexEngine.build_sparseinvertedfile`) rather than trying to persist posting lists directly.
+
+**Only a sparse project still works this way.** A text project persists its index instead --
+see [`InvertedIndexStore`](@ref) -- which is what removed the rebuild from its every open.
 
 !!! warning "Scaling: a rebuild-by-reinsertion design, not an on-disk index format"
     Reloading this way means every raw object saved here, and the whole rebuilt index,
@@ -327,11 +317,21 @@ end
 """
     load_object_blocks(store::InvertedFileObjectStore) -> Vector{<:Vector}
 
-Every block [`append_objects!`](@ref) has written, in the order they were appended -- a
-plain iteration over `store.dict` already comes back in ascending `sp` order (see
-[`_be_key`](@ref)'s docstring), so this needs no separate counter key or re-sorting.
+Every block [`append_objects!`](@ref) has written, in the order they were appended -- which is
+ascending `sp`, decoded from each key rather than taken from the order the iteration happens to
+produce.
+
+The two coincide today, because [`_be_key`](@ref) is big-endian and RocksDB compares keys
+bytewise (see its docstring). Sorting anyway is three lines and removes the dependency: a block
+order that silently depended on the key encoding would corrupt a project's document numbering,
+not fail it, and would do so only past the first 256 blocks -- exactly the kind of bug a small
+test corpus never reaches.
 """
-load_object_blocks(store::InvertedFileObjectStore) = [objects for (_, objects) in store.dict]
+function load_object_blocks(store::InvertedFileObjectStore)
+    blocks = [(_decode_be_key(k), objects) for (k, objects) in store.dict]
+    sort!(blocks; by=first)
+    [objects for (_, objects) in blocks]
+end
 
 # ---------------------------------------------------------
 # Staged (raw, not-yet-encoded) text persistence for a text project -- its
@@ -517,5 +517,369 @@ function read_dump_records(filepath::String)
         for row in Avro.readtable(filepath)
     ]
 end
+
+
+# ---------------------------------------------------------
+# Persisted BM25 index: posting lists and per-document term vectors
+# ---------------------------------------------------------
+
+"""
+    INVFILE_POSTINGS_CF
+    INVFILE_DOCVECS_CF
+
+Names of the two RocksDB column families a [`InvertedIndexStore`](@ref) is backed by. Pass them
+in `Project.open_project`'s `extra_cf_names` alongside the other stores' own, for the same
+reason (every column family that exists on disk must be listed on every open, not just the
+first).
+
+They hold the *index*, not the objects that were indexed: `INVFILE_POSTINGS_CF` maps a token id
+to the ascending ids of the documents carrying it, and `INVFILE_DOCVECS_CF` maps a document id
+to the vector it was indexed as -- term frequencies under BM25, model weights under the
+weighted backend, each value tagged with which (see [`_encode_docvec`](@ref)). [`InvertedFileObjectStore`](@ref), which a BM25 project used to
+write instead, stores the raw bags-of-words and leaves the whole index to be *recomputed* on
+every open -- 20.4s for 265k paragraphs of Project Gutenberg, measured 2026-09-11, growing
+linearly. Reading these two back costs 1.1s for the same corpus, and the posting half of it
+need not be read at all (see [`LazyPostings`](@ref)).
+"""
+const INVFILE_POSTINGS_CF = "invfile_postings"
+
+"$(INVFILE_POSTINGS_CF)'s companion, keyed by document id. See [`INVFILE_POSTINGS_CF`](@ref)."
+const INVFILE_DOCVECS_CF = "invfile_docvecs"
+
+"""
+    DocVec
+    WeightedDocVec
+
+The two shapes a document is stored as, one per text backend: `BM25InvertedFile` keeps integer
+term frequencies (`bm25score` recomputes the query-document intersection from them), while the
+weighted backend keeps the model's `Float32` weights. Both are named here because this module
+writes and reconstructs them, and the first lives several modules deep inside
+`SimilaritySearch.jl`.
+"""
+const DocVec = SimilaritySearch.Special.Sparse.SparseVecView{Vector{Int32},Vector{UInt32}}
+
+"See [`DocVec`](@ref)."
+const WeightedDocVec = SparseArrays.SparseVector{Float32,Int32}
+
+"""
+    BagDocVec
+
+The third shape, and the reason the stored values carry a tag: a weighted project under a *set*
+distance (`Dist.Sets.*`) indexes bags of words rather than weighted vectors, because those
+distances read set membership and not weights at all. `TextSearch.jl` picks the encoding from
+the distance, so the store has to accept whichever one the project ended up with.
+"""
+const BagDocVec = Dict{UInt32,Int32}
+
+const _DOCVEC_TAG_FREQ = 0x01
+const _DOCVEC_TAG_WEIGHT = 0x02
+const _DOCVEC_TAG_BAG = 0x03
+
+"""
+    InvertedIndexStore
+
+The two column families of [`INVFILE_POSTINGS_CF`](@ref)/[`INVFILE_DOCVECS_CF`](@ref) as one
+handle, sharing the project's own `RocksDB.DB` connection like every other store here.
+"""
+struct InvertedIndexStore
+    db::RocksDB.DB
+    postings::RocksDB.ColumnFamily
+    docvecs::RocksDB.ColumnFamily
+end
+
+"""
+    open_inverted_index_store(db::RocksDB.DB) -> InvertedIndexStore
+
+Wraps `db`'s [`INVFILE_POSTINGS_CF`](@ref) and [`INVFILE_DOCVECS_CF`](@ref) column families (both
+of which must already be open on `db`) as a [`InvertedIndexStore`](@ref).
+"""
+open_inverted_index_store(db::RocksDB.DB) =
+    InvertedIndexStore(db, db.column_families[INVFILE_POSTINGS_CF], db.column_families[INVFILE_DOCVECS_CF])
+
+_encode_ids(ids::AbstractVector{<:Integer}) = Vector{UInt8}(reinterpret(UInt8, Vector{UInt32}(ids)))
+_decode_ids(bytes::Vector{UInt8}) = Vector{UInt32}(reinterpret(UInt32, bytes))
+
+"""
+    _encode_docvec(v) -> Vector{UInt8}
+    _decode_docvec(bytes) -> DocVec
+
+A document's term vector as `(n::Int32, nnz::Int32, nzind::Vector{Int32}, nzval::Vector{UInt32})`,
+written by hand rather than through a generic serializer.
+
+This is the high-volume, hot path of the whole store -- one value per document, read once per
+scored candidate -- which is exactly the case where a generic object-graph format is not worth
+its overhead (the same reasoning that keeps the vocabulary in a hand-written format rather
+than JLD2).
+"""
+function _encode_docvec(v::DocVec)
+    io = IOBuffer()
+    write(io, _DOCVEC_TAG_FREQ)
+    write(io, Int32(v.n))
+    write(io, Int32(length(v.nzind)))
+    write(io, reinterpret(UInt8, Vector{Int32}(v.nzind)))
+    write(io, reinterpret(UInt8, Vector{UInt32}(v.nzval)))
+    take!(io)
+end
+
+function _encode_docvec(v::AbstractSparseVector)
+    io = IOBuffer()
+    write(io, _DOCVEC_TAG_WEIGHT)
+    write(io, Int32(length(v)))
+    write(io, Int32(length(SparseArrays.nonzeroinds(v))))
+    write(io, reinterpret(UInt8, Vector{Int32}(SparseArrays.nonzeroinds(v))))
+    write(io, reinterpret(UInt8, Vector{Float32}(SparseArrays.nonzeros(v))))
+    take!(io)
+end
+
+function _encode_docvec(v::AbstractDict)
+    io = IOBuffer()
+    write(io, _DOCVEC_TAG_BAG)
+    write(io, Int32(length(v)))
+    write(io, reinterpret(UInt8, UInt32[UInt32(k) for k in keys(v)]))
+    write(io, reinterpret(UInt8, Int32[Int32(x) for x in values(v)]))
+    take!(io)
+end
+
+function _decode_docvec(bytes::Vector{UInt8})
+    io = IOBuffer(bytes)
+    tag = read(io, UInt8)
+    if tag == _DOCVEC_TAG_BAG
+        nnz = read(io, Int32)
+        ids = Vector{UInt32}(undef, nnz)
+        read!(io, ids)
+        freqs = Vector{Int32}(undef, nnz)
+        read!(io, freqs)
+        return BagDocVec(zip(ids, freqs))
+    end
+    n = read(io, Int32)
+    nnz = read(io, Int32)
+    nzind = Vector{Int32}(undef, nnz)
+    read!(io, nzind)
+    if tag == _DOCVEC_TAG_FREQ
+        nzval = Vector{UInt32}(undef, nnz)
+        read!(io, nzval)
+        return DocVec(Int(n), nzind, nzval)
+    end
+    tag == _DOCVEC_TAG_WEIGHT ||
+        error("unknown document-vector tag $(repr(tag)) in $(INVFILE_DOCVECS_CF)")
+    nzval = Vector{Float32}(undef, nnz)
+    read!(io, nzval)
+    SparseArrays.sparsevec(nzind, nzval, Int(n))
+end
+
+"""
+    has_inverted_index(store::InvertedIndexStore) -> Bool
+
+Whether anything has ever been written to this store -- the question `open_project` asks to
+tell a project whose index is persisted from one written before that existed (which has to be
+migrated, once) or one that is simply empty.
+"""
+function has_inverted_index(store::InvertedIndexStore)
+    for _ in RocksDB.DBIterator(store.db; cf=store.docvecs)
+        return true
+    end
+    return false
+end
+
+"""
+    write_invfile_block!(store::InvertedIndexStore, base::Integer, docvecs, postings::Dict{UInt32,Vector{UInt32}})
+
+Persists one freshly indexed block: the `docvecs` of documents `base+1 … base+length(docvecs)`,
+and the *new* document ids each token in `postings` gained (already offset to global ids and
+ascending).
+
+The posting half is a read-modify-write per touched token -- get the token's current list,
+append, put -- which is what makes an incremental `index!` possible at all: a block adds
+documents to the lists of the tokens it happens to contain, and nothing else in the index
+changes. The whole block goes in one `WriteBatch`, so a crash mid-block leaves the store at
+the previous block's boundary rather than half-updated.
+
+Appending is correct only because document ids grow monotonically: every id in this block is
+larger than every id already in any list, so appending preserves the ascending order the
+merge in `TextSearch.jl`'s search relies on.
+"""
+function write_invfile_block!(store::InvertedIndexStore, base::Integer, docvecs, postings::Dict{UInt32,Vector{UInt32}})
+    b = RocksDB.WriteBatch()
+    for (i, v) in enumerate(docvecs)
+        RocksDB.put!(b, _be_key(base + i), _encode_docvec(v); cf=store.docvecs)
+    end
+    for (token, newids) in postings
+        raw = RocksDB.get(store.db, _be_key(token); cf=store.postings)
+        merged = raw === nothing ? Vector{UInt32}(newids) : vcat(_decode_ids(raw), UInt32.(newids))
+        RocksDB.put!(b, _be_key(token), _encode_ids(merged); cf=store.postings)
+    end
+    RocksDB.write!(store.db, b)
+    return nothing
+end
+
+"""
+    docvec_nnz(v) -> Int
+
+How many terms a stored document vector holds, whichever of the three shapes it is -- what the
+weighted backend keeps in its `sizes` array, recomputed at assembly instead of stored twice.
+"""
+docvec_nnz(v::AbstractDict) = length(v)
+docvec_nnz(v::AbstractSparseVector) = length(SparseArrays.nonzeroinds(v))
+docvec_nnz(v) = length(v.nzind)
+
+"""
+    load_invfile_docvecs(store::InvertedIndexStore) -> Vector{DocVec}
+
+Every persisted document vector, in document-id order.
+
+Kept resident, unlike the posting lists, and that asymmetry is the measured heart of this
+design rather than an accident. `TextSearch.jl` scores a candidate by reading its term vector
+(`bm25score(..., idx.db[docID])` in `onmatch!`), and the merge makes *every* document holding
+*any* query token a candidate -- so a query containing a frequent token turns a lazy `db` into
+one point read per document in the collection. Measured on 265k Gutenberg paragraphs
+(2026-09-11): 66.8 ms per query with the vectors resident, 1771.9 ms with them read on
+demand, for the same query and the same index. The posting lists, read once per query *term*,
+cost 1.8% (see [`LazyPostings`](@ref)).
+
+Loading them back costs 0.76s for that corpus, against 20.4s to recompute the index from the
+raw objects.
+"""
+function load_invfile_docvecs(store::InvertedIndexStore)
+    ids = Int[]
+    out = nothing
+    for (k, v) in RocksDB.DBIterator(store.db; cf=store.docvecs)
+        d = _decode_docvec(v)
+        # The element type follows the first value's tag rather than being passed in: the store
+        # says what it holds, so a project cannot be reassembled under the wrong backend by
+        # mistake -- the index it builds would simply not accept the vectors.
+        out === nothing && (out = Vector{typeof(d)}())
+        push!(ids, Int(_decode_be_key(k)))
+        push!(out, d)
+    end
+    out === nothing && return DocVec[]
+    # Placed by the id in the key, not by the order the iteration produced them. Those agree
+    # under big-endian keys, and a document vector filed under the wrong id would corrupt every
+    # score rather than fail -- see [`load_object_blocks`](@ref) for the same reasoning.
+    issorted(ids) ? out : out[sortperm(ids)]
+end
+
+"""
+    LazyPostings(store::InvertedIndexStore, vocsize::Int, maxlists::Int, baselists::Int)
+
+A `BM25InvertedFile`'s posting lists, read from RocksDB on demand instead of held in memory,
+with a bounded cache in front.
+
+This is the extension point `SimilaritySearch.jl` documents: an `AbstractAdjList{UInt32}`
+needs only `neighbors`/`neighbors_length`/`eachindex`, so the search code neither knows nor
+cares that a list came from disk. Being lazy here is close to free -- a query reads one list
+per *term*, not one per candidate -- which is why this half is lazy and the document vectors
+are not (see [`load_invfile_docvecs`](@ref)). Measured on 265k Gutenberg paragraphs, 2026-09-11:
+66.8 ms per query fully resident against 68.0 ms with these lists on disk, while the resident
+lists cost 55.8 MB of the index's 237.5 MB.
+
+# The cache, and why trimming is not part of a read
+
+`cache` holds decoded lists; `uses` counts how often each was asked for. When
+`trim_postings_cache!` finds more than `maxlists` entries it evicts the least frequently used
+down to `baselists`, so the cost is paid in bulk rather than on the unlucky read that crossed
+the threshold, and a hot list is never evicted by a burst of one-off lookups within a single
+query.
+
+**Eviction happens only between queries, never inside one.** `trim_postings_cache!` is called
+by the engine once a search has fully resolved; a read never evicts. The reason is
+correctness under concurrency as much as latency: several searches run against this index at
+once (they take a read lock, not an exclusive one), and a list evicted mid-query would be
+re-read and re-decoded by whichever of them was still walking it.
+
+Counting *lists* rather than bytes is deliberate too: what the cache is protecting against is
+re-reading and re-decoding, and that cost tracks the number of lookups, not their size.
+"""
+mutable struct LazyPostings <: SimilaritySearch.AbstractAdjList{UInt32}
+    store::InvertedIndexStore
+    n::Int
+    cache::Dict{UInt32,Vector{UInt32}}
+    uses::Dict{UInt32,Int}
+    lk::Threads.ReentrantLock
+    maxlists::Int
+    baselists::Int
+end
+
+function LazyPostings(store::InvertedIndexStore, vocsize::Integer, maxlists::Integer, baselists::Integer)
+    baselists <= maxlists ||
+        error("the posting cache's base size ($baselists) cannot exceed its maximum ($maxlists)")
+    LazyPostings(store, Int(vocsize), Dict{UInt32,Vector{UInt32}}(), Dict{UInt32,Int}(),
+                 Threads.ReentrantLock(), Int(maxlists), Int(baselists))
+end
+
+function SimilaritySearch.neighbors(a::LazyPostings, i)
+    token = UInt32(i)
+    hit = lock(a.lk) do
+        cached = get(a.cache, token, nothing)
+        cached === nothing || (a.uses[token] = get(a.uses, token, 0) + 1)
+        cached
+    end
+    hit === nothing || return hit
+
+    raw = RocksDB.get(a.store.db, _be_key(token); cf=a.store.postings)
+    ids = raw === nothing ? UInt32[] : _decode_ids(raw)
+    lock(a.lk) do
+        a.cache[token] = ids
+        a.uses[token] = get(a.uses, token, 0) + 1
+    end
+    ids
+end
+
+SimilaritySearch.neighbors_length(a::LazyPostings, i) = length(SimilaritySearch.neighbors(a, i))
+Base.eachindex(a::LazyPostings) = Base.OneTo(a.n)
+Base.length(a::LazyPostings) = a.n
+
+SimilaritySearch.add!(::LazyPostings, args...) =
+    error("LazyPostings is read-only from the index's side: a block's new postings are written " *
+          "by Persistence.write_invfile_block! and reach this list through invalidate_postings!")
+
+"""
+    trim_postings_cache!(a::LazyPostings) -> Int
+
+Evicts the least frequently used cached lists down to `a.baselists`, but only if there are
+more than `a.maxlists` of them; returns how many it dropped.
+
+Call it after a query (or a batch of them) has fully resolved -- never from inside one. See
+[`LazyPostings`](@ref).
+"""
+function trim_postings_cache!(a::LazyPostings)
+    lock(a.lk) do
+        length(a.cache) <= a.maxlists && return 0
+        victims = sort!(collect(keys(a.cache)); by=t -> get(a.uses, t, 0))
+        ndrop = length(a.cache) - a.baselists
+        for t in view(victims, 1:ndrop)
+            delete!(a.cache, t)
+            delete!(a.uses, t)
+        end
+        ndrop
+    end
+end
+
+"""
+    invalidate_postings!(a::LazyPostings, tokens)
+
+Drops the cached lists of `tokens`, which a just-written block has lengthened on disk.
+
+Dropping rather than patching: a token whose list just grew is not necessarily one anybody
+queries, and the next read pays a single point lookup either way.
+"""
+function invalidate_postings!(a::LazyPostings, tokens)
+    lock(a.lk) do
+        for t in tokens
+            delete!(a.cache, UInt32(t))
+        end
+    end
+    return nothing
+end
+
+# The two hooks `IndexEngine` leaves open for an adjacency list that lives somewhere other than
+# memory (see its `persist_block!`/`maybe_trim_cache!`): this module is loaded after that one
+# precisely so it can add these methods without `IndexEngine` ever naming RocksDB.
+function IndexEngine.persist_block!(a::LazyPostings, base::Int, docvecs, postings::Dict{UInt32,Vector{UInt32}})
+    write_invfile_block!(a.store, base, docvecs, postings)
+    invalidate_postings!(a, keys(postings))
+    return nothing
+end
+
+IndexEngine.maybe_trim_cache!(a::LazyPostings) = trim_postings_cache!(a)
 
 end # module

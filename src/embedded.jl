@@ -203,14 +203,67 @@ callback (unlike the whole-index save `DenseEngine{<:ExactBackend}` uses, see
 [`_maybe_flush_index!`](@ref)): an inverted file's `LOG` only fires after a call's
 mutation is fully done, so there's no partial-state hazard here the way there is for a
 `SearchGraph` (see `SimilaritySearch.CallbackLog`'s docstring). Reconstruction
-(`IndexEngine.build_bm25invertedfile`/`build_textinvertedfile`, used by [`open_project`](@ref))
-rebuilds the whole index by replaying every saved object back through the library's own
-insertion -- see `Persistence.InvertedFileObjectStore`'s docstring for the scaling
-trade-off that implies (fine up to a few million documents; not a design for
-billion-document corpora needing disk-backed posting lists).
+(`IndexEngine.build_sparseinvertedfile`, used by [`open_project`](@ref)) rebuilds the whole
+index by replaying every saved object back through the library's own insertion -- see
+`Persistence.InvertedFileObjectStore`'s docstring for the scaling trade-off that implies.
+
+Only a sparse project is wired to this now: a text project persists its index
+(`Persistence.InvertedIndexStore`) and has no observer of its own.
 """
 _invertedfile_on_change(obj_store::Persistence.InvertedFileObjectStore) =
     (index, sp, ep) -> Persistence.append_objects!(obj_store, sp, IndexEngine.invertedfile_objects(index, sp, ep))
+
+"""
+    _invfile_store(project) -> Persistence.InvertedIndexStore
+
+The project's persisted inverted index (posting lists and per-document vectors). See
+`Persistence.INVFILE_POSTINGS_CF`.
+"""
+_invfile_store(project::Project.ProjectManager) = Persistence.open_inverted_index_store(project.db)
+
+"""
+    _invfile_adj_factory(store; maxlists, baselists) -> Function
+
+The `vocsize -> AbstractAdjList` an inverted file is built around when its posting lists live
+in `store` instead of in memory. `IndexEngine` calls it when it constructs the index and never
+looks inside the result -- see `IndexEngine._text_index`.
+"""
+_invfile_adj_factory(store::Persistence.InvertedIndexStore; maxlists::Int, baselists::Int) =
+    vocsize -> Persistence.LazyPostings(store, vocsize, maxlists, baselists)
+
+"""
+    _assemble_text_index(profile, kind, distance, store, adj_factory) -> AbstractInvertedFile
+
+Rebuilds a queryable text index from what was persisted, without reindexing anything.
+
+The cheap, small half is reconstructed from the profile -- vocabulary, scorer or weighting
+model, and the query pipeline all come from the library's own profile-taking constructor, which
+is also what derives the spelling-variant map once instead of per query. The large half comes
+from storage: document vectors read into memory, posting lists left on disk behind
+`adj_factory`'s adjacency list, and the per-document bookkeeping each backend keeps
+(`doclens` for BM25, `sizes` for the weighted one) recomputed from those vectors rather than
+stored a second time where the two could drift.
+
+Measured on 265k Gutenberg paragraphs, 2026-09-11: 1.1s against 20.4s to recompute a BM25
+index from the raw objects, and that is *with* the document vectors loaded eagerly.
+"""
+function _assemble_text_index(profile::TextProfile, kind::Type, distance,
+                              store::Persistence.InvertedIndexStore, adj_factory::Function)
+    docvecs = Persistence.load_invfile_docvecs(store)
+    if kind === BM25InvertedFile
+        template = BM25InvertedFile(profile)
+        doclens = Int32[Int32(sum(v.nzval; init=UInt32(0))) for v in docvecs]
+        return BM25InvertedFile(template.voc, template.bm25, adj_factory(length(template.adj)),
+                                doclens, VectorDatabase(docvecs), Ref(Int64(length(docvecs))),
+                                template.query)
+    end
+    template = TextInvertedFile(profile; dist=distance)
+    inner = template.invfile
+    sizes = UInt32[UInt32(Persistence.docvec_nnz(v)) for v in docvecs]
+    rebuilt = InvertedFile(inner.dist, adj_factory(length(inner.adj)), sizes,
+                                            VectorDatabase(docvecs), Ref(Int64(length(docvecs))))
+    TextInvertedFile(template.model, rebuilt, template.query)
+end
 
 """
     create_project(workdir, dataset; engine=DenseEngine, backend=nothing, distance=nothing,
@@ -301,7 +354,8 @@ function create_project(workdir::String, dataset::String;
                         distance=nothing, minrecall::Union{Nothing,Real}=0.9,
                         dimension::Union{Nothing,Integer}=nothing,
                         textmodel::Union{Nothing,IndexEngine.AbstractTextModelSpec}=nothing,
-                        index_type=nothing, schema_version::Int=1)
+                        index_type=nothing, schema_version::Int=1,
+                        postings_cache_max::Int=4096, postings_cache_base::Int=2048)
     index_type === nothing || error("""
         `index_type` is gone: a project now names the kind of data it holds and, separately, the
         index that holds it.
@@ -336,7 +390,9 @@ function create_project(workdir::String, dataset::String;
 
     dir = joinpath(workdir, dataset)
     mkpath(dir)
-    project = Project.open_project(dir, dataset; extra_cf_names=[Persistence.ENGINE_CF, Persistence.ADJACENCY_CF, Persistence.INVFILE_DB_CF, Persistence.STAGED_TEXT_CF])
+    project = Project.open_project(dir, dataset; extra_cf_names=[Persistence.ENGINE_CF, Persistence.ADJACENCY_CF, Persistence.INVFILE_DB_CF,
+                                                 Persistence.STAGED_TEXT_CF, Persistence.INVFILE_POSTINGS_CF,
+                                                 Persistence.INVFILE_DOCVECS_CF])
     store = Persistence.open_engine_store(project.db)
     pending_flush = Ref(false)
     dense_vectors = Ref{Union{Nothing,MMapMatrixDatabase}}(nothing)
@@ -346,18 +402,26 @@ function create_project(workdir::String, dataset::String;
     # objects, and an exact index has nothing to report so its whole index is flushed instead.
     on_change = if kind === :dense && back === SearchGraph
         _searchgraph_on_change(store, Persistence.open_adjacency_store(project.db))
-    elseif kind === :sparse || kind === :text
+    elseif kind === :text
+        # A text project persists its *index* (see `Persistence.InvertedIndexStore`), written a
+        # block at a time by `IndexEngine.index!` itself, so there is nothing for an observer to
+        # save on its behalf and no reason to keep a second copy of every object as well.
+        nothing
+    elseif kind === :sparse
         _invertedfile_on_change(Persistence.open_invertedfile_object_store(project.db))
     else
         (_, __, ___) -> (pending_flush[] = true)
     end
+    adj_factory = kind === :text ?
+        _invfile_adj_factory(_invfile_store(project); maxlists=postings_cache_max, baselists=postings_cache_base) :
+        nothing
 
     # The sentinel is resolved here, once, and everything below this line receives a real
     # value -- the whole of the no-defaults-below-the-surface policy in one statement.
     dist = distance === nothing ? IndexEngine.default_distance(back) : distance
     eng = kind === :sparse ?
         IndexEngine.create_sparse_engine(; distance=dist, dimension, on_change, log_io=nothing) :
-        IndexEngine.create_engine(back; distance=dist, minrecall, textmodel, on_change, log_io=nothing)
+        IndexEngine.create_engine(back; distance=dist, minrecall, textmodel, on_change, log_io=nothing, adj_factory)
     Persistence.save_fields!(store, IndexEngine.snapshot_state(eng))
     return EmbeddedEngine(workdir, dataset, dir, project, eng, store, pending_flush, schema_version,
                           dense_vectors, false, Ref(true))
@@ -381,9 +445,12 @@ another script) still has open for writing (mirrors `Project.open_project`'s own
 (non-`read_only`) open against a directory something else already has open for writing
 raises RocksDB's own real lock error, not a friendly one this function invents.
 """
-function open_project(workdir::String, dataset::String; read_only::Bool=false, schema_version::Int=1)
+function open_project(workdir::String, dataset::String; read_only::Bool=false, schema_version::Int=1,
+                      postings_cache_max::Int=4096, postings_cache_base::Int=2048)
     dir = joinpath(workdir, dataset)
-    project = Project.open_project(dir, dataset; read_only, extra_cf_names=[Persistence.ENGINE_CF, Persistence.ADJACENCY_CF, Persistence.INVFILE_DB_CF, Persistence.STAGED_TEXT_CF])
+    project = Project.open_project(dir, dataset; read_only, extra_cf_names=[Persistence.ENGINE_CF, Persistence.ADJACENCY_CF, Persistence.INVFILE_DB_CF,
+                                                 Persistence.STAGED_TEXT_CF, Persistence.INVFILE_POSTINGS_CF,
+                                                 Persistence.INVFILE_DOCVECS_CF])
     store = Persistence.open_engine_store(project.db)
     pending_flush = Ref(false)
     dense_vectors = Ref{Union{Nothing,MMapMatrixDatabase}}(nothing)
@@ -439,18 +506,32 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
     elseif kind === :text
         # One branch for both text backends: which inverted file to rebuild is `state.backend`'s
         # to say, and `restore_engine` says it. That is the same collapse `FullTextEngine` is.
-        obj_store = Persistence.open_invertedfile_object_store(project.db)
+        # One branch for both text backends: which inverted file to assemble is `state.backend`'s
+        # to say, and `restore_engine` says it. That is the same collapse `FullTextEngine` is.
         staged_store = Persistence.open_staged_text_store(project.db)
+        profile = Persistence.load_field(store, :profile, nothing)
+        invfile_store = _invfile_store(project)
+        distance = Persistence.load_field(store, :distance, nothing)
+        adj_factory = _invfile_adj_factory(invfile_store; maxlists=postings_cache_max,
+                                           baselists=postings_cache_base)
+        kindtype = backend === :bm25 ? BM25InvertedFile : TextInvertedFile
+        # No index on disk means no index: a text project is assembled from what was persisted or
+        # it has none, and `index!` is what builds one out of the staged text. Nothing here
+        # reconstructs an index from the raw objects a pre-persistence project saved -- see
+        # `index!`'s own docstring for what to do with one of those.
+        prebuilt = profile !== nothing && Persistence.has_inverted_index(invfile_store) ?
+            _assemble_text_index(profile, kindtype, distance, invfile_store, adj_factory) : nothing
         state = (
             kind=kind, backend=backend,
-            profile=Persistence.load_field(store, :profile, nothing),
+            profile=profile,
             fitspec=Persistence.load_field(store, :fitspec, nothing),
-            distance=Persistence.load_field(store, :distance, nothing),
-            object_blocks=Persistence.load_object_blocks(obj_store),
+            distance=distance,
+            prebuilt_index=prebuilt,
+            adj_factory=adj_factory,
             staged=vcat(String[], Persistence.load_staged_text_blocks(staged_store)...),
             deleted_ids=Persistence.load_field(store, :deleted_ids, nothing),
         )
-        IndexEngine.restore_engine(state; on_change=_invertedfile_on_change(obj_store), log_io=nothing)
+        IndexEngine.restore_engine(state; on_change=nothing, log_io=nothing)
     else
         error("""
             this project records kind $(repr(kind)), which this version does not know how to \

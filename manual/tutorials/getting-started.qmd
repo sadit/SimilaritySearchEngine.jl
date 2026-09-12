@@ -35,6 +35,10 @@ using Pkg
 Pkg.develop(path="path/to/SimilaritySearchEngine.jl")
 ```
 
+This tutorial reads its corpus from the package's own `test/data/`, so a cloned copy is the
+convenient way to follow it verbatim; with the `Pkg.add` form, point the paths below at any
+JSONL file of your own with the same fields.
+
 ---
 
 ## The Reference Dataset: *Frankenstein*
@@ -131,7 +135,40 @@ To restrict query evaluation using metadata predicates, pass a `filter` function
 filtered_results = search(h, query, 5; filter = (record, meta) -> !isempty(record.keywords))
 ```
 
-### 6. Logical Soft Deletions
+Filtering is applied to a fixed number of candidates retrieved from the index, `candidates`, which defaults to `2k`. **A filtered search returns fewer than `k` results whenever fewer than `k` of those candidates satisfy the predicate**, and it does so without raising an error: the alternative, enlarging the budget until `k` results are found, would let a selective predicate silently escalate into a scan of the entire collection, at two RocksDB reads per candidate.
+
+Size the budget to the selectivity of the predicate. A predicate satisfied by roughly one item in $n$ requires approximately $n \cdot k$ candidates to fill a page of $k$ results:
+
+```julia
+# One document in ~26 carries this year: 20 candidates are not enough for 10 results
+rare = search(h, query, 10; filter = (record, meta) -> meta["year"] == 2005)                   # returns 0
+enough = search(h, query, 10; filter = (record, meta) -> meta["year"] == 2005, candidates=8192) # returns 10
+```
+
+### 6. Batch Queries
+
+A set of queries is answered in a single parallel pass rather than one call at a time. Passing a vector of query vectors to [`search`](@ref) returns one result list per query, in the same order:
+
+```julia
+queries = [vectorize(lsi, t) for t in ["the monster and its creator",
+                                       "the arctic expedition",
+                                       "letters to Margaret"]]
+batched = search(h, queries, 5)     # Vector{Vector{SearchResult}}
+batched[2][1].doc_id
+```
+
+[`searchbatch`](@ref) returns the same neighbourhoods in raw form -- two `(k, length(queries))` matrices of internal ids and distances, with no metadata reads at all -- which is the appropriate input for evaluation loops, offline scoring, or feeding another index:
+
+```julia
+ids, dists = searchbatch(h, queries, 5)
+size(ids)     # (5, 3)
+```
+
+Measured over 50,000 dense vectors on 8 threads, `searchbatch` sustains 39,000 queries/s against 3,800 queries/s query-by-query; the hydrated form reaches 12,600 queries/s, the difference being the metadata read and decode per hit.
+
+Both are **whole-dataset operations rather than concurrent searches**: they acquire the project's write lock (exclusive, including with respect to other batch calls) and refuse to run while items remain staged but not indexed. This follows from their internal parallelism, which cannot be nested under the default thread scheduler. Text projects have no batch entry point, since their queries are strings the library resolves individually; call `ftsearch` in a loop.
+
+### 7. Logical Soft Deletions
 
 The `delete_item!` function marks a document as deleted using its internal integer `_id`. The underlying proximity graph is not restructured:
 
@@ -144,7 +181,7 @@ first(results).deleted  # Returns true if document 1 is among the top candidates
 
 Query results return matching candidates with an explicit `deleted::Bool` indicator, allowing client applications to handle tombstoned records without index re-indexing.
 
-### 7. Calibrating Search Hyperparameters: `calibrate!`
+### 8. Calibrating Search Hyperparameters: `calibrate!`
 
 The `calibrate!` function executes an internal hyperparameter optimization pass over the graph, calibrating `BeamSearch` parameters across multiple recall thresholds:
 
@@ -155,13 +192,15 @@ calibrate!(h; levels=[0.8, 0.9, 0.95, 0.97])
 precise_results = search(h, query, 5; minrecall=0.95)
 ```
 
-### 8. Project Closure and Reopening
+### 9. Project Closure and Reopening
 
 To close all active RocksDB handles and memory-mapped files:
 
 ```julia
 close_project!(h)
 ```
+
+Closing a session that performed writes also compacts the project's storage. This is not housekeeping: what a bulk ingestion leaves behind is a write-ahead log that the *next* open must replay, so the cost appears as open latency. On a 50,000-vector project, reopening costs 2.97 s without compaction and 0.48 s with it, for a compaction of 0.16 s. Pass `close_project!(h; compact=false)` when closing sits on a latency path, or call [`compact_project!`](@ref) mid-session after a large ingestion the same process will continue to serve.
 
 Reopening the project restores both the stored vectors and graph connectivity:
 
@@ -248,6 +287,20 @@ end
 
 close_project!(hb)
 ```
+
+A text project persists the inverted index itself, not the objects that were indexed, so reopening it assembles the index rather than recomputing it -- 1.4 s against 20.4 s over 265,000 Project Gutenberg paragraphs. This holds for both text backends, BM25 and the weighted `TextInvertedFile`:
+
+```julia
+hb2 = open_project(workdir, "frankenstein_bm25")
+ftsearch(hb2, "monster creature fear", 5)     # same answers, no reindexing
+close_project!(hb2)
+```
+
+Posting lists are read from storage as queries ask for them, behind a cache of the most frequently used ones; their size is set at open time with `postings_cache_max` and `postings_cache_base` (the maximum number of cached lists, and the number it is trimmed back to when that maximum is exceeded). Per-document term vectors are read into memory instead, because BM25 scores every candidate from its own vector and a query containing a frequent term makes most of the collection a candidate. The [architecture guide](../architecture.qmd) carries the measurements behind both halves of that choice.
+
+A project written by an earlier version, which stored the indexed objects instead of the index, opens with no index at all and says so when searched; `index!(h)` rebuilds it from the staged text, which was always persisted separately. That is the whole migration procedure, and it is explicit on purpose.
+
+Appending after the first `index!` writes only what the new block changes, so a project can keep growing without ever being rebuilt. The vocabulary, however, is fixed at the first `index!` under `FitFromCorpus`: words absent from the text staged by then stay out of vocabulary no matter how many blocks follow. Stage the corpus you intend to fit before calling `index!` the first time, or start from a [`BaseProfile`](@ref).
 
 ---
 
@@ -414,6 +467,10 @@ it.payload        # Stored vector or text
 exists(h2, [1, "frankenstein_2", "non_existent_id"])
 ```
 
+An external identifier is resolved through a dedicated column family rather than by scanning the collection: 0.05 ms against 59 ms for the equivalent scan, measured on a 50,000-item project. Nothing requires `doc_id` to be unique, so `fetch_items` returns *every* item carrying the requested identifier, in ascending `_id` order, and the result may therefore be longer than the list of ids it was given. Accordingly, `exists` reports an identifier as deleted only when every item carrying it has been soft-deleted.
+
+A numeric argument is read as an internal `_id` first, and only falls back to `doc_id` resolution when no record holds that `_id`.
+
 ---
 
 ## Summary
@@ -421,6 +478,8 @@ exists(h2, [1, "frankenstein_2", "non_existent_id"])
 This tutorial demonstrated the core lifecycle of `SimilaritySearchEngine.jl`:
 1. Project creation with explicit payload engines and indexing backends.
 2. Ingestion staging via `append_items!` with deferred graph or vocabulary indexing via `index!`.
-3. Nearest-neighbor querying with metadata filtering and soft deletion handling.
-4. Hyperparameter calibration (`calibrate!`) for guaranteed target recall.
-5. In-process execution of whole-dataset metric operations.
+3. Nearest-neighbor querying with metadata filtering, an explicit candidate budget, and soft deletion handling.
+4. Batch query execution, hydrated (`search`) or raw (`searchbatch`).
+5. Hyperparameter calibration (`calibrate!`) for guaranteed target recall.
+6. In-process execution of whole-dataset metric operations.
+7. Indexed retrieval by external identifier, and storage compaction on close.
