@@ -29,8 +29,8 @@ jobs:
       fail-fast: false
       matrix:
         version:
-          # The two ends of the range Project.toml's `julia = "1.10"` promises.
-          - '1.10'
+          # 1.12 only: it is what development happens on, and what the server's `[apps]`
+          # entries require (Pkg.Apps does not exist before it).
           - '1.12'
         os:
           - ubuntu-latest

@@ -30,7 +30,10 @@ RocksDB = "1"
 SimilaritySearch = "1.4"
 SparseArrays = "1"
 TextSearch = "1.1"
-julia = "1.10"
+# 1.12, which is what CI verifies and what development happens on. This said 1.10 while
+# nothing tested 1.10 -- a promise nobody checked, which is the shape of problem the packaging
+# pass went looking for. The subpackage under server/ needs 1.12 outright (`[apps]`).
+julia = "1.12"
 
 [extras]
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"

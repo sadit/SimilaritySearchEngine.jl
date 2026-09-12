@@ -198,7 +198,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p><code>SimilaritySearchEngine.jl</code> is not in the General registry yet, so it is installed from its repository. Its dependencies — <code>SimilaritySearch.jl</code>, <code>TextSearch.jl</code>, <code>RocksDB.jl</code> and the <code>RocksDB_jll</code> binaries — are all registered, so nothing else has to be cloned or built:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="im">using</span> <span class="bu">Pkg</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="bu">Pkg</span>.<span class="fu">add</span>(url<span class="op">=</span><span class="st">"https://github.com/sadit/SimilaritySearchEngine.jl"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Julia 1.10 or later is required. To modify the package, clone the repository and <code>Pkg.develop(path=...)</code> the clone; no <code>Manifest.toml</code> is committed, so <code>Pkg.instantiate()</code> resolves the base libraries from the registry unless you develop them by path as well.</p>
+<p>Julia 1.12 or later is required. To modify the package, clone the repository and <code>Pkg.develop(path=...)</code> the clone; no <code>Manifest.toml</code> is committed, so <code>Pkg.instantiate()</code> resolves the base libraries from the registry unless you develop them by path as well.</p>
 <hr>
 </section>
 <section id="core-capabilities" class="level2">

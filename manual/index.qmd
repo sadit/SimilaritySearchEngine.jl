@@ -20,7 +20,7 @@ using Pkg
 Pkg.add(url="https://github.com/sadit/SimilaritySearchEngine.jl")
 ```
 
-Julia 1.10 or later is required. To modify the package, clone the repository and
+Julia 1.12 or later is required. To modify the package, clone the repository and
 `Pkg.develop(path=...)` the clone; no `Manifest.toml` is committed, so `Pkg.instantiate()`
 resolves the base libraries from the registry unless you develop them by path as well.
 

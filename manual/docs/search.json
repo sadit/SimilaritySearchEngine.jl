@@ -263,7 +263,7 @@
     "href": "index.html#installation",
     "title": "SimilaritySearchEngine.jl",
     "section": "Installation",
-    "text": "Installation\nSimilaritySearchEngine.jl is not in the General registry yet, so it is installed from its repository. Its dependencies — SimilaritySearch.jl, TextSearch.jl, RocksDB.jl and the RocksDB_jll binaries — are all registered, so nothing else has to be cloned or built:\nusing Pkg\nPkg.add(url=\"https://github.com/sadit/SimilaritySearchEngine.jl\")\nJulia 1.10 or later is required. To modify the package, clone the repository and Pkg.develop(path=...) the clone; no Manifest.toml is committed, so Pkg.instantiate() resolves the base libraries from the registry unless you develop them by path as well."
+    "text": "Installation\nSimilaritySearchEngine.jl is not in the General registry yet, so it is installed from its repository. Its dependencies — SimilaritySearch.jl, TextSearch.jl, RocksDB.jl and the RocksDB_jll binaries — are all registered, so nothing else has to be cloned or built:\nusing Pkg\nPkg.add(url=\"https://github.com/sadit/SimilaritySearchEngine.jl\")\nJulia 1.12 or later is required. To modify the package, clone the repository and Pkg.develop(path=...) the clone; no Manifest.toml is committed, so Pkg.instantiate() resolves the base libraries from the registry unless you develop them by path as well."
   },
   {
     "objectID": "index.html#core-capabilities",

@@ -36,7 +36,8 @@ julia --project=server -e 'using Pkg; Pkg.develop(path=".")'
 julia --project=server -t auto -e 'using Pkg; Pkg.test()'
 ```
 
-Julia 1.10 or later; 1.12 is what development happens on, and CI runs both ends.
+Julia 1.12 or later, in both packages: it is what CI verifies, and the server's `[apps]`
+entries need `Pkg.Apps`, which does not exist before it.
 
 ## Things worth knowing before changing something
 
