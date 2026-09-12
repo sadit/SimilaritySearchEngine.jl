@@ -16,7 +16,21 @@
 # 827k paragraphs, an hour and a network connection to rebuild -- so no CI can render it. The
 # rendered HTML is the only form of that page that can be published, which makes it source for
 # publishing purposes even though it is output for every other purpose. Re-render and commit it
-# when the pages change: XDG_RUNTIME_DIR=$(mktemp -d) quarto render manual
+# when the pages change, one page at a time:
+#
+#     XDG_RUNTIME_DIR=$(mktemp -d) quarto render manual/index.qmd
+#
+# Never `quarto render manual` (the whole project): it empties manual/docs/ first and then dies
+# on paragraph-search.qmd's julia engine, leaving the committed site half deleted.
 /manual/.quarto/
 /manual/_freeze/
 **/*.quarto_ipynb
+
+# Manifests are not committed for a package: this repository's own resolve pins the base
+# libraries to relative dev checkouts (`path = "../SimilaritySearch.jl"`), which exist on the
+# author's machine and nowhere else -- a CI runner or anybody cloning the repository cannot
+# instantiate them. Dependencies are declared in Project.toml's [compat] and resolved from the
+# General registry, where the whole chain (SimilaritySearch, TextSearch, RocksDB, RocksDB_jll,
+# Avro) is published. Keep your local Manifest.toml as the dev-checkout environment it is.
+/Manifest.toml
+/test/Manifest.toml

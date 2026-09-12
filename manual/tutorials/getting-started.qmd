@@ -17,7 +17,18 @@ This tutorial provides an end-to-end walkthrough of `SimilaritySearchEngine.jl`.
 
 ## Installation
 
-Install `SimilaritySearchEngine.jl` in development mode:
+`SimilaritySearchEngine.jl` is not in the General registry yet, so it is installed from its
+repository. Everything it depends on is registered, so the command below is the whole
+installation — no local checkouts of `SimilaritySearch.jl`/`TextSearch.jl`/`RocksDB.jl`, and no
+build step for the RocksDB binaries:
+
+```julia
+using Pkg
+Pkg.add(url="https://github.com/sadit/SimilaritySearchEngine.jl")
+```
+
+If you intend to modify the package while following this tutorial, clone it and develop the
+clone instead:
 
 ```julia
 using Pkg

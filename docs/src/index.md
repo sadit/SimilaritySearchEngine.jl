@@ -24,7 +24,18 @@ The library executes directly within the host Julia process without requiring ex
 
 ## Installation
 
-Install `SimilaritySearchEngine.jl` in development mode directly from its repository:
+The package is not in the General registry yet, so install it from its repository. Its whole
+dependency chain — `SimilaritySearch`, `TextSearch`, `RocksDB` and the `RocksDB_jll` binaries —
+is registered, so this resolves and precompiles without local checkouts or a build step:
+
+```julia
+using Pkg
+Pkg.add(url="https://github.com/sadit/SimilaritySearchEngine.jl")
+```
+
+To develop the package itself, clone the repository and develop the clone. No `Manifest.toml` is
+committed, so `Pkg.instantiate()` resolves the base libraries from the registry; use
+`Pkg.develop(path=...)` on each of them to work against your own checkouts instead.
 
 ```julia
 using Pkg

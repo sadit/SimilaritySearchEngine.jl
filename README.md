@@ -1,5 +1,10 @@
 # SimilaritySearchEngine.jl
 
+[![CI](https://github.com/sadit/SimilaritySearchEngine.jl/actions/workflows/ci.yml/badge.svg)](https://github.com/sadit/SimilaritySearchEngine.jl/actions/workflows/ci.yml)
+[![Manual](https://img.shields.io/badge/docs-manual-blue.svg)](https://sadit.github.io/SimilaritySearchEngine.jl/manual/)
+[![API Reference](https://img.shields.io/badge/docs-reference-blue.svg)](https://sadit.github.io/SimilaritySearchEngine.jl/dev/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 `SimilaritySearchEngine.jl` is an embedded similarity search engine for Julia. It provides transactional, persistent storage and nearest-neighbor search for collections of dense vectors, sparse representations, and full-text documents. It integrates [SimilaritySearch.jl](https://github.com/sadit/SimilaritySearch.jl), [TextSearch.jl](https://github.com/sadit/TextSearch.jl), and [RocksDB.jl](https://github.com/sadit/RocksDB.jl) into a unified, in-process engine.
 
 ---
@@ -22,7 +27,20 @@
 
 ---
 
-## Quickstart
+## Installation
+
+The package is not in the General registry yet, so install it from its repository. Every
+dependency it needs — including `RocksDB.jl` and its `RocksDB_jll` binaries — *is* registered, so
+this resolves and precompiles with no local checkouts and no build step:
+
+```julia
+using Pkg
+Pkg.add(url="https://github.com/sadit/SimilaritySearchEngine.jl")
+```
+
+To work on the package itself, clone it and `Pkg.develop` the clone. Note that no `Manifest.toml`
+is committed: `Pkg.instantiate()` resolves the base libraries from the registry. Point them at
+your own checkouts with `Pkg.develop(path=...)` when you need to.
 
 ```julia
 using Pkg
@@ -60,6 +78,12 @@ close_project!(h)
   - [Getting Started Tutorial](manual/tutorials/getting-started.qmd): Step-by-step walkthrough covering dense embeddings, sparse indexing, BM25 text retrieval, filtering, calibration, and whole-dataset operations.
   - [Multilingual Case Study](manual/tutorials/paragraph-search.qmd): Real-world evaluation over Project Gutenberg and Wikipedia paragraph corpora.
 - **[API Reference](https://sadit.github.io/SimilaritySearchEngine.jl/dev/)**: Complete reference documentation generated with Documenter.jl.
+
+---
+
+## License
+
+MIT. See [LICENSE](LICENSE).
 
 ---
 
