@@ -7,6 +7,15 @@
 
 `SimilaritySearchEngine.jl` is an embedded similarity search engine for Julia. It provides transactional, persistent storage and nearest-neighbor search for collections of dense vectors, sparse representations, and full-text documents. It integrates [SimilaritySearch.jl](https://github.com/sadit/SimilaritySearch.jl), [TextSearch.jl](https://github.com/sadit/TextSearch.jl), and [RocksDB.jl](https://github.com/sadit/RocksDB.jl) into a unified, in-process engine.
 
+This repository holds **two packages**:
+
+| | what it is | where |
+|---|---|---|
+| `SimilaritySearchEngine` | the embedded engine: a library, no HTTP, no CLI, no daemon | repository root |
+| `SimilaritySearchServer` | REST API, CLIs, job queue, and three installable apps over that engine | [`server/`](server/) |
+
+They are developed together and tested in one CI run, with separate dependency sets: loading the server's tree costs 1.32 s and 28 transitive packages, which a caller embedding the engine never pays. [`DEVELOPMENT_STRATEGY.md`](DEVELOPMENT_STRATEGY.md) explains why the line is drawn there and where the error boundary lives.
+
 ---
 
 ## Architectural Highlights
@@ -28,6 +37,7 @@
 - **Indexed External Identifiers**: `doc_id` lookups resolve through a dedicated column family (0.12 ms against 59 ms for a scan, at 50,000 items) and are not required to be unique -- `fetch_items` returns every item carrying the requested identifier.
 - **Storage Compaction**: `close_project!` compacts the project after a session that wrote, which is what keeps the next open fast (0.28 s against 2.97 s); `compact_project!` runs it mid-session.
 - **Granular Storage Persistence**: High-throughput persistence utilizing a hybrid layout of RocksDB column families and dedicated memory-mapped vector files (`dense_vectors.mmapdb`).
+- **Typed Errors**: Every failure the engine raises on purpose is an `EngineError` in one of four categories -- `InvalidRequest`, `NotFound`, `ConflictingState`, `StorageFailure` -- with a concrete type underneath (`PayloadMismatch`, `PendingBacklog`, `WrongDimension`, ...). A caller acts on the category instead of parsing a message; the server maps categories to HTTP status codes and the CLIs to exit codes.
 
 ---
 
@@ -91,12 +101,37 @@ close_project!(h)
 
 ---
 
+## Testing
+
+Two levels, in both packages: light on every change, full before a release.
+
+```julia
+using Pkg
+Pkg.test()                          # light   -- engine 264 assertions, 46s
+Pkg.test(test_args=["full"])        # full    -- engine 310 assertions, 1m30
+```
+
+The split follows the clock, not importance. The engine's full level adds the whole-dataset algorithms, the concurrency stress test, and the text testsets that fit a linguistic profile from a corpus -- everything they cover is covered in the light run too, at a size that runs in about a second each. The server's light level (50 assertions, 5 s) covers the boundary with the engine -- wire names to engine types, engine errors to status and exit codes, wire items to engine items -- without starting a server or spawning a subprocess; its full level (520 assertions, 17 min) adds the HTTP, job and CLI end-to-end suites. `SSE_TEST_LEVEL=full` selects the full level from CI.
+
+A skipped testset is named at the end of a light run: a light run that looks identical to a full one is how a suite quietly stops testing something.
+
+---
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
 
 ---
 
-## Ecosystem Integration
+## The server subpackage
 
-`SimilaritySearchEngine.jl` provides the embedded engine core. Higher-level services, including HTTP REST endpoints, asynchronous job queues, and command-line interfaces, are implemented in the sibling package `SimilaritySearchServer.jl`, which consumes this embedded API directly.
+[`server/`](server/) holds `SimilaritySearchServer`: a REST API (Oxygen), two CLIs, an asynchronous job queue with a filesystem spool, tokens, cursors and telemetry, plus three installable apps (`similarity-search`, `similarity-search-admin`, `similarity-search-serve`). It consumes this engine's public API and nothing below it.
+
+```julia
+using Pkg
+Pkg.develop(path=".")            # the engine from this repository
+Pkg.activate("server")
+Pkg.develop(path=".")            # ... and the server against it
+```
+
+Julia 1.12 or later is required by both, and by the server outright: its `[apps]` entries need `Pkg.Apps`, which does not exist before 1.12.

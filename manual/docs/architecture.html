@@ -220,6 +220,7 @@ window.Quarto = {
   <li><a href="#storage-subsystems" id="toc-storage-subsystems" class="nav-link" data-scroll-target="#storage-subsystems">Storage Subsystems</a></li>
   <li><a href="#project-reopening-lifecycle" id="toc-project-reopening-lifecycle" class="nav-link" data-scroll-target="#project-reopening-lifecycle">Project Reopening Lifecycle</a></li>
   </ul></li>
+  <li><a href="#failure-reporting-typed-errors-and-their-boundaries" id="toc-failure-reporting-typed-errors-and-their-boundaries" class="nav-link" data-scroll-target="#failure-reporting-typed-errors-and-their-boundaries">Failure Reporting: Typed Errors and Their Boundaries</a></li>
   <li><a href="#dual-logging-architecture-reporters-vs.-observers" id="toc-dual-logging-architecture-reporters-vs.-observers" class="nav-link" data-scroll-target="#dual-logging-architecture-reporters-vs.-observers">Dual Logging Architecture: Reporters vs.&nbsp;Observers</a></li>
   <li><a href="#soft-deletions-and-dataset-operations" id="toc-soft-deletions-and-dataset-operations" class="nav-link" data-scroll-target="#soft-deletions-and-dataset-operations">Soft Deletions and Dataset Operations</a></li>
   </ul>
@@ -596,6 +597,57 @@ window.Quarto = {
 <p>When a project is reopened, stored forward edges are reloaded and bidirectional reverse links are regenerated, restoring the search index to its exact state prior to closure.</p>
 <hr>
 </section>
+</section>
+<section id="failure-reporting-typed-errors-and-their-boundaries" class="level2">
+<h2 class="anchored" data-anchor-id="failure-reporting-typed-errors-and-their-boundaries">Failure Reporting: Typed Errors and Their Boundaries</h2>
+<p>Every failure the engine raises deliberately is an <code>EngineError</code>, and the type is the contract. Four abstract categories sit beneath it, and a concrete type beneath each:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>category</th>
+<th>meaning</th>
+<th>concrete types</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>InvalidRequest</code></td>
+<td>the call cannot be honoured as written; retrying it unchanged fails again</td>
+<td><code>PayloadMismatch</code>, <code>WrongDimension</code>, <code>UnknownBackend</code>, <code>InvalidOption</code>, <code>UnsupportedOperation</code></td>
+</tr>
+<tr class="even">
+<td><code>NotFound</code></td>
+<td>something the call named does not exist</td>
+<td><code>ProfileNotInstalled</code></td>
+</tr>
+<tr class="odd">
+<td><code>ConflictingState</code></td>
+<td>the request is well formed but the project is not in a state that can serve it; the same call succeeds later</td>
+<td><code>PendingBacklog</code>, <code>NothingStaged</code>, <code>NoIndex</code>, <code>NotTrained</code>, <code>EmptyProject</code></td>
+</tr>
+<tr class="even">
+<td><code>StorageFailure</code></td>
+<td>what was read back cannot be interpreted</td>
+<td><code>CorruptedStorage</code></td>
+</tr>
+</tbody>
+</table>
+<p>Concrete types carry structured detail where a caller can use it: <code>PendingBacklog</code> reports the staged and connected counts, <code>WrongDimension</code> the expected and received lengths, <code>InvalidOption</code> the keyword at fault.</p>
+<p><strong>Mapping lives at each boundary, never in the engine.</strong> The engine does not know what an HTTP status code or an exit code is. Its consumers translate:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="cf">try</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>    <span class="fu">search</span>(handle, query, <span class="fl">10</span>)</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="cf">catch</span> <span class="cn">e</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>    <span class="cn">e</span> isa ConflictingState <span class="op">&amp;&amp;</span> <span class="cf">return</span> <span class="fu">retry_after_indexing</span>()</span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    <span class="cn">e</span> isa NotFound <span class="op">&amp;&amp;</span> <span class="cf">return</span> <span class="fu">not_found</span>()</span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    <span class="fu">rethrow</span>()</span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><code>SimilaritySearchServer</code> maps categories to status codes (<code>NotFound</code> to 404, <code>ConflictingState</code> to 409, <code>InvalidRequest</code> to 400, anything else to 500) and its CLIs map the same categories to exit codes (4, 5, 2, 70), so a shell script can branch on the reason without reading output.</p>
+<p>The alternative — bare <code>error("...")</code> — forces every consumer to classify by message text, which breaks silently the first time the wording improves. That had already happened here: this engine’s own concurrency test recognized a refused whole-dataset operation with <code>occursin("requires no pending backlog", e.msg)</code>, and now matches <code>PendingBacklog</code> instead.</p>
 </section>
 <section id="dual-logging-architecture-reporters-vs.-observers" class="level2">
 <h2 class="anchored" data-anchor-id="dual-logging-architecture-reporters-vs.-observers">Dual Logging Architecture: Reporters vs.&nbsp;Observers</h2>

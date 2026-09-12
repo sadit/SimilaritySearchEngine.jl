@@ -280,10 +280,10 @@ see [`InvertedIndexStore`](@ref) -- which is what removed the rebuild from its e
     (paged/streamed from disk on demand, never fully materialized in memory) -- a
     different architecture this project does not attempt.
 
-Keyed directly by each block's own starting id (`sp`, see [`_be_key`](@ref)) rather than a
+Keyed directly by each block's own starting id (`sp`, see [`Schema.be_key`](@ref)) rather than a
 generic block-count-and-prefix scheme: its own dedicated column family has no need for
 that extra indirection, the id *is* the key, and iterating the column family already
-yields blocks back in ascending `sp` order for free (see [`_be_key`](@ref)'s docstring).
+yields blocks back in ascending `sp` order for free (see [`Schema.be_key`](@ref)'s docstring).
 `IndexEngine.invertedfile_objects(index, sp, ep)` returns a plain `Vector` with no `sp` of
 its own, so [`append_objects!`](@ref) takes `sp` as a separate argument instead.
 
@@ -307,7 +307,7 @@ open_invertedfile_object_store(db::RocksDB.DB) = InvertedFileObjectStore(RocksDB
 
 Saves `objects` (the raw indexed objects for one `push_item!`/`append_items!` report over
 range `sp:ep` -- see `IndexEngine.invertedfile_objects`) under `sp` as key (see
-[`_be_key`](@ref)) -- never rewriting any earlier block. See [`load_object_blocks`](@ref)
+[`Schema.be_key`](@ref)) -- never rewriting any earlier block. See [`load_object_blocks`](@ref)
 to read the whole sequence back in order.
 """
 function append_objects!(store::InvertedFileObjectStore, sp::Integer, objects::Vector)
@@ -322,7 +322,7 @@ Every block [`append_objects!`](@ref) has written, in the order they were append
 ascending `sp`, decoded from each key rather than taken from the order the iteration happens to
 produce.
 
-The two coincide today, because [`_be_key`](@ref) is big-endian and RocksDB compares keys
+The two coincide today, because [`Schema.be_key`](@ref) is big-endian and RocksDB compares keys
 bytewise (see its docstring). Sorting anyway is three lines and removes the dependency: a block
 order that silently depended on the key encoding would corrupt a project's document numbering,
 not fail it, and would do so only past the first 256 blocks -- exactly the kind of bug a small
@@ -368,7 +368,7 @@ the text-engine counterpart of a `DenseEngine{GraphBackend}`'s `dense_vectors.mm
 `IndexEngine.index!(engine::IndexEngine.FullTextEngine)` has caught it up into the real
 `BM25InvertedFile`/`InvertedFile` yet.
 
-Keyed by each block's own starting position (`sp`, see [`_be_key`](@ref)) exactly like
+Keyed by each block's own starting position (`sp`, see [`Schema.be_key`](@ref)) exactly like
 [`InvertedFileObjectStore`](@ref) -- same reasoning: no prefix/counter needed, and
 iteration already comes back in ascending order.
 
@@ -391,7 +391,7 @@ open_staged_text_store(db::RocksDB.DB) = StagedTextStore(RocksDB.RocksDBDict{Vec
     append_staged_texts!(store::StagedTextStore, sp::Integer, texts::Vector{String})
 
 Saves `texts` (one `append_items!` batch's worth of freshly staged raw text) under `sp`
-as key (see [`_be_key`](@ref)) -- never rewriting any earlier block. See
+as key (see [`Schema.be_key`](@ref)) -- never rewriting any earlier block. See
 [`load_staged_text_blocks`](@ref) to read the whole sequence back in order.
 """
 function append_staged_texts!(store::StagedTextStore, sp::Integer, texts::Vector{String})
@@ -404,7 +404,7 @@ end
 
 Every block [`append_staged_texts!`](@ref) has written, in the order they were appended --
 a plain iteration over `store.dict` already comes back in ascending `sp` order (see
-[`_be_key`](@ref)'s docstring), so this needs no separate counter key or re-sorting. A
+[`Schema.be_key`](@ref)'s docstring), so this needs no separate counter key or re-sorting. A
 caller wants `vcat(load_staged_text_blocks(store)...)` for the flat, restore-ready
 `Vector{String}` `IndexEngine.restore_engine` expects as `state.staged`.
 """

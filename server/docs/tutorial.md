@@ -1,79 +1,143 @@
-# Getting Started Tutorial: SimilaritySearchServer
+# Getting Started: SimilaritySearchServer
 
-This tutorial will guide you step-by-step through setting up the `SimilaritySearchServer`, creating your first Dataset, and executing asynchronous jobs using our Python SDK.
+This walks through starting the server, creating a dataset, indexing documents, searching
+them, and running a heavy job asynchronously. It assumes you have this repository checked
+out; `SimilaritySearchServer` is the package under `server/`, and the engine it serves is the
+package at the root.
 
-## Step 1: Starting the Server
+Julia 1.12 or later is required.
 
-From the project root, initialize the server in development mode by calling the Julia executable with the current project and passing the `serve` command:
+## Step 1: Set up the environment
+
+The server depends on the engine from this same repository, so develop it by path once:
 
 ```bash
-julia --project=. -m SimilaritySearchServer serve
+julia --project=server -e 'using Pkg; Pkg.develop(path="."); Pkg.instantiate()'
 ```
 
-If it's the first time it is run, the system will automatically generate the default configuration and start listening at `http://127.0.0.1:8080`.
-
-## Step 2: Preparing the Python Environment
-
-In a separate terminal, ensure you have the Python dependencies installed:
+## Step 2: Start the server
 
 ```bash
-cd python
+julia --project=server -t auto -m SimilaritySearchServer serve
+```
+
+On a first run it writes a default configuration and listens on `http://127.0.0.1:8080`.
+Every dataset lives under `<workdir>/datasets/`, and the server reopens all of them at
+startup — a restart loses nothing.
+
+To install the three apps (`similarity-search`, `similarity-search-admin`,
+`similarity-search-serve`) into `~/.julia/bin` instead of invoking Julia each time:
+
+```bash
+julia -e 'using Pkg; Pkg.Apps.develop(path="server")'
+```
+
+## Step 3: Create a dataset and index documents
+
+```bash
+curl -s -X POST localhost:8080/api/v1/datasets \
+     -H 'Content-Type: application/json' \
+     -d '{"id": "demo", "index_kind": "bm25_invfile"}'
+
+curl -s -X POST localhost:8080/api/v1/simsearch/demo/append \
+     -H 'Content-Type: application/json' \
+     -d '{"items": [
+           {"doc_id": "d1", "text": "el gato duerme sobre el tejado", "keywords": ["gato"]},
+           {"doc_id": "d2", "text": "un perro ladra en la calle", "year": 2024}
+         ]}'
+```
+
+`index_kind` names what the project holds and what indexes it: `searchgraph` (dense vectors,
+the default), `bm25_invfile` or `invfile` (text), `sparse_invfile` (caller-encoded sparse
+vectors, which also needs `dimension`). Any field that is not `doc_id`, `keywords`, `refs`,
+`text`, `vector`, `indices` or `values` becomes free-form metadata — `year` above.
+
+Appending indexes immediately, so the documents are searchable when the call returns.
+
+## Step 4: Search
+
+```bash
+curl -s -X POST localhost:8080/api/v1/simsearch/demo/ftsearch \
+     -H 'Content-Type: application/json' \
+     -d '{"text": "gato tejado", "k": 5}'
+```
+
+A dense project answers `/search` with a `vector` instead, and accepts a metadata `filter`:
+
+```json
+{"vector": [0.1, 0.2, 0.3], "k": 10, "filter": {"year": {"$gte": 2024}}}
+```
+
+A filtered search reads a bounded number of candidates before filtering, so it can return
+fewer than `k`; the response says so with `insufficient_results`.
+
+## Step 5: Read failures
+
+Failures are typed, and the status code tells you what kind of problem it is before you read
+the message:
+
+| status | meaning | example |
+| ---: | :--- | :--- |
+| 400 | the request cannot be honoured as written | a dense `vector` sent to a text project |
+| 404 | something named does not exist | an unknown dataset id |
+| 409 | the project is not in a state to serve it | a whole-dataset job against a staged backlog |
+| 500 | stored data could not be read | — |
+
+The body carries both `error` (prose) and `kind` (the engine's concrete error type), so a
+client can branch on `kind` without matching on text.
+
+## Step 6: Run a heavy job
+
+Anything that scans the whole collection runs as a job: the HTTP call enqueues and returns
+immediately, and a dispatcher runs it as its own Julia subprocess.
+
+```bash
+JOB=$(curl -s -X POST localhost:8080/api/v1/jobs/allknn \
+      -H 'Content-Type: application/json' \
+      -d '{"dataset": "demo", "k": 5}' | jq -r .job_id)
+
+curl -s localhost:8080/api/v1/jobs/$JOB          # queued | running | completed | failed
+curl -s localhost:8080/api/v1/jobs/$JOB/result   # once completed
+```
+
+Jobs open their dataset read-only, so they can run while the server keeps serving it.
+
+## Step 7: The same thing from the command line
+
+Every operation is also a subcommand, against a workdir rather than a URL:
+
+```bash
+julia --project=server -m SimilaritySearchServer build \
+      --dataset demo_cli --input corpus.jsonl --index-kind bm25_invfile --workdir ./workdir
+
+julia --project=server -m SimilaritySearchServer describe --dataset demo_cli --workdir ./workdir
+```
+
+CLI exit codes mirror the status codes above: `2` invalid request, `4` not found, `5`
+conflicting state, `70` storage failure, and `1` for the command's own refusals (no such
+dataset, unreadable input). A script can branch on those without parsing output.
+
+## Step 8: The Python client
+
+```bash
+cd server/python
 pip install -r requirements.txt
-```
-
-Make sure to run your Python scripts from the `python/` folder so the local packages are recognized, or export the path to `PYTHONPATH`:
-
-```bash
 export PYTHONPATH=$(pwd)
 ```
-
-## Step 3: Basic API Interaction
-
-Create a short script or use an interactive Python console to test the connection:
-
-```python
-from similarity_search.client import SimilaritySearchClient
-
-client = SimilaritySearchClient("http://127.0.0.1:8080")
-
-# Check server health
-print(client.readyz())
-# Expected output: {'status': 'ok'}
-
-# Create a new Dataset
-ds_id = client.create_dataset()
-print(f"My new dataset is: {ds_id}")
-```
-
-## Step 4: Running a Heavy Job (Job Spooling)
-
-Suppose you want to process thousands of documents. Doing this by blocking an HTTP request is a bad idea, so we use the asynchronous Jobs API.
 
 ```python
 from similarity_search.client import SimilaritySearchClient
 from similarity_search.jobs import run_job
 
 client = SimilaritySearchClient("http://127.0.0.1:8080")
+print(client.readyz())                      # {'status': 'ok'}
+
 ds_id = client.create_dataset()
-
-# We define the heavy command arguments that the Julia Worker will execute
-comando = ["--dataset", ds_id, "--batch-size", "1000"]
-
-# We execute the job blocking only our Python thread while polling
-print("Submitting batch processing...")
-resultado = run_job(client, kind="searchbatch", command=comando)
-
-print("Job Finished!")
-print(resultado)
+result = run_job(client, kind="allknn", command=["--dataset", ds_id, "--k", "5"])
 ```
 
-## Step 5: Stress Testing
-
-To see the whole ecosystem working together, run our stress test script that orchestrates the entire process simulating real traffic:
+`stress_client.py` drives the whole loop under load:
 
 ```bash
-cd python
 python stress_client.py --jobs 3
 ```
-
-The script will create a Dataset and submit multiple `searchbatch` jobs asynchronously, probing the server (via HTTP polling of `.job.toml` files) until the local server dispatches and processes all tasks.

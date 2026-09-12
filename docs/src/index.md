@@ -22,6 +22,7 @@ The library executes directly within the host Julia process without requiring ex
 - **Global Metric Operations**: In-process execution of all-pairs nearest neighbors (`allknn`), diverse sampling (`fft`), closest pair discovery (`closestpairs`), and cross-dataset closest pairs (`bichromatic_kclosestpairs`).
 - **Indexed External Identifiers**: `doc_id` resolution is backed by its own column family, and a `doc_id` shared by several items resolves to all of them.
 - **Storage Compaction**: `compact_project!`, and an automatic compaction when a writing session closes, keep reopen latency flat after bulk ingestion.
+- **Typed Errors**: `EngineError` and its four categories (`InvalidRequest`, `NotFound`, `ConflictingState`, `StorageFailure`) describe *why* a call failed, in types rather than prose.
 - **Granular Column-Family Persistence**: Fine-grained persistence where mutations update only the affected RocksDB column families or memory-mapped files.
 
 ---

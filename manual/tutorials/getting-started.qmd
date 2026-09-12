@@ -473,6 +473,42 @@ A numeric argument is read as an internal `_id` first, and only falls back to `d
 
 ---
 
+## Handling Failures
+
+The engine raises typed errors, and the type says *why* a call failed. Four categories carry the meaning, and a program acts on those rather than on the message text:
+
+```julia
+using SimilaritySearchEngine
+
+try
+    searchbatch(h, queries, 10)
+catch e
+    if e isa PendingBacklog
+        # Items were appended but not indexed yet. The engine reports both counts.
+        @info "indexing $(e.staged - e.connected) pending item(s) first"
+        index!(h)
+        searchbatch(h, queries, 10)
+    elseif e isa ConflictingState
+        rethrow()          # some other state problem: not trained, empty, no index
+    else
+        rethrow()
+    end
+end
+```
+
+The categories, and when each one appears:
+
+| category | meaning | typical cause |
+| :--- | :--- | :--- |
+| `InvalidRequest` | the call cannot be honoured as written | a `DenseItem` appended to a text project, a query of the wrong dimension, `dimension` on a dense project |
+| `NotFound` | something the call named does not exist | `DefaultProfile(:es)` with no profile installed |
+| `ConflictingState` | the project is not in a state that can serve the request | whole-dataset operations against a staged backlog, `ftsearch` before the first `index!` |
+| `StorageFailure` | stored data this version cannot interpret | a project written by a newer layout |
+
+Matching a category catches every specific type beneath it, which is what makes this stable: a future `EngineError` added under `ConflictingState` is already handled by code that matches the category. Matching a concrete type (`PendingBacklog`, `WrongDimension`, `InvalidOption`) is for when the distinction matters, and those carry the detail — counts, expected dimension, the offending keyword.
+
+---
+
 ## Summary
 
 This tutorial demonstrated the core lifecycle of `SimilaritySearchEngine.jl`:
@@ -483,3 +519,4 @@ This tutorial demonstrated the core lifecycle of `SimilaritySearchEngine.jl`:
 5. Hyperparameter calibration (`calibrate!`) for guaranteed target recall.
 6. In-process execution of whole-dataset metric operations.
 7. Indexed retrieval by external identifier, and storage compaction on close.
+8. Failure handling through typed errors and their four categories.

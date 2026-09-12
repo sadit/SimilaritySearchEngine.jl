@@ -1,8 +1,8 @@
 using Documenter, SimilaritySearchEngine
-using SimilaritySearchEngine: Schema, Project, IndexEngine, Persistence
+using SimilaritySearchEngine: Errors, Schema, Project, IndexEngine, Persistence
 
 makedocs(;
-    modules=[SimilaritySearchEngine, Schema, Project, IndexEngine, Persistence],
+    modules=[SimilaritySearchEngine, Errors, Schema, Project, IndexEngine, Persistence],
     authors="Eric S. Tellez",
     repo="https://github.com/sadit/SimilaritySearchEngine.jl/blob/{commit}{path}#L{line}",
     sitename="SimilaritySearchEngine.jl",

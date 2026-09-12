@@ -229,6 +229,7 @@ window.Quarto = {
   <li><a href="#bichromatic-closest-pairs-bichromatic_kclosestpairs" id="toc-bichromatic-closest-pairs-bichromatic_kclosestpairs" class="nav-link" data-scroll-target="#bichromatic-closest-pairs-bichromatic_kclosestpairs">4. Bichromatic Closest Pairs: <code>bichromatic_kclosestpairs</code></a></li>
   </ul></li>
   <li><a href="#metadata-retrieval-fetch_items-and-exists" id="toc-metadata-retrieval-fetch_items-and-exists" class="nav-link" data-scroll-target="#metadata-retrieval-fetch_items-and-exists">Metadata Retrieval: <code>fetch_items</code> and <code>exists</code></a></li>
+  <li><a href="#handling-failures" id="toc-handling-failures" class="nav-link" data-scroll-target="#handling-failures">Handling Failures</a></li>
   <li><a href="#summary" id="toc-summary" class="nav-link" data-scroll-target="#summary">Summary</a></li>
   </ul>
 </nav>
@@ -584,9 +585,68 @@ window.Quarto = {
 <p>A numeric argument is read as an internal <code>_id</code> first, and only falls back to <code>doc_id</code> resolution when no record holds that <code>_id</code>.</p>
 <hr>
 </section>
+<section id="handling-failures" class="level2">
+<h2 class="anchored" data-anchor-id="handling-failures">Handling Failures</h2>
+<p>The engine raises typed errors, and the type says <em>why</em> a call failed. Four categories carry the meaning, and a program acts on those rather than on the message text:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb32"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a><span class="im">using</span> <span class="bu">SimilaritySearchEngine</span></span>
+<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a><span class="cf">try</span></span>
+<span id="cb32-4"><a href="#cb32-4" aria-hidden="true" tabindex="-1"></a>    <span class="fu">searchbatch</span>(h, queries, <span class="fl">10</span>)</span>
+<span id="cb32-5"><a href="#cb32-5" aria-hidden="true" tabindex="-1"></a><span class="cf">catch</span> <span class="cn">e</span></span>
+<span id="cb32-6"><a href="#cb32-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="cn">e</span> isa PendingBacklog</span>
+<span id="cb32-7"><a href="#cb32-7" aria-hidden="true" tabindex="-1"></a>        <span class="co"># Items were appended but not indexed yet. The engine reports both counts.</span></span>
+<span id="cb32-8"><a href="#cb32-8" aria-hidden="true" tabindex="-1"></a>        <span class="pp">@info</span> <span class="st">"indexing </span><span class="sc">$</span>(<span class="cn">e</span>.staged <span class="op">-</span> <span class="cn">e</span>.connected)<span class="st"> pending item(s) first"</span></span>
+<span id="cb32-9"><a href="#cb32-9" aria-hidden="true" tabindex="-1"></a>        <span class="fu">index!</span>(h)</span>
+<span id="cb32-10"><a href="#cb32-10" aria-hidden="true" tabindex="-1"></a>        <span class="fu">searchbatch</span>(h, queries, <span class="fl">10</span>)</span>
+<span id="cb32-11"><a href="#cb32-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">elseif</span> <span class="cn">e</span> isa ConflictingState</span>
+<span id="cb32-12"><a href="#cb32-12" aria-hidden="true" tabindex="-1"></a>        <span class="fu">rethrow</span>()          <span class="co"># some other state problem: not trained, empty, no index</span></span>
+<span id="cb32-13"><a href="#cb32-13" aria-hidden="true" tabindex="-1"></a>    <span class="cf">else</span></span>
+<span id="cb32-14"><a href="#cb32-14" aria-hidden="true" tabindex="-1"></a>        <span class="fu">rethrow</span>()</span>
+<span id="cb32-15"><a href="#cb32-15" aria-hidden="true" tabindex="-1"></a>    <span class="cf">end</span></span>
+<span id="cb32-16"><a href="#cb32-16" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>The categories, and when each one appears:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: left;">category</th>
+<th style="text-align: left;">meaning</th>
+<th style="text-align: left;">typical cause</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;"><code>InvalidRequest</code></td>
+<td style="text-align: left;">the call cannot be honoured as written</td>
+<td style="text-align: left;">a <code>DenseItem</code> appended to a text project, a query of the wrong dimension, <code>dimension</code> on a dense project</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>NotFound</code></td>
+<td style="text-align: left;">something the call named does not exist</td>
+<td style="text-align: left;"><code>DefaultProfile(:es)</code> with no profile installed</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>ConflictingState</code></td>
+<td style="text-align: left;">the project is not in a state that can serve the request</td>
+<td style="text-align: left;">whole-dataset operations against a staged backlog, <code>ftsearch</code> before the first <code>index!</code></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>StorageFailure</code></td>
+<td style="text-align: left;">stored data this version cannot interpret</td>
+<td style="text-align: left;">a project written by a newer layout</td>
+</tr>
+</tbody>
+</table>
+<p>Matching a category catches every specific type beneath it, which is what makes this stable: a future <code>EngineError</code> added under <code>ConflictingState</code> is already handled by code that matches the category. Matching a concrete type (<code>PendingBacklog</code>, <code>WrongDimension</code>, <code>InvalidOption</code>) is for when the distinction matters, and those carry the detail — counts, expected dimension, the offending keyword.</p>
+<hr>
+</section>
 <section id="summary" class="level2">
 <h2 class="anchored" data-anchor-id="summary">Summary</h2>
-<p>This tutorial demonstrated the core lifecycle of <code>SimilaritySearchEngine.jl</code>: 1. Project creation with explicit payload engines and indexing backends. 2. Ingestion staging via <code>append_items!</code> with deferred graph or vocabulary indexing via <code>index!</code>. 3. Nearest-neighbor querying with metadata filtering, an explicit candidate budget, and soft deletion handling. 4. Batch query execution, hydrated (<code>search</code>) or raw (<code>searchbatch</code>). 5. Hyperparameter calibration (<code>calibrate!</code>) for guaranteed target recall. 6. In-process execution of whole-dataset metric operations. 7. Indexed retrieval by external identifier, and storage compaction on close.</p>
+<p>This tutorial demonstrated the core lifecycle of <code>SimilaritySearchEngine.jl</code>: 1. Project creation with explicit payload engines and indexing backends. 2. Ingestion staging via <code>append_items!</code> with deferred graph or vocabulary indexing via <code>index!</code>. 3. Nearest-neighbor querying with metadata filtering, an explicit candidate budget, and soft deletion handling. 4. Batch query execution, hydrated (<code>search</code>) or raw (<code>searchbatch</code>). 5. Hyperparameter calibration (<code>calibrate!</code>) for guaranteed target recall. 6. In-process execution of whole-dataset metric operations. 7. Indexed retrieval by external identifier, and storage compaction on close. 8. Failure handling through typed errors and their four categories.</p>
 
 
 </section>

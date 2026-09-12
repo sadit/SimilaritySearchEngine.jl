@@ -46,12 +46,13 @@ resolves the base libraries from the registry unless you develop them by path as
 - **Target Recall Calibration**: The `calibrate!` function executes hyperparameter optimization to calibrate beam-search configurations for target recall constraints (`minrecall`).
 - **Whole-Dataset Metric Operations**: Synchronous, in-process execution of all-pairs nearest neighbors (`allknn`), diverse center selection (`fft`), closest pair discovery (`closestpairs`), and cross-dataset closest pairs (`bichromatic_kclosestpairs`).
 - **Granular Storage Persistence**: High-throughput persistence utilizing a hybrid layout of RocksDB column families and dedicated memory-mapped vector files (`dense_vectors.mmapdb`).
+- **Typed Errors**: Deliberate failures are raised as `EngineError` subtypes grouped into four categories (`InvalidRequest`, `NotFound`, `ConflictingState`, `StorageFailure`), so a caller can act on a failure without interpreting its message.
 
 ---
 
 ## Ecosystem Role
 
-`SimilaritySearchEngine.jl` provides the core embedded engine functionality. Higher-level services—such as HTTP REST APIs, asynchronous task workers, and command-line interfaces—are provided by the sibling package `SimilaritySearchServer.jl`, which uses this embedded engine directly.
+`SimilaritySearchEngine.jl` provides the core embedded engine functionality. Higher-level services—HTTP REST APIs, asynchronous job workers, and command-line interfaces—are provided by `SimilaritySearchServer`, which lives in the same repository under `server/` as a separate package with its own dependency set. It consumes this engine's public API and nothing beneath it; the engine, in turn, knows nothing about HTTP status codes or exit codes.
 
 ---
 

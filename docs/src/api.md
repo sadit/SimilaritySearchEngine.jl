@@ -16,6 +16,17 @@ Modules = [SimilaritySearchEngine]
 Order   = [:type, :function]
 ```
 
+## `Errors`
+
+The typed failures every other module raises: four categories (`InvalidRequest`, `NotFound`,
+`ConflictingState`, `StorageFailure`) and the concrete types beneath them. A consumer maps
+categories to its own vocabulary -- status codes, exit codes -- rather than reading messages.
+
+```@autodocs
+Modules = [SimilaritySearchEngine.Errors]
+Order   = [:type, :function]
+```
+
 ## `IndexEngine`
 
 The `AbstractSearchEngine` type hierarchy, insertion/search, calibration, and the

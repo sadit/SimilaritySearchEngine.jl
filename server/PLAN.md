@@ -1,15 +1,27 @@
 # Technical Specification: SimilaritySearchServer API
 
-!!! note "Development strategy change (2026-08-18): active work now leads in `SimilaritySearchEngine.jl`"
-    On user request, fine-grained development (bug fixes, API refinements, new engine-level
-    functionality, test hardening) now happens first in the sibling package
-    `/home/sadit/Research/SimilaritySearchEngine.jl` (the extracted `Dataset`/`Schema`/
-    `IndexEngine`/`Persistence` + embedded API, PLAN.md §8.5) and gets **ported over here
-    afterward** — updating this package's call sites/HTTP handlers/CLI commands to match,
-    then re-running this package's full suite to confirm nothing broke. This reverses the
-    direction development had been going in through chunk 22: every previous chunk landed
-    directly here, and `SimilaritySearchEngine.jl` only came to exist as an extraction out of
-    this package. See that package's own `DEVELOPMENT_STRATEGY.md` for the full rationale.
+!!! warning "Read this as a specification with a date on it (2026-09-12)"
+    This document is the design record of the HTTP API, the job model, tokens, cursors and
+    pagination, and it is still the reference for *what* the server does and why. Parts of it
+    describe *how* in terms that no longer hold, because the engine underneath moved:
+
+    - **There is no JLD2 snapshot per dataset.** The engine persists its own index, so a
+      dataset is the project directory; `dump` bundles that directory and `load` restores it.
+      Every passage about `save_snapshot`/`load_snapshot`, snapshot layouts, or "snapshot not
+      found" is historical.
+    - **The server holds one `EmbeddedEngine` per dataset**, not a `ProjectManager` plus an
+      `AbstractSearchEngine` it wires together; it calls the engine's public API and does not
+      reach into `IndexEngine`/`Project`.
+    - **`index_kind` names an engine/backend pair** (`sparse_invfile` is new), and failures
+      are typed: categories map to status codes and exit codes (see `docs/manual.md` §5).
+    - **Both packages live in one repository** (this one), the engine at the root and the
+      server under `server/`. Passages about a "sibling package" at another path, and about
+      porting work across repositories after the fact, describe an arrangement that ended on
+      2026-09-12: the two are now developed together and tested in the same CI run. See
+      `../DEVELOPMENT_STRATEGY.md`.
+
+    `docs/manual.md` is the current description of the implementation; where the two
+    disagree, that one is right.
     Treat this as the standing default for "what's next" until told otherwise.
 
 ## 1. System Overview & Application Architecture

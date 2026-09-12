@@ -319,6 +319,35 @@ When a project is reopened, stored forward edges are reloaded and bidirectional 
 
 ---
 
+## Failure Reporting: Typed Errors and Their Boundaries
+
+Every failure the engine raises deliberately is an `EngineError`, and the type is the contract. Four abstract categories sit beneath it, and a concrete type beneath each:
+
+| category | meaning | concrete types |
+|---|---|---|
+| `InvalidRequest` | the call cannot be honoured as written; retrying it unchanged fails again | `PayloadMismatch`, `WrongDimension`, `UnknownBackend`, `InvalidOption`, `UnsupportedOperation` |
+| `NotFound` | something the call named does not exist | `ProfileNotInstalled` |
+| `ConflictingState` | the request is well formed but the project is not in a state that can serve it; the same call succeeds later | `PendingBacklog`, `NothingStaged`, `NoIndex`, `NotTrained`, `EmptyProject` |
+| `StorageFailure` | what was read back cannot be interpreted | `CorruptedStorage` |
+
+Concrete types carry structured detail where a caller can use it: `PendingBacklog` reports the staged and connected counts, `WrongDimension` the expected and received lengths, `InvalidOption` the keyword at fault.
+
+**Mapping lives at each boundary, never in the engine.** The engine does not know what an HTTP status code or an exit code is. Its consumers translate:
+
+```julia
+try
+    search(handle, query, 10)
+catch e
+    e isa ConflictingState && return retry_after_indexing()
+    e isa NotFound && return not_found()
+    rethrow()
+end
+```
+
+`SimilaritySearchServer` maps categories to status codes (`NotFound` to 404, `ConflictingState` to 409, `InvalidRequest` to 400, anything else to 500) and its CLIs map the same categories to exit codes (4, 5, 2, 70), so a shell script can branch on the reason without reading output.
+
+The alternative — bare `error("...")` — forces every consumer to classify by message text, which breaks silently the first time the wording improves. That had already happened here: this engine's own concurrency test recognized a refused whole-dataset operation with `occursin("requires no pending backlog", e.msg)`, and now matches `PendingBacklog` instead.
+
 ## Dual Logging Architecture: Reporters vs. Observers
 
 Contexts maintain two isolated logging channels:

@@ -226,12 +226,13 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <li><strong>Target Recall Calibration</strong>: The <code>calibrate!</code> function executes hyperparameter optimization to calibrate beam-search configurations for target recall constraints (<code>minrecall</code>).</li>
 <li><strong>Whole-Dataset Metric Operations</strong>: Synchronous, in-process execution of all-pairs nearest neighbors (<code>allknn</code>), diverse center selection (<code>fft</code>), closest pair discovery (<code>closestpairs</code>), and cross-dataset closest pairs (<code>bichromatic_kclosestpairs</code>).</li>
 <li><strong>Granular Storage Persistence</strong>: High-throughput persistence utilizing a hybrid layout of RocksDB column families and dedicated memory-mapped vector files (<code>dense_vectors.mmapdb</code>).</li>
+<li><strong>Typed Errors</strong>: Deliberate failures are raised as <code>EngineError</code> subtypes grouped into four categories (<code>InvalidRequest</code>, <code>NotFound</code>, <code>ConflictingState</code>, <code>StorageFailure</code>), so a caller can act on a failure without interpreting its message.</li>
 </ul>
 <hr>
 </section>
 <section id="ecosystem-role" class="level2">
 <h2 class="anchored" data-anchor-id="ecosystem-role">Ecosystem Role</h2>
-<p><code>SimilaritySearchEngine.jl</code> provides the core embedded engine functionality. Higher-level services—such as HTTP REST APIs, asynchronous task workers, and command-line interfaces—are provided by the sibling package <code>SimilaritySearchServer.jl</code>, which uses this embedded engine directly.</p>
+<p><code>SimilaritySearchEngine.jl</code> provides the core embedded engine functionality. Higher-level services—HTTP REST APIs, asynchronous job workers, and command-line interfaces—are provided by <code>SimilaritySearchServer</code>, which lives in the same repository under <code>server/</code> as a separate package with its own dependency set. It consumes this engine’s public API and nothing beneath it; the engine, in turn, knows nothing about HTTP status codes or exit codes.</p>
 <hr>
 </section>
 <section id="manual-navigation" class="level2">
