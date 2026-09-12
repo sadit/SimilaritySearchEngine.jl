@@ -132,6 +132,8 @@ mutable struct EmbeddedEngine
     pending_flush::Base.RefValue{Bool}
     schema_version::Int
     dense_vectors::Base.RefValue{Union{Nothing,MMapMatrixDatabase}}
+    read_only::Bool
+    wrote::Base.RefValue{Bool}
 end
 
 """
@@ -357,7 +359,8 @@ function create_project(workdir::String, dataset::String;
         IndexEngine.create_sparse_engine(; distance=dist, dimension, on_change, log_io=nothing) :
         IndexEngine.create_engine(back; distance=dist, minrecall, textmodel, on_change, log_io=nothing)
     Persistence.save_fields!(store, IndexEngine.snapshot_state(eng))
-    return EmbeddedEngine(workdir, dataset, dir, project, eng, store, pending_flush, schema_version, dense_vectors)
+    return EmbeddedEngine(workdir, dataset, dir, project, eng, store, pending_flush, schema_version,
+                          dense_vectors, false, Ref(true))
 end
 
 """
@@ -455,11 +458,12 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
             kinds were restructured stored a Julia type there instead of a symbol, and has to be \
             rebuilt rather than reopened.""")
     end
-    return EmbeddedEngine(workdir, dataset, dir, project, engine, store, pending_flush, schema_version, dense_vectors)
+    return EmbeddedEngine(workdir, dataset, dir, project, engine, store, pending_flush, schema_version,
+                          dense_vectors, read_only, Ref(false))
 end
 
 """
-    close_project!(handle::EmbeddedEngine)
+    close_project!(handle::EmbeddedEngine; compact::Bool=true)
 
 Flushes the engine's index one final time and closes the project's RocksDB connection
 (and, for a `DenseEngine{GraphBackend}` that ever had a vector appended, its `MMapMatrixDatabase`
@@ -469,16 +473,46 @@ saved the instant it was reported -- so this only does the final `:index` save f
 `DenseEngine{<:ExactBackend}`. Every other field (`deleted_ids`, `opt_beamsearch`, ...) is, for every
 kind, already persisted immediately by whichever call changed it (`delete_item!`,
 `calibrate!`, ...).
+
+Then, unless `compact=false`, it compacts the project's storage through
+[`compact_project!`](@ref) -- a no-op for a read-only handle or a session that only read. That
+is what keeps the *next* open fast (2.97s versus 0.28s on a 50k-vector project, measured
+2026-09-10); pass `compact=false` when closing is on a latency path and the next open is not.
 """
-function close_project!(handle::EmbeddedEngine)
+function close_project!(handle::EmbeddedEngine; compact::Bool=true)
     handle.pending_flush[] = false
     if !(handle.engine isa Union{IndexEngine.DenseEngine{IndexEngine.GraphBackend},
                                  IndexEngine.SparseEngine, IndexEngine.FullTextEngine})
         Persistence.save_field!(handle.store, :index, handle.engine.backend.index)
     end
     handle.dense_vectors[] === nothing || close(handle.dense_vectors[])
+    compact && compact_project!(handle)
     Project.close_project(handle.project)
     return nothing
+end
+
+"""
+    compact_project!(handle::EmbeddedEngine; force::Bool=false) -> Bool
+
+Compacts the project's RocksDB storage now, and reports whether it actually ran.
+
+Skipped, and `false` returned, when the handle is read-only (it cannot write) or when this
+session has not written anything -- opening a project to run queries and closing it again
+leaves nothing to compact, and compaction is not free. `force=true` runs it regardless, for
+a caller that knows another process did the writing.
+
+Worth understanding rather than treating as housekeeping: what a bulk write session leaves
+behind is a write-ahead log the *next* open has to replay, and that shows up as open
+latency, not write latency. Measured 2026-09-10 on a 50k-vector dense project: 2.97s to
+reopen without this, 0.28s with it, for 0.03s of compaction. It runs automatically from
+[`close_project!`](@ref) (pass `compact=false` there to skip it), so an explicit call is for
+compacting mid-session -- after a big ingest that the process will keep serving from, say.
+"""
+function compact_project!(handle::EmbeddedEngine; force::Bool=false)
+    (handle.read_only || !(force || handle.wrote[])) && return false
+    Project.compact_all!(handle.project)
+    handle.wrote[] = false
+    return true
 end
 
 """
@@ -515,6 +549,7 @@ alternative made switching a project from a graph to a brute-force scan a change
 that fed it.
 """
 function index!(handle::EmbeddedEngine)
+    handle.wrote[] = true
     engine = handle.engine
     if engine isa IndexEngine.DenseEngine{IndexEngine.GraphBackend}
         IndexEngine.index!(engine)
@@ -603,6 +638,7 @@ _check_item(engine, item::Schema.AbstractItem) =
         (item.doc_id === nothing ? "" : " (doc_id $(item.doc_id))"))
 
 function append_items!(handle::EmbeddedEngine, items::AbstractVector{<:Schema.AbstractItem})
+    handle.wrote[] = true
     engine = handle.engine
     project = handle.project
     is_text = IndexEngine.payload_kind(engine) === :text
@@ -674,9 +710,20 @@ _current_size(engine::IndexEngine.DenseEngine{IndexEngine.GraphBackend}) = lengt
 _current_size(engine::IndexEngine.FullTextEngine) = length(engine.staged)
 _current_size(engine::IndexEngine.AbstractSearchEngine) = length(engine.backend.index)
 
-function _search_with_filter(engine::IndexEngine.AbstractSearchEngine, project::Project.ProjectManager, query, k::Int, predicate; minrecall)
-    overfetch = max(k * 5, k + 20)
-    raw = IndexEngine.search_live(engine, query, overfetch; bs_override=nothing, minrecall, policy=nothing)
+"""
+    _search_with_filter(engine, project, query, k, predicate; minrecall, candidates)
+
+Top-`k` under a metadata `predicate`: asks the index for `candidates` hits, keeps the ones
+the predicate accepts, stops at `k`.
+
+One pass, not a widening loop. The candidate budget is what the caller pays for and what
+the caller therefore names: every candidate costs two RocksDB reads and two decodes (the
+record and its `meta`), so a budget that grows itself until `k` is satisfied would let a
+selective predicate turn one query into a full scan without anybody asking for it. See
+[`search`](@ref) for what to set it to.
+"""
+function _search_with_filter(engine::IndexEngine.AbstractSearchEngine, project::Project.ProjectManager, query, k::Int, predicate; minrecall, candidates::Int)
+    raw = IndexEngine.search_live(engine, query, max(candidates, k); bs_override=nothing, minrecall, policy=nothing)
 
     ids = Int32[]
     dists = Float32[]
@@ -714,24 +761,30 @@ function _hydrate_results(project::Project.ProjectManager, res_knn)
 end
 
 """
-    _resolve_record(project, raw_id) -> Union{Schema.MetadataRecord, Nothing}
+    _resolve_records(project, raw_id) -> Vector{Schema.MetadataRecord}
 
-The record `raw_id` names, whether it is an internal `_id` or a caller-supplied `doc_id`.
+The records `raw_id` names, whether it is an internal `_id` or a caller-supplied `doc_id`.
 
-Tries the numeric reading first, because it is a direct key lookup, and falls back to
-`Project.find_by_doc_id`'s linear scan. A numeric-looking `doc_id` therefore resolves as an
-`_id` if one exists with that value -- an ambiguity inherent to accepting both in one argument,
-and the reason [`fetch_items`](@ref) and [`exists`](@ref) share this function rather than each
-inventing its own precedence.
+Tries the numeric reading first, because it is a direct key lookup, and it can only ever
+name one record. A numeric-looking `doc_id` therefore resolves as an `_id` if one exists
+with that value -- an ambiguity inherent to accepting both in one argument, and the reason
+[`fetch_items`](@ref) and [`exists`](@ref) share this function rather than each inventing its
+own precedence.
+
+Everything else is a `doc_id` lookup through `Project.find_all_by_doc_id`, which returns
+however many records carry exactly that `doc_id` -- zero, one, or several. A vector, not a
+record, because `doc_id` is a caller-chosen external id that nothing here requires to be
+unique: appending two items under the same one is allowed, and the scan this replaced
+answered such a lookup with whichever of them it reached first.
 """
-function _resolve_record(project::Project.ProjectManager, raw_id)
+function _resolve_records(project::Project.ProjectManager, raw_id)
     id_str = string(raw_id)
     maybe_int = tryparse(Int, id_str)
     if maybe_int !== nothing
         record = get_metadata(project, maybe_int)
-        record === nothing || return record
+        record === nothing || return [record]
     end
-    find_by_doc_id(project, id_str)
+    find_all_by_doc_id(project, id_str)
 end
 
 """
@@ -769,14 +822,23 @@ end
 Dense vector search, hydrated with each hit's original id (mirrors `Server.handle_search`
 minus the HTTP/telemetry/pagination machinery). `filter`, if given, is a
 `(record::Schema.MetadataRecord, meta) -> Bool` predicate function called on each
-overfetched candidate's record and (lazily decoded, see `Schema.decode_meta`) `meta`
-(over-fetches candidates, drops the ones the predicate rejects, keeps up to `k`) -- e.g.
-`(record, meta) -> meta !== nothing && meta.year >= 2020`. A caller here already has real
+candidate's record and (lazily decoded, see `Schema.decode_meta`) `meta` -- e.g.
+`(record, meta) -> meta !== nothing && meta["year"] >= 2020`. A caller here already has real
 Julia functions to work with, not a JSON wire format to encode a filter into, so `filter`
 is just that function, not a name-keyed spec for some interpreter to replay. `meta` is
-fetched (one extra `Project.get_meta` read per overfetched candidate) even if `record`
-alone would've been enough for a given predicate -- the common case (filtering on a
-`meta` field) needs it, and there's no way to know a predicate won't from here.
+fetched (one extra `Project.get_meta` read per candidate) even if `record` alone would've
+been enough for a given predicate -- the common case (filtering on a `meta` field) needs it,
+and there's no way to know a predicate won't from here.
+
+`candidates` is how many hits the index is asked for before filtering, and it matters
+whenever `filter` is given: **the search returns fewer than `k` results when fewer than `k`
+of those candidates satisfy the predicate**, quietly, because the alternative -- growing the
+budget until `k` is met -- turns a selective predicate into a full scan of the collection at
+two RocksDB reads per item. The default of `2k` suits a predicate that most items pass (a
+language, a type, a recent date). Match it to how selective yours is: a predicate that
+roughly one item in `n` satisfies needs about `n * k` candidates to fill a page of `k`, so
+`search(h, q, 10; filter=f, candidates=8192)` is the shape of a query filtering on something
+rare, and the cost of that is ~8k candidate reads. Without `filter`, `candidates` is unused.
 
 Without `filter`, this is a plain top-`k` search: soft-deleted candidates are not hidden
 or backfilled -- they're returned with `deleted=true` and no hydrated metadata (see
@@ -795,14 +857,113 @@ Returns a `Vector{`[`SearchResult`](@ref)`}` -- `_id` is the internal id, `doc_i
 caller's own, and note that those two field names sit the opposite way round from the named
 tuple this replaced.
 """
-function search(handle::EmbeddedEngine, vector, k::Int=10; filter=nothing, minrecall=nothing)
+function search(handle::EmbeddedEngine, vector, k::Int=10; filter=nothing, minrecall=nothing, candidates::Int=2k)
     query = _search_query(handle.engine, vector)
     needs_save = minrecall !== nothing && handle.engine isa IndexEngine.DenseEngine{IndexEngine.GraphBackend} && isempty(handle.engine.backend.opt_beamsearch)
     res_knn = filter === nothing ?
         IndexEngine.search_live(handle.engine, query, k; bs_override=nothing, minrecall, policy=nothing) :
-        _search_with_filter(handle.engine, handle.project, query, k, filter; minrecall)
+        _search_with_filter(handle.engine, handle.project, query, k, filter; minrecall, candidates)
     needs_save && Persistence.save_field!(handle.store, :opt_beamsearch, handle.engine.backend.opt_beamsearch)
     return _hydrate_results(handle.project, res_knn)
+end
+
+"""
+    _batch_query_database(engine, queries) -> SimilaritySearch.AbstractDatabase
+
+`queries` in the form this project's index searches a whole batch with: a `MatrixDatabase`
+of `Float32` columns for a dense project, a `VectorDatabase` of `SparseVector{Float32,Int32}`
+for a sparse one.
+
+Each query goes through [`_search_query`](@ref) first, so a batch rejects exactly what a
+single query rejects (wrong payload kind, wrong dimension) and says the same thing when it
+does -- the batch entry point is not a second, laxer door into the same index.
+"""
+function _batch_query_database(engine::IndexEngine.AbstractSearchEngine, queries)
+    isempty(queries) && error("searchbatch needs at least one query")
+    kind = IndexEngine.payload_kind(engine)
+    kind === :text &&
+        error("searchbatch is for dense and sparse projects; a text project answers strings, " *
+              "so batch it with `[ftsearch(h, q, k) for q in queries]` (one query at a time)")
+    prepared = [_search_query(engine, q) for q in queries]
+    if kind === :dense
+        dim = length(first(prepared))
+        all(q -> length(q) == dim, prepared) ||
+            error("every query in a batch must have the project's dimension ($dim)")
+        M = Matrix{Float32}(undef, dim, length(prepared))
+        for (j, q) in enumerate(prepared)
+            M[:, j] = q
+        end
+        return MatrixDatabase(M)
+    end
+    return VectorDatabase(prepared)
+end
+
+"""
+    searchbatch(handle::EmbeddedEngine, queries, k::Int=10) -> (ids, dists)
+
+`k` nearest neighbours for every query at once: two `(k, length(queries))` matrices, of
+`UInt32` internal ids and `Float32` distances, exactly as the library returns them. A column
+with fewer than `k` hits is padded with `0` ids and `typemax(Float32)` distances.
+
+This is the raw, unhydrated form -- no `doc_id`, no soft-delete flags, no RocksDB reads at
+all -- and it exists because that is what the operations built on a batch of queries
+(evaluation loops, offline scoring, feeding another index) actually want.
+`search(handle, queries, k)` is the hydrated form.
+
+**A whole-dataset operation, in the same family as [`allknn`](@ref)/[`fft`](@ref)**, not a
+concurrent search: it takes the project's write lock (full exclusivity, including from other
+batch calls and from `index!`) and refuses to run while items are staged but not yet indexed.
+See `IndexEngine.searchbatch_live` for why that is not a choice.
+
+Worth it whenever there are many queries: measured 2026-09-10 over 50k dense vectors on 8
+threads, 39k queries/s here against 3.6k/s calling [`search`](@ref) one query at a time.
+
+A text project has no batch entry point here -- its queries are strings the library resolves
+one at a time -- so call [`ftsearch`](@ref) in a loop.
+"""
+function searchbatch(handle::EmbeddedEngine, queries, k::Int=10)
+    Q = _batch_query_database(handle.engine, queries)
+    IndexEngine.searchbatch_live(handle.engine, Q, k)
+end
+
+"""
+    search(handle::EmbeddedEngine, queries::AbstractVector{<:AbstractVector{<:Real}}, k::Int=10) -> Vector{Vector{SearchResult}}
+
+Hydrated batch search: one inner vector of [`SearchResult`](@ref) per query, in the order
+`queries` gave, each ordered by ascending distance.
+
+The same results [`search`](@ref) returns for one query, computed for all of them in one
+parallel pass ([`searchbatch`](@ref)) and hydrated the same way -- one `doc_id` lookup and one
+soft-delete check per hit. It carries `searchbatch`'s constraints with it (write lock, no
+staged backlog, dense or sparse only), because it is that call plus hydration.
+
+No `filter` keyword here: filtering is a per-query candidate budget (see [`search`](@ref)'s
+`candidates`), and mixing that with a batch whose whole point is one uniform `k` for every
+query would make the cost of a call impossible to read off it. Ask for a larger `k` and apply
+the predicate yourself, or loop over the single-query [`search`](@ref) when the predicate is
+what matters.
+"""
+function search(handle::EmbeddedEngine, queries::AbstractVector{<:AbstractVector{<:Real}}, k::Int=10)
+    ids, dists = searchbatch(handle, queries, k)
+    engine = handle.engine
+    out = Vector{Vector{SearchResult}}(undef, size(ids, 2))
+    for j in axes(ids, 2)
+        hits = SearchResult[]
+        for i in axes(ids, 1)
+            id = ids[i, j]
+            id == 0 && continue
+            _id = Int32(id)
+            if _id in engine.deleted_ids
+                push!(hits, SearchResult(_id, nothing, Float32(dists[i, j]), true))
+            else
+                record = get_metadata(handle.project, _id)
+                push!(hits, SearchResult(_id, record === nothing ? nothing : record.doc_id,
+                                         Float32(dists[i, j]), false))
+            end
+        end
+        out[j] = hits
+    end
+    return out
 end
 
 """
@@ -880,6 +1041,7 @@ Soft-deletes `_id` (future searches exclude it, the underlying index is untouche
 immediately persists just the `deleted_ids` field -- mirrors `Server.handle_delete_item`.
 """
 function delete_item!(handle::EmbeddedEngine, _id::Integer)
+    handle.wrote[] = true
     IndexEngine.mark_deleted!(handle.engine, _id)
     Persistence.save_field!(handle.store, :deleted_ids, handle.engine.deleted_ids)
     return nothing
@@ -888,9 +1050,11 @@ end
 """
     fetch_items(handle::EmbeddedEngine, ids) -> Vector{Schema.StoredItem}
 
-Batch retrieval by id -- each element of `ids` may be the internal `_id` or the
-caller-supplied `doc_id` (see [`_resolve_record`](@ref)). Mirrors `Server.handle_fetch`; an id
-that resolves to nothing is skipped, so the result can be shorter than `ids`.
+Batch retrieval by id -- each element of `ids` may be the internal `_id` or a `doc_id` (see
+[`_resolve_records`](@ref)). An id that resolves to nothing is skipped and a `doc_id` shared
+by several items brings back all of them, so the result can be shorter *or longer* than
+`ids`: it is a flat vector of whatever matched, in the order `ids` gave, ties broken by
+ascending `_id`.
 
 Each item comes back whole: the record's fixed fields, its `meta` as a plain
 `Dict{String,Any}`, and `payload` -- the very text or vector that was indexed, read from the
@@ -906,12 +1070,12 @@ function fetch_items(handle::EmbeddedEngine, ids)
     project = handle.project
     results = Schema.StoredItem[]
     for raw_id in ids
-        record = _resolve_record(project, raw_id)
-        record === nothing && continue
-        meta = something(get_meta(project, record._id; lazy=false), Dict{String,Any}())
-        push!(results, Schema.StoredItem(record,
-                                         IndexEngine.stored_payload(handle.engine, record._id),
-                                         meta))
+        for record in _resolve_records(project, raw_id)
+            meta = something(get_meta(project, record._id; lazy=false), Dict{String,Any}())
+            push!(results, Schema.StoredItem(record,
+                                             IndexEngine.stored_payload(handle.engine, record._id),
+                                             meta))
+        end
     end
     return results
 end
@@ -919,19 +1083,23 @@ end
 """
     exists(handle::EmbeddedEngine, ids) -> Vector{ExistsResult}
 
-For each id in `ids` (internal `_id` or caller-supplied `doc_id`, see
-[`_resolve_record`](@ref)), reports whether a record exists and, if so, whether it's been
-soft-deleted. Mirrors `Server.handle_exists`. One result per queried id, in order, including
-the ones that were not found -- unlike [`fetch_items`](@ref), which drops those.
+For each id in `ids` (internal `_id` or a `doc_id`, see [`_resolve_records`](@ref)), reports
+whether a record exists and, if so, whether it's been soft-deleted. One result per *queried
+id*, in order, including the ones that were not found -- unlike [`fetch_items`](@ref), which
+drops those and returns one entry per matching record.
+
+Since a `doc_id` may be carried by several items, the two flags summarize them: `exists` is
+true when at least one record matched, and `deleted` is true only when *every* match is
+soft-deleted, i.e. when asking for that id leaves nothing live to retrieve.
 """
 function exists(handle::EmbeddedEngine, ids)
     project = handle.project
     engine = handle.engine
     results = ExistsResult[]
     for raw_id in ids
-        record = _resolve_record(project, raw_id)
-        found = record !== nothing
-        deleted = found && (record._id in engine.deleted_ids)
+        records = _resolve_records(project, raw_id)
+        found = !isempty(records)
+        deleted = found && all(r -> r._id in engine.deleted_ids, records)
         push!(results, ExistsResult(string(raw_id), found, deleted))
     end
     return results
@@ -948,6 +1116,7 @@ Runs `IndexEngine.calibrate!`'s real hyperparameter sweep for each recall level 
 field is this API's sole persistence mechanism for it.
 """
 function calibrate!(handle::EmbeddedEngine; levels=IndexEngine.DEFAULT_MINRECALL_LEVELS, numqueries::Int=64, ksearch::Int=10, queries=nothing)
+    handle.wrote[] = true
     opt_bs = IndexEngine.calibrate!(handle.engine; levels, numqueries, ksearch, queries)
     Persistence.save_field!(handle.store, :opt_beamsearch, opt_bs)
     return opt_bs

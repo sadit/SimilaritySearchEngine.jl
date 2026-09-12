@@ -1916,4 +1916,32 @@ function neardup_live(engine::DenseEngine, epsilon::Float32, verbose::Bool, reca
     end
 end
 
+"""
+    searchbatch_live(engine::Union{DenseEngine,SparseEngine}, Q::AbstractDatabase, k::Int) -> (ids, dists)
+
+`k` nearest neighbours for every query in `Q` at once, as `(k, length(Q))` matrices of
+`UInt32` ids and `Float32` distances (`0`/`typemax(Float32)` padding a column with fewer
+than `k` hits).
+
+**A whole-dataset operation, not a search.** It belongs with [`allknn_live`](@ref) and the
+other five rather than with [`search_live`](@ref), and for the same reason: it parallelizes
+internally through `SimilaritySearch.searchbatch`'s own `@BATCHES`, so under the default
+`:static` scheduler it cannot run beside another such region -- hence [`write_lock`](@ref)
+(full exclusivity, including from other batch calls) instead of `search_live`'s `read_lock`,
+and hence [`_require_no_backlog`](@ref) for the same staged-versus-connected gap. The
+difference in cost is worth the constraint: one batch of queries runs an order of magnitude
+faster than the same queries one `search_live` call at a time (measured 2026-09-10 on 50k
+dense vectors, 8 threads: 3.6k queries/s sequential, 39k/s batched).
+
+Deleted ids are *not* filtered here -- this is the raw index answer, and telling which hits
+are soft-deleted costs a lookup per hit that a caller wanting raw matrices did not ask for.
+`search(handle, queries, k)` hydrates them; this does not.
+"""
+function searchbatch_live(engine::Union{DenseEngine,SparseEngine}, Q::SimilaritySearch.AbstractDatabase, k::Int)
+    write_lock(engine.lock) do
+        engine isa DenseEngine && _require_no_backlog(engine, "searchbatch")
+        SimilaritySearch.searchbatch(engine.backend.index, engine.backend.ctx, Q, k)
+    end
+end
+
 end # module

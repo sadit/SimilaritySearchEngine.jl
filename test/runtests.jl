@@ -815,4 +815,163 @@ const ACCENT_ITEMS = vcat(
         end
     end
 
+
+    @testset "doc_id resolves through an index, and a shared doc_id returns every item" begin
+        mktempworkdir() do workdir
+            items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:30]]
+            h = create_project(workdir, "docid_ds"; engine=DenseEngine, backend=SearchGraph)
+            append_items!(h, dense_items(items))
+            index!(h)
+
+            # Exact match: "frankenstein_2" is not "frankenstein_20", even though the index
+            # keys of the latter start with the former's bytes.
+            one = fetch_items(h, ["frankenstein_2"])
+            @test length(one) == 1 && one[1].doc_id == "frankenstein_2"
+
+            # Nothing requires doc_id to be unique, so a repeated one brings back every item
+            # carrying it, ascending by _id -- the old scan returned whichever it reached first.
+            append_items!(h, [DenseItem(Float32.(items[5]["vector"]); doc_id="frankenstein_2")])
+            index!(h)
+            twice = fetch_items(h, ["frankenstein_2"])
+            @test [it._id for it in twice] == Int32[2, 31]
+
+            # A numeric argument still means the internal _id, not a doc_id.
+            @test [it._id for it in fetch_items(h, [3])] == Int32[3]
+
+            @test isempty(fetch_items(h, ["nope"]))
+            @test exists(h, ["nope"])[1].exists == false
+
+            # exists() summarizes the matches: found if any, deleted only when all of them are.
+            @test exists(h, ["frankenstein_2"])[1].exists
+            delete_item!(h, 2)
+            @test exists(h, ["frankenstein_2"])[1].deleted == false   # _id 31 is still live
+            delete_item!(h, 31)
+            @test exists(h, ["frankenstein_2"])[1].deleted == true
+            close_project!(h)
+        end
+    end
+
+    @testset "a project written before the doc_id index gets it backfilled on the next open" begin
+        mktempworkdir() do workdir
+            P = SimilaritySearchEngine.Project
+            items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:10]]
+            h = create_project(workdir, "backfill_ds"; engine=DenseEngine, backend=SearchGraph)
+            append_items!(h, dense_items(items))
+            index!(h)
+
+            # Wipe the column family down to what a project written before it existed holds.
+            keys_to_drop = [k for (k, _) in RocksDB.DBIterator(h.project.db; cf=h.project.cf_idx_docid)]
+            for k in keys_to_drop
+                delete!(h.project.db, k, cf=h.project.cf_idx_docid)
+            end
+            @test isempty([k for (k, _) in RocksDB.DBIterator(h.project.db; cf=h.project.cf_idx_docid)])
+            close_project!(h)
+
+            h2 = open_project(workdir, "backfill_ds")
+            @test [it.doc_id for it in fetch_items(h2, ["frankenstein_4"])] == ["frankenstein_4"]
+            # ... and it is a one-time migration: the marker stops the next open from rescanning.
+            @test P.backfill_docid_index!(h2.project) == 0
+            close_project!(h2)
+        end
+    end
+
+    @testset "a filtered search spends the candidate budget it was given, and says so by returning fewer" begin
+        mktempworkdir() do workdir
+            # Exact backend and vectors ranked by construction: item i sits at distance i-1 from
+            # the query, so "the item the predicate wants" has a known rank.
+            h = create_project(workdir, "budget_ds"; engine=DenseEngine, backend=ExhaustiveSearch)
+            append_items!(h, [DenseItem(Float32[i - 1, 0, 0, 0]; doc_id="v$i") for i in 1:64])
+            q = Float32[0, 0, 0, 0]
+
+            wants_the_farthest = (record, meta) -> record.doc_id == "v64"
+            # Default budget is 2k = 2 candidates: the item ranked 64th is not among them.
+            @test isempty(search(h, q, 1; filter=wants_the_farthest))
+            # Paying for the whole collection finds it. This is the documented trade-off.
+            @test [r.doc_id for r in search(h, q, 1; filter=wants_the_farthest, candidates=64)] == ["v64"]
+
+            # A predicate most items satisfy is served by the default budget.
+            @test length(search(h, q, 5; filter=(record, meta) -> true)) == 5
+            close_project!(h)
+        end
+    end
+
+    @testset "batch search answers exactly what one-at-a-time search answers" begin
+        mktempworkdir() do workdir
+            h = create_project(workdir, "batch_ds"; engine=DenseEngine, backend=ExhaustiveSearch)
+            vectors = [Float32[i, i % 7, i % 3, 1] for i in 1:40]
+            append_items!(h, [DenseItem(v; doc_id="b$i") for (i, v) in enumerate(vectors)])
+            queries = vectors[1:2:20]
+
+            batched = search(h, queries, 5)
+            @test length(batched) == length(queries)
+            for (q, hits) in zip(queries, batched)
+                one = search(h, q, 5)
+                @test [r._id for r in hits] == [r._id for r in one]
+                @test [r.doc_id for r in hits] == [r.doc_id for r in one]
+                @test [r.distance for r in hits] ≈ [r.distance for r in one]
+            end
+
+            ids, dists = searchbatch(h, queries, 5)
+            @test size(ids) == (5, length(queries))
+            @test size(dists) == (5, length(queries))
+            @test all(>(0), ids)
+            @test [Int32(ids[i, 1]) for i in 1:5] == [r._id for r in batched[1]]
+
+            # A soft-deleted hit comes back flagged and without a doc_id, same as single search.
+            delete_item!(h, Int(ids[1, 1]))
+            flagged = search(h, queries[1:1], 5)[1][1]
+            @test flagged.deleted && flagged.doc_id === nothing
+            close_project!(h)
+        end
+    end
+
+    @testset "batch search is a whole-dataset operation: no backlog, no text projects" begin
+        mktempworkdir() do workdir
+            h = create_project(workdir, "batchguard_ds"; engine=DenseEngine, backend=SearchGraph)
+            vectors = [Float32[i, 1, 2, 3] for i in 1:30]
+            append_items!(h, [DenseItem(v; doc_id="g$i") for (i, v) in enumerate(vectors)])
+            index!(h)
+            @test size(searchbatch(h, vectors[1:3], 4)[1]) == (4, 3)
+
+            # Staged but not indexed: refused rather than read past the adjacency list.
+            append_items!(h, [DenseItem(Float32[99, 1, 2, 3]; doc_id="g_new")])
+            @test_throws ErrorException searchbatch(h, vectors[1:3], 4)
+            index!(h)
+            @test size(searchbatch(h, vectors[1:3], 4)[1]) == (4, 3)
+            close_project!(h)
+
+            ht = create_project(workdir, "batchtext_ds"; engine=FullTextEngine,
+                                backend=BM25InvertedFile, textmodel=FitFromCorpus())
+            append_items!(ht, [TextItem("some text number $i"; doc_id="t$i") for i in 1:20])
+            index!(ht)
+            @test_throws ErrorException searchbatch(ht, ["some text", "other text"], 3)
+            close_project!(ht)
+        end
+    end
+
+    @testset "compaction runs for a session that wrote and is skipped for one that did not" begin
+        mktempworkdir() do workdir
+            h = create_project(workdir, "compact_ds"; engine=DenseEngine, backend=SearchGraph)
+            vectors = [Float32[i, 2, 3, 4] for i in 1:40]
+            append_items!(h, [DenseItem(v; doc_id="c$i") for (i, v) in enumerate(vectors)])
+            index!(h)
+
+            @test compact_project!(h) == true       # this session wrote
+            @test compact_project!(h) == false      # ... and nothing changed since
+            @test compact_project!(h; force=true) == true
+            before = [r._id for r in search(h, vectors[3], 5)]
+            close_project!(h)
+
+            h2 = open_project(workdir, "compact_ds")
+            @test [r._id for r in search(h2, vectors[3], 5)] == before   # survived compaction
+            @test compact_project!(h2) == false     # a read-only session in practice
+            close_project!(h2; compact=false)
+
+            h3 = open_project(workdir, "compact_ds"; read_only=true)
+            @test compact_project!(h3; force=true) == false   # a read-only handle cannot write
+            @test [r._id for r in search(h3, vectors[3], 5)] == before
+            close_project!(h3)
+        end
+    end
+
 end
