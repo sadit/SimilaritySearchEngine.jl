@@ -1,44 +1,63 @@
-# Development strategy (as of 2026-08-18)
+# Development strategy
 
-Active development now happens **here first**, in `SimilaritySearchEngine.jl` — `Dataset`,
-`Schema`, `IndexEngine`, `Persistence`, and the embedded API (`src/embedded.jl`). Fine-grained
-work (bug fixes, API refinements, new engine-level functionality, test hardening) lands in
-this package first.
+## One repository, two packages (as of 2026-09-12)
 
-Once a piece of work here is settled, it gets **ported over to `SimilaritySearchServer`**
-(the sibling package at `../SimilaritySearchServer`, which depends on this one via
-`Pkg.develop`) — updating its own call sites, HTTP handlers, and CLI commands to match
-whatever changed here, and re-running its full test suite to confirm nothing broke.
+This repository holds two packages, and the split is the point:
 
-This reverses the direction development had been going in until now: previously, every
-chunk landed directly in `SimilaritySearchServer`, and this package only came to exist
-(2026-08-18) as an extraction *out of* it (PLAN.md §8.5 in `SimilaritySearchServer`). Going
-forward, this package is the primary workspace, and `SimilaritySearchServer` is the
-downstream consumer that gets updated afterward, not the other way around.
+```
+SimilaritySearchEngine.jl/     the engine -- an embedded library, no HTTP, no CLI
+└── server/                    SimilaritySearchServer -- REST API, CLIs, jobs, the three apps
+```
 
-**Why:** the user made this call explicitly (`"vamos a cambiar un poco la estrategia de
-desarrollo; nos enfocaremos en SimilaritySearchEngine con detalles finos, y luego
-portaremos a SimilaritySearchServer"`) after the initial extraction + embedded-API chunk
-landed. No specific reason was given beyond wanting fine-detail work to happen at the
-engine level before flowing downstream — treat this as the standing default until told
-otherwise.
+They are **kept in sync on features and separate on failure handling**. One pull request
+changes both when an engine change reaches the surface the server exposes; one CI run tests
+both, so an engine rename breaks the server's build in the commit that caused it rather than
+weeks later.
 
-**How to apply:** when picking up new work with no other explicit target, default to
-scoping it inside `SimilaritySearchEngine.jl` first. Only touch `SimilaritySearchServer`
-once the corresponding engine-level change is done, to port it through (update its
-`Pkg.develop`-linked dependency if the version/API shape changed, fix any call sites,
-re-run its suite). Don't restart both packages' work in lockstep by default — the engine
-leads, the server follows.
+**Why they are not one package.** Loading the server's dependencies costs 1.32s and 28
+transitive packages (Oxygen, HTTP, JLD2, ArgParse and their trees, measured 2026-09-12).
+The engine's whole point is to be embeddable -- `using SimilaritySearchEngine` takes 1.45s
+and a first search 2.3s, both of which a merged package would roughly double for a caller
+who never serves a request. So: separate `Project.toml`s, separate dependency sets,
+separate registration, one repository.
 
-## Audience: `SimilaritySearchServer` is a consumer, not the audience (as of 2026-08-25)
+**Why they are not two repositories,** which is what they were until now: the server sat
+three engine-breaking changes behind for twenty days, and nothing noticed. There is no
+automation that makes two repositories notice each other; a single suite does it for free.
+
+**How to apply.** Develop against `server/`'s environment with the engine developed by path
+(`julia --project=server -e 'using Pkg; Pkg.develop(path=".")'`). A change that alters an
+exported engine name, a keyword, or an error is not done until the server compiles and its
+suite passes in the same commit. Release-wise the two are independent: the server declares a
+`[compat]` range on the engine like any other dependency, and the registry records it as a
+subdirectory package.
+
+## Errors: typed in the engine, mapped at each boundary (as of 2026-09-12)
+
+The engine raises typed exceptions (`EngineError` and its subtypes, `src/errors.jl`). It
+does not know what an HTTP status code is, and it never will. Each consumer maps categories
+to its own vocabulary:
+
+- The HTTP server maps them to status codes -- not found to 404, a conflicting state to 409,
+  an invalid request to 400, anything else to 500.
+- The CLIs map them to exit codes, so a script can branch on the reason without parsing
+  output.
+- A caller using the engine as a library catches whichever type it cares about.
+
+**Why typed rather than `error("...")`:** classifying by message text is what a consumer is
+forced into otherwise, and it breaks silently the first time somebody improves the wording.
+The category is the contract; the message is for humans.
+
+## Audience: the server is a consumer, not the audience (as of 2026-08-25, still true in one repo)
 
 `SimilaritySearchEngine.jl` **also expects people who reach for it as a Julia package** — a
 script or an application that does `using SimilaritySearchEngine`, indexes its own data and
 searches it, with no HTTP server and no CLI anywhere in the picture. That is what
 `src/embedded.jl` is for, and the paragraph-search tutorial is written for exactly that reader.
 
-The section above says the engine leads and the server follows, and that stays true about
-*where work lands*. It should not be read as saying the server is who the engine is for.
+Living in the same repository as the server does not make the server the audience. The two
+travel together; the engine is still written for the reader who has it as a dependency and
+nothing else.
 
 **Why it changes decisions, not just framing:**
 

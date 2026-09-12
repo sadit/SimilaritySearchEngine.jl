@@ -34,3 +34,17 @@
 # Avro) is published. Keep your local Manifest.toml as the dev-checkout environment it is.
 /Manifest.toml
 /test/Manifest.toml
+
+# The server subpackage's runtime state -- RocksDB databases, job and cursor spools -- which is
+# never source and always local. Anchored so it cannot also match test/data/ or server/test/data/,
+# which are fixtures.
+/server/data/
+/server/workdir/
+/server/Manifest.toml
+/server/docs/build/
+
+# The Python client's virtualenv and build droppings
+server/python/venv/
+server/python/**/__pycache__/
+server/python/**/*.egg-info/
+*.pyc

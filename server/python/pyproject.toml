@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "similarity-search-scripts"
+version = "0.2.0"
+description = "Scripting library over similarity-search-serve's HTTP API (not a full SDK)."
+requires-python = ">=3.9"
+dependencies = [
+    "httpx>=0.24",
+]
+
+[project.optional-dependencies]
+numpy = ["numpy"]
+
+[project.scripts]
+similarity-search-stress = "stress_client:main"
+
+[tool.setuptools]
+packages = ["similarity_search"]
+py-modules = ["stress_client"]

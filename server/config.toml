@@ -1,0 +1,28 @@
+# SimilaritySearchServer Configuration File
+# This file contains all possible instance startup configurations.
+
+[paths]
+# Base working directory (relative to the execution directory or absolute)
+workdir = "./workdir"
+# Directory to store datasets (using RocksDB)
+datasets = "datasets"
+# Directory to store indices
+indices = "indices"
+# Spooling directory for asynchronous tasks (queued, running, done, failed)
+spool = "jobs_spool"
+
+[resources]
+# Percentage of threads dedicated to live queries (0-100)
+query_threads_pct = 80
+# Percentage of threads dedicated to batch or heavy jobs
+batch_threads_pct = 20
+
+[server]
+# Listen address
+host = "127.0.0.1"
+# Server port
+port = 8080
+
+[search]
+# Global policy in case of long queries: "deny" or "warn_only"
+long_query_policy = "deny"

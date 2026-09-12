@@ -1,0 +1,48 @@
+name = "SimilaritySearchServer"
+uuid = "381ed5c1-5ad0-425d-862d-01f56a64d1b8"
+version = "0.1.0"
+authors = ["Eric S. Tellez <donsadit@gmail.com>"]
+
+[deps]
+ArgParse = "c7e460c6-2fb9-53a9-8c5b-16f535851c63"
+Avro = "65fc3dcb-49af-4f0c-a340-607eef534a14"
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+Downloads = "f43a241f-c20a-4ad4-852c-f6b1247861c6"
+HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
+JLD2 = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
+Oxygen = "df9a0d86-3283-4920-82dc-4555fc0d1d8b"
+REPL = "3fa0cd96-eef1-5676-8a61-b3b8758bbffb"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+RocksDB = "ed16a602-456b-4bce-8851-d9cfcf778d34"
+SearchModels = "0e966ebe-b704-4a65-8279-db954bfe5da0"
+SimilaritySearch = "053f045d-5466-53fd-b400-a066f88fe02a"
+SimilaritySearchEngine = "727cb942-cf72-4dec-85ff-a934ba36de1c"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
+TextSearch = "7f6f6c8a-3b03-11e9-223d-e7d88259bd6c"
+
+[compat]
+Downloads = "1.7.0"
+JSON3 = "1.14.3"
+Oxygen = "1.10.2"
+SearchModels = "0.5.1"
+SimilaritySearchEngine = "0.1"
+SparseArrays = "1"
+julia = "1.10"
+
+[apps.similarity-search]
+path = "src/apps/similarity-search.jl"
+
+[apps.similarity-search-admin]
+path = "src/apps/similarity-search-ctl.jl"
+
+[apps.similarity-search-serve]
+path = "src/apps/similarity-search-server.jl"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
