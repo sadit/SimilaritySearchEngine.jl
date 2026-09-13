@@ -3,9 +3,9 @@ title: "Tutorials Overview"
 lang: en-US
 ---
 
-This section provides hands-on tutorials for working with `SimilaritySearchEngine.jl`, the embedded engine. To reach the same capabilities over HTTP instead, the [server tutorial](../server/tutorial.qmd) covers the service layer built on top of it.
+This section contains the tutorials for `SimilaritySearchEngine.jl`, the embedded engine. The [server tutorial](../server/tutorial.qmd) presents the same operations over HTTP, through the service layer built on the engine.
 
-- **[Getting Started](getting-started.qmd)**: A comprehensive walkthrough using paragraphs from Mary Shelley's *Frankenstein*. Demonstrates:
+- **[Getting Started](getting-started.qmd)**: a sequence of examples over the paragraphs of Mary Shelley's *Frankenstein*. It covers:
   - Dense vector similarity search using LSI-derived embeddings with `SearchGraph`.
   - Sparse vector indexing with `InvertedFile`.
   - Full-text retrieval with BM25 and TF-IDF models.
@@ -14,11 +14,11 @@ This section provides hands-on tutorials for working with `SimilaritySearchEngin
   - Transactional persistence (closing and reopening projects).
   - Whole-dataset metric operations (`allknn`, `fft`, `closestpairs`, `bichromatic_kclosestpairs`).
 
-- **[Multilingual Paragraph Search](paragraph-search.qmd)**: A large-scale tutorial indexing four corpora across three languages (English, Spanish, Portuguese Project Gutenberg collections, and English Wikipedia). Demonstrates:
+- **[Multilingual Paragraph Search](paragraph-search.qmd)**: indexing of corpora in three languages: the English, Spanish and Portuguese collections of Project Gutenberg, and English Wikipedia. It covers:
   - Fitting and configuring linguistic profiles (`TextProfile`).
   - Orthographic query variant resolution and semantic query expansion.
-  - Empirical benchmarking of indexing throughput, memory overhead, and search latency.
+  - Measurements of indexing rate, memory use, and search latency.
 
-Once the engine's model is familiar, the [server manual](../server/manual.qmd) reads as a thin
-translation layer: an endpoint per call, a status code per error category, and a job per
-whole-dataset operation.
+After the model of the engine is known, the [server manual](../server/manual.qmd) describes the
+translation it performs: one endpoint per call, one status code per error category, and one job
+per operation over an entire dataset.

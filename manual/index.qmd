@@ -1,45 +1,48 @@
 ---
 title: "SimilaritySearchEngine.jl"
-subtitle: "An embedded similarity-search engine for Julia, and the service layer built on it"
+subtitle: "An embedded similarity search engine for Julia, and the service layer built on it"
 lang: en-US
 ---
 
-This site documents **one repository with two packages**. They are developed together, tested
-together and released together, and the line between them is deliberate:
+This site documents one repository that contains two packages. They are developed, tested and
+released together. The division between them is the following:
 
 | | `SimilaritySearchEngine` | `SimilaritySearchServer` |
 | :--- | :--- | :--- |
-| where | the repository root | `server/` |
-| what it is | an embedded, in-process library: storage, indexing and search | a REST API, two command lines, and an asynchronous job queue |
-| what it knows | RocksDB column families, inverted files, proximity graphs | HTTP status codes, exit codes, job spools, access tokens |
-| what it does **not** know | HTTP, processes, tokens | anything about how an index is built or stored |
+| location | the repository root | `server/` |
+| function | an embedded, in-process library: storage, indexing and search | a REST API, two command lines, and an asynchronous job queue |
+| defined concepts | RocksDB column families, inverted files, proximity graphs | HTTP status codes, exit codes, job spools, access tokens |
+| undefined concepts | HTTP, processes, tokens | index construction and storage |
 
-Everything about storing, indexing and searching lives in the engine. The server calls its
-public API and nothing beneath it; in return, the engine never learns what a status code is.
-That is the whole architecture of the repository, and it is why a failure in the engine
-travels as a *typed error* rather than as a message: each frontier — HTTP, CLI, or a Julia
-caller — decides on its own what that category means to its audience.
+Storage, indexing and search are implemented in the engine. The server calls the engine's
+public API and does not use its internal modules. The engine contains no reference to HTTP
+status codes or to process exit codes.
+
+This separation determines how failures are reported. The engine raises a typed error, and the
+category of that error states the nature of the failure. Each interface then maps the category
+to its own vocabulary: HTTP status codes, command-line exit codes, or a branch in a Julia
+program.
 
 ---
 
-## Which half do you need?
+## Choosing a package
 
-**Searching inside your own Julia process.** The engine is the whole answer: a working
-directory, a project handle, and function calls. No daemon, no ports, no serialization
-between you and the index; access control is the file permissions of the working directory.
+**To search within a Julia process, use the engine.** It requires a working directory, a
+project handle, and function calls. No server process, network port or serialization is
+involved. Access control is provided by the file permissions of the working directory.
 
-: Start with [Getting started](tutorials/getting-started.qmd), then
+: Begin with [Getting started](tutorials/getting-started.qmd), then read
 [Architecture](architecture.qmd).
 
-**Serving search to other processes, machines or languages.** The server wraps the same engine
-in a service: one `EmbeddedEngine` per dataset, endpoints that translate one request into one
-engine call, and whole-collection operations dispatched as independent Julia subprocesses so
-that a query never waits behind an `allknn`.
+**To provide search to other processes, machines or programming languages, use the server.**
+It holds one `EmbeddedEngine` per dataset, and translates each request into one engine call. An
+operation over an entire collection is executed in a separate Julia subprocess, so that a query
+is not delayed by a long operation such as `allknn`.
 
-: Start with the [server tutorial](server/tutorial.qmd), then the
+: Begin with the [server tutorial](server/tutorial.qmd), then read the
 [server manual](server/manual.qmd).
 
-Both halves are in one reference, generated from the docstrings:
+Both packages are documented in one generated reference:
 [Engine API](https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html) and
 [Server API](https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html).
 
@@ -47,18 +50,20 @@ Both halves are in one reference, generated from the docstrings:
 
 ## Installation
 
-Neither package is in the General registry yet, so both are installed from this repository.
-The engine's dependencies — [SimilaritySearch.jl](https://github.com/sadit/SimilaritySearch.jl),
+Neither package is registered in the Julia General registry, so both are installed from this
+repository. The dependencies of the engine are registered:
+[SimilaritySearch.jl](https://github.com/sadit/SimilaritySearch.jl),
 [TextSearch.jl](https://github.com/sadit/TextSearch.jl),
-[RocksDB.jl](https://github.com/sadit/RocksDB.jl) and the `RocksDB_jll` binaries — are all
-registered, so nothing else has to be cloned or built:
+[RocksDB.jl](https://github.com/sadit/RocksDB.jl), and the `RocksDB_jll` binaries. No other
+repository has to be cloned, and the RocksDB binaries are not compiled here:
 
 ```julia
 using Pkg
 Pkg.add(url="https://github.com/sadit/SimilaritySearchEngine.jl")
 ```
 
-The server is the same repository's `server/` subdirectory, and it reaches the engine by path:
+The server is the `server/` subdirectory of the same repository, and it resolves the engine
+by path:
 
 ```bash
 git clone https://github.com/sadit/SimilaritySearchEngine.jl
@@ -67,72 +72,77 @@ julia --project=server -e 'using Pkg; Pkg.develop(path="."); Pkg.instantiate()'
 julia --project=server -t auto -m SimilaritySearchServer serve
 ```
 
-Julia 1.12 or later is required by both. No `Manifest.toml` is committed for the engine, so
-`Pkg.instantiate()` resolves the base libraries from the registry unless you develop them by
-path as well.
+Both packages require Julia 1.12 or later. No `Manifest.toml` is committed for the engine, so
+`Pkg.instantiate()` resolves the base libraries from the registry unless they are also
+developed by path.
 
 ---
 
-## What the engine provides
+## Engine functionality
 
-- **Project Lifecycle Management**: Functions `create_project`, `open_project`, and `close_project!` manage the on-disk RocksDB directory and the associated live search engine.
-- **Engine and Backend Separation**:
-  - **Payload Engines**: `DenseEngine`, `SparseEngine`, and `FullTextEngine` specify the stored data domain.
-  - **Index Backends**: `SearchGraph`, `ExhaustiveSearch`, `InvertedFile`, and `BM25InvertedFile` define the underlying indexing data structures.
-  - The function `payload_kind(engine)` identifies the data domain, and the `BACKENDS` registry enforces valid engine-backend pairings.
-- **Dense Vector Search**: Approximate nearest-neighbor search via `SearchGraph` with dynamic beam-search tuning, or exact brute-force search via `ExhaustiveSearch` and `ParallelExhaustiveSearch`. For `SearchGraph`, insertions (`append_items!`) and graph construction (`index!`) are decoupled to give callers explicit control over indexing latency.
-- **Sparse Vector Search**: Native inverted index search (`InvertedFile`) over user-encoded sparse representations of fixed dimension. Distance functions include cosine distance over weights and discrete set metrics (`Dist.Sets.*`) over non-zero coordinate supports.
-- **Full-Text Retrieval**: Lexical search backed by `BM25InvertedFile` or TF-IDF-weighted `TextInvertedFile`. The initial `index!` call fits or initializes a `TextProfile` from staged texts, establishing the vocabulary and linguistic weighting model.
-- **Explicit Text Modeling**: Text projects require an explicit `AbstractTextModelSpec`:
-  - `DefaultProfile(:lang)`: Resolves a pre-trained language profile and refits vocabulary frequencies against the staged corpus.
-  - `BaseProfile(p)`: Utilizes an existing, pre-computed `TextProfile`.
-  - `FitFromCorpus(cfg)`: Fits a new profile directly from the staged corpus, bounded by `max_documents`.
-  - Query execution accepts a `QueryPolicy` to control automatic orthographic correction and semantic query expansion.
-- **Strongly Typed Interface**: Inputs are encapsulated in typed containers (`DenseItem`, `SparseItem`, `TextItem`), and queries return structured results (`SearchResult`, `StoredItem`, `ExistsResult`).
-- **Logical Deletions**: The `delete_item!` function marks documents as logically deleted without mutating the underlying search index. Queries return candidates alongside an explicit `deleted` flag.
-- **Target Recall Calibration**: The `calibrate!` function executes hyperparameter optimization to calibrate beam-search configurations for target recall constraints (`minrecall`), and `SearchStats` reports what a query actually cost in distance computations.
-- **Whole-Dataset Metric Operations**: Synchronous, in-process execution of all-pairs nearest neighbors (`allknn`), diverse center selection (`fft`), closest pair discovery (`closestpairs`), and cross-dataset closest pairs (`bichromatic_kclosestpairs`).
-- **Granular Storage Persistence**: High-throughput persistence utilizing a hybrid layout of RocksDB column families and dedicated memory-mapped vector files (`dense_vectors.mmapdb`).
-- **Typed Errors**: Deliberate failures are raised as `EngineError` subtypes grouped into four categories (`InvalidRequest`, `NotFound`, `ConflictingState`, `StorageFailure`), so a caller can act on a failure without interpreting its message.
+- **Project lifecycle**: `create_project`, `open_project` and `close_project!` manage the on-disk RocksDB directory and the associated search engine.
+- **Separation of engine and backend**:
+  - **Payload engines**: `DenseEngine`, `SparseEngine` and `FullTextEngine` determine the type of data stored.
+  - **Index backends**: `SearchGraph`, `ExhaustiveSearch`, `InvertedFile` and `BM25InvertedFile` determine the indexing data structure.
+  - `payload_kind(engine)` reports the data type, and the `BACKENDS` registry restricts which engine-backend pairs are valid.
+- **Dense vector search**: approximate nearest neighbor search with `SearchGraph`, which tunes its beam search parameters, or exact search with `ExhaustiveSearch` and `ParallelExhaustiveSearch`. For `SearchGraph`, insertion (`append_items!`) and graph construction (`index!`) are separate operations, so the caller determines when indexing latency is incurred.
+- **Sparse vector search**: inverted index search (`InvertedFile`) over sparse representations encoded by the caller, of fixed dimension. The available distance functions are cosine distance over the weights and set distances (`Dist.Sets.*`) over the support of the non-zero coordinates.
+- **Full-text retrieval**: lexical search with `BM25InvertedFile` or with TF-IDF weighting (`TextInvertedFile`). The first call to `index!` fits or initializes a `TextProfile` from the staged texts, which determines the vocabulary and the term weighting model.
+- **Explicit text modeling**: a text project requires an `AbstractTextModelSpec`:
+  - `DefaultProfile(:lang)` resolves a pre-trained language profile and refits the vocabulary frequencies against the staged corpus.
+  - `BaseProfile(p)` uses an existing `TextProfile`.
+  - `FitFromCorpus(cfg)` fits a profile from the staged corpus, up to `max_documents`.
+  - A query accepts a `QueryPolicy`, which determines orthographic correction and query expansion.
+- **Typed interface**: input is given in typed containers (`DenseItem`, `SparseItem`, `TextItem`), and queries return structured results (`SearchResult`, `StoredItem`, `ExistsResult`).
+- **Logical deletion**: `delete_item!` marks a document as deleted without modifying the index. Queries return such candidates with an explicit `deleted` field.
+- **Recall calibration**: `calibrate!` optimizes the beam search parameters for a set of target recall values, which `minrecall` then selects. `SearchStats` reports the number of distance computations a query performed.
+- **Operations over an entire collection**: in-process execution of all-pairs nearest neighbors (`allknn`), center selection (`fft`), closest pairs (`closestpairs`), and closest pairs between two collections (`bichromatic_kclosestpairs`).
+- **Persistence**: RocksDB column families for metadata and index structures, and memory-mapped files for dense vectors (`dense_vectors.mmapdb`).
+- **Typed errors**: a failure raised by the engine is an `EngineError` in one of four categories (`InvalidRequest`, `NotFound`, `ConflictingState`, `StorageFailure`), so that a caller can act on a failure without interpreting its message.
 
-## What the server adds
+## Server functionality
 
-- **REST API**: dataset lifecycle, append, dense/sparse/text search with metadata filters,
-  soft deletes, recall calibration, and cross-dataset fusion (`hybrid`, `ftsearch_group`).
+- **REST API**: dataset lifecycle, insertion, dense, sparse and text search with metadata
+  filters, logical deletion, recall calibration, and queries over more than one dataset
+  (`hybrid`, `ftsearch_group`).
 - **Asynchronous jobs**: `allknn`, `fft`, `neardup`, `hsp`, `searchbatch`, `closestpair`,
-  `build`, `dump` and `load` are enqueued and dispatched as independent Julia subprocesses,
-  each opening its dataset read-only so that serving continues while they run.
-- **Two command lines**: `similarity-search` for the data plane against a working directory,
-  `similarity-search-ctl` for the control plane against a running server — installable as
-  apps with `Pkg.Apps`.
-- **Operational surface**: access tokens, a per-dataset operation log (whose distance-evaluation
-  counts come from the engine's `SearchStats`), result cursors for pagination, health and
-  metrics endpoints, and hot unload/reload of a single dataset.
-- **One error vocabulary**: the engine's four categories become HTTP status codes and CLI exit
-  codes by category, never by message — the boundary described above, made concrete.
+  `build`, `dump` and `load` are enqueued and executed as separate Julia subprocesses. Each
+  one opens its dataset in read-only mode, so the server continues to answer queries while
+  they run.
+- **Two command lines**: `similarity-search` operates on a working directory, and
+  `similarity-search-ctl` operates on a running server over HTTP. Both can be installed as
+  applications with `Pkg.Apps`.
+- **Operational interfaces**: access tokens, an operation log per dataset (whose
+  distance-computation counts are obtained from the engine's `SearchStats`), cursors for
+  paginated results, health and metrics endpoints, and unload and reload of a single dataset
+  without restarting the server.
+- **One error vocabulary**: the engine's four categories are mapped to HTTP status codes and
+  to command-line exit codes by category, not by message text.
 
 ---
 
-## Navigating this site
+## Contents of this site
 
 **Engine**
 
-- **[Architecture](architecture.qmd)**: module map, engine type hierarchy, the staging/indexing
-  split, the concurrency model, the on-disk layout, and how failures are reported.
-- **[Getting started](tutorials/getting-started.qmd)**: dense vectors, sparse indexing, BM25 and
-  TF-IDF text search, filtering, calibration, cost accounting, and whole-dataset operations.
-- **[Multilingual paragraph search](tutorials/paragraph-search.qmd)**: a large-scale evaluation
-  over Project Gutenberg and Wikipedia corpora.
+- **[Architecture](architecture.qmd)**: module organization, the engine type hierarchy, the
+  separation of staging and indexing, the concurrency model, the on-disk layout, and the
+  reporting of failures.
+- **[Getting started](tutorials/getting-started.qmd)**: dense vectors, sparse indexing, BM25
+  and TF-IDF text search, metadata filtering, calibration, cost measurement, and operations
+  over an entire collection.
+- **[Multilingual paragraph search](tutorials/paragraph-search.qmd)**: an evaluation over
+  Project Gutenberg and Wikipedia corpora.
 
 **Server**
 
-- **[Server manual](server/manual.qmd)**: what the package contains, how a dataset is held, the
-  endpoint surface, the error mapping, configuration and the two test levels.
+- **[Server manual](server/manual.qmd)**: the contents of the package, how a dataset is held,
+  the endpoints, the mapping of errors, the configuration file, and the two test levels.
 - **[Server tutorial](server/tutorial.qmd)**: from an empty working directory to a query over
-  HTTP, a heavy job, the command line, and the Python client.
+  HTTP, an asynchronous job, the command line, and the Python client.
 
 **Reference**
 
 - **[Engine API](https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html)** and
-  **[Server API](https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html)**, generated
-  with Documenter from the docstrings of both packages.
+  **[Server API](https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html)**,
+  generated with Documenter from the docstrings of both packages.

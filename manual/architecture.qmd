@@ -4,7 +4,7 @@ lang: en-US
 toc: true
 ---
 
-This document describes the architectural design and internal subsystems of `SimilaritySearchEngine.jl`. It covers the module organization, the engine type hierarchy, the decoupled staging-versus-indexing lifecycle, the multithreaded concurrency model, and the hybrid persistence layout combining RocksDB column families with memory-mapped array storage.
+This document describes the internal design of `SimilaritySearchEngine.jl`: the organization of its modules, the engine type hierarchy, the separation between staging and indexing, the concurrency model, and the storage layout, which combines RocksDB column families with memory-mapped files.
 
 ---
 
@@ -16,7 +16,7 @@ The package is structured into four core submodules and an embedded orchestratio
 - **`Project`**: Implements project metadata storage (`ProjectManager`), document ID indexing, and secondary key lookups.
 - **`IndexEngine`**: Implements the `AbstractSearchEngine` hierarchy, encapsulating indexing algorithms from `SimilaritySearch.jl` and `TextSearch.jl`.
 - **`Persistence`**: Provides storage adapters for RocksDB column families and memory-mapped files.
-- **`embedded.jl`**: Implements `EmbeddedEngine` and exports the high-level transactional API (`create_project`, `append_items!`, `search`, etc.).
+- **`embedded.jl`**: Implements `EmbeddedEngine` and exports the public API (`create_project`, `append_items!`, `search`, and others).
 
 ```{mermaid}
 flowchart LR
@@ -38,9 +38,9 @@ flowchart LR
 ### Decoupling of Subsystems
 
 `IndexEngine` and `Persistence` operate independently of `Project` and `Schema`:
-- `IndexEngine` is agnostic to RocksDB, interacting with persistence exclusively through structural callback hooks `(index, sp, ep) -> nothing`.
-- `Persistence` stores serialized Julia objects under key-value interfaces without semantic knowledge of index internals.
-- `embedded.jl` orchestrates these components into a unified transactional engine.
+- `IndexEngine` does not depend on RocksDB. It communicates with persistence only through callbacks of the form `(index, sp, ep) -> nothing`.
+- `Persistence` stores serialized Julia objects through key-value interfaces, and does not interpret the contents of an index.
+- `embedded.jl` combines these components into one engine.
 
 ### Uniform Metadata Contract
 
@@ -124,33 +124,33 @@ classDiagram
     FullTextEngine *-- TextBackend
 ```
 
-### Architectural Properties of the Hierarchy
+### Properties of the Hierarchy
 
-- **First-Class Sparse Engine (`SparseEngine`)**: Provides direct inverted-index search over externally encoded sparse vectors. Callers supply pre-computed `SparseVector` objects without requiring linguistic tokenizers or text profiles.
-- **Payload Domain Introspection (`payload_kind`)**: Returns `:dense`, `:sparse`, or `:text`, allowing client layers to inspect payload requirements.
+- **Sparse engine (`SparseEngine`)**: Performs inverted-index search over sparse vectors encoded outside the package. The caller supplies `SparseVector` objects, and no tokenizer or text profile is involved.
+- **Introspection of the payload type (`payload_kind`)**: Returns `:dense`, `:sparse` or `:text`, so that a calling layer can determine what a project accepts.
 - **Backend Compatibility Registry (`BACKENDS`)**: Enforces valid combinations of payload engines and search backends:
   - `DenseEngine` accepts `SearchGraph`, `ExhaustiveSearch`, and `ParallelExhaustiveSearch`.
   - `SparseEngine` accepts `InvertedFile`.
   - `FullTextEngine` accepts `BM25InvertedFile` and `TextInvertedFile`.
 - **Domain Separation of BM25**: `BM25InvertedFile` is restricted to `FullTextEngine` because BM25 scoring relies on corpus-level document frequencies and average document lengths rather than purely geometric vector properties.
 - **Structural Dimension Constraints**: `SparseBackend` requires an explicit `dimension` parameter at initialization because an `InvertedFile` allocates a fixed array of posting lists.
-- **Encapsulated Linguistic Modeling**: `FullTextEngine` encapsulates its entire linguistic configuration within a `TextProfile` (`profile`), including vocabulary frequencies, term weighting schemes, stopword lists, lemma clusters, and query-expansion graphs.
+- **Text model**: `FullTextEngine` keeps its linguistic configuration in a `TextProfile` (`profile`): vocabulary frequencies, term weighting, stopword lists, lemma clusters, and query-expansion graphs.
 
 ---
 
 ## Decoupled Lifecycle: Staging vs. Indexing
 
-`SimilaritySearchEngine.jl` decouples the ingestion of raw items from the computationally intensive construction of search index structures:
+The package separates the insertion of items from the construction of the index, which is the expensive operation:
 
 ```
 [ Ingestion ] ──────> append_items! ──────> [ Staged Backlog ] ──────> index! ──────> [ Searchable Index ]
                      (Durable in Store)                                              (Searchable in Engine)
 ```
 
-### Operational Dynamics
+### Behavior of Each Engine Type
 
 1. **`SearchGraph` (Dense Engine)**:
-   - `append_items!` appends raw `Vector{Float32}` arrays directly to the memory-mapped vector file `dense_vectors.mmapdb`. This operation is durable and fast ($O(1)$ per vector), but does not construct graph edges.
+   - `append_items!` writes the `Vector{Float32}` arrays to the memory-mapped file `dense_vectors.mmapdb`. The operation is durable and costs $O(1)$ per vector. It does not construct graph edges.
    - `index!` evaluates the backlog range `length(index)+1:length(database(index))` and builds proximity graph connections via `SimilaritySearch.index!`.
 2. **`FullTextEngine` (Text Engine)**:
    - `append_items!` appends raw text strings to `StagedTextStore` within RocksDB.
@@ -158,15 +158,15 @@ classDiagram
      - On the **first invocation** of an uninitialized project, `index!` executes the linguistic model specification (`fitspec`) to build the initial `TextProfile` and instantiate the inverted index.
      - On subsequent invocations, `index!` encodes staged strings and inserts posting list entries.
 3. **`ExhaustiveSearch` and `InvertedFile` (Sparse Engine)**:
-   - Because exact linear scans evaluate directly over the database and sparse inverted files update posting lists upon insertion, `append_items!` makes items searchable immediately. `index!` operates as an idempotent no-op.
+   - An exact linear scan evaluates the database directly, and a sparse inverted file updates its posting lists on insertion. `append_items!` therefore makes an item searchable immediately, and `index!` performs no work.
 
 ---
 
 ## Concurrency Model
 
-Index data structures in `SimilaritySearch.jl` and `TextSearch.jl` support concurrent read operations, but mutate unsafely if writes occur concurrently with reads or other writes.
+The index structures of `SimilaritySearch.jl` and `TextSearch.jl` support concurrent reads. A write that runs at the same time as a read, or as another write, corrupts them.
 
-`SimilaritySearchEngine.jl` coordinates multithreaded access via two synchronization mechanisms: `ReadWriteLock` and `ContextPool`.
+The package coordinates access from several threads with two mechanisms: `ReadWriteLock` and `ContextPool`.
 
 ### Reader-Writer Synchronization: `ReadWriteLock`
 
@@ -194,7 +194,7 @@ sequenceDiagram
 
 ### Context Isolation: `ContextPool`
 
-Search contexts (`SearchGraphContext`, `GenericContext`, `InvertedFileContext`) contain internal scratch buffers (beam priority queues, visited-vertex bitvectors, and accumulator caches). If concurrent search threads share a single context instance, memory corruption occurs.
+A search context (`SearchGraphContext`, `GenericContext`, `InvertedFileContext`) contains working buffers: beam priority queues, bit vectors of visited vertices, and accumulator caches. If two threads search with the same context, these buffers are corrupted.
 
 `ContextPool` manages a dynamic pool of isolated context instances:
 
@@ -208,13 +208,15 @@ flowchart LR
     E --> F["Return context to pool.available"]
 ```
 
-The pool expands dynamically to match the peak concurrent query volume and retains allocated buffers to eliminate runtime allocation overhead.
+The pool grows to the number of queries that have run concurrently, and it keeps the allocated buffers, so that later queries do not allocate them again.
 
-### Cost Accounting Across the Pool Boundary
+### Measuring the Cost of a Query
 
-Pooling has a consequence for measurement. `SimilaritySearch.jl` accounts for the work an operation performs in the counters carried by the context itself (`ctx.costdists`), which accumulate and are never reset; the cost of a single operation is therefore a difference between two readings taken around it. That technique is sound for insertion, which runs on the engine's own `ctx` under an exclusive write lock, and unsound for search: the context a query ran on was borrowed from the pool for the duration of the call and returned at the end, so a reading taken afterwards from outside describes whatever else has since been searching concurrently, not the query in question.
+The use of a pool has a consequence for measurement. `SimilaritySearch.jl` counts the work performed by an operation in the context itself (`ctx.costdists`). These counters accumulate and are never reset, so the cost of one operation is the difference between two readings taken before and after it.
 
-The count is consequently produced where it is unambiguous -- inside `IndexEngine.search_live`, between checkout and checkin -- and surfaced to the caller through a supplied `SearchStats` instance:
+This method is correct for insertion, which uses the engine's own `ctx` under an exclusive write lock. It is not correct for search. A query uses a context taken from the pool for the duration of the call, and the context returns to the pool when the call ends. A reading taken afterwards includes the work of any other query that has used the same context since.
+
+The count is therefore computed inside `IndexEngine.search_live`, between checkout and checkin, and is reported to the caller in a `SearchStats` instance that the caller provides:
 
 ```julia
 stats = SearchStats()
@@ -222,13 +224,13 @@ results = search(h, query, 10; stats)
 stats.distance_evaluations
 ```
 
-`search`, `ftsearch` and the filtered search path all accept it, the filtered path reporting the cost of the candidate search it actually ran rather than of the `k` results it returned. The field is overwritten by each call rather than accumulated. This is the mechanism behind the `distance_evaluations` field of the server's `op_log`, which has no other way to attribute work to the request that caused it.
+`search`, `ftsearch` and the filtered form of `search` accept this argument. For a filtered search, the value is the cost of the candidate search that was executed, not of the `k` results that satisfied the predicate. Each call overwrites the field; values are not accumulated. The server obtains the `distance_evaluations` field of its `op_log` from this mechanism.
 
 ---
 
 ## Persistence Architecture
 
-`SimilaritySearchEngine.jl` employs a fine-grained, column-family-based storage architecture where mutations modify only the affected persistence segments.
+A project is stored in RocksDB column families and in one memory-mapped file. A write modifies only the segments it affects.
 
 ```{mermaid}
 flowchart TB
@@ -265,19 +267,19 @@ flowchart TB
 
 ### The Persisted Text Index
 
-A text project stores its *index*: posting lists in `invfile_postings`, per-document vectors in `invfile_docvecs`. This covers both text backends -- their posting lists hold the same thing, document ids, and they differ only in what each document is stored *as*. Three shapes occur, and each stored value carries a one-byte tag saying which: integer term frequencies (BM25), `Float32` model weights (the weighted backend), and bags of words (the weighted backend under a set distance, which reads membership rather than weights). A sparse project still stores the *objects* it indexed, in `sparse_db`, and reconstructs its index on every open; its items are vectors the caller encoded, so what it saves is already what it would have to write, and giving it the same treatment is a follow-up rather than a difference of principle.
+A text project stores the index itself: posting lists in `invfile_postings`, and one vector per document in `invfile_docvecs`. Both text backends are stored this way. Their posting lists contain the same data, document identifiers, and they differ only in the representation of each document. Three representations are used, and each stored value begins with a one-byte tag that identifies its own: integer term frequencies (BM25), `Float32` model weights (the weighted backend), and bags of words (the weighted backend under a set distance, which reads membership instead of weights). A sparse project stores the objects it indexed, in `sparse_db`, and reconstructs its index at every open. Its items are vectors encoded by the caller, so the stored objects are already the representation that would be written; applying the same treatment to a sparse project remains pending work.
 
-The difference is not small at scale: over 265,000 Project Gutenberg paragraphs, reconstruction costs 20.4 s and assembly from storage 1.4 s on BM25 and 1.7 s on the weighted backend (measured 2026-09-11 and 2026-09-12). Indexing the same corpus costs 25.7 s and 26.4 s respectively, against 147.3 s before, because a block is now encoded by the library's parallel batch path rather than one document at a time.
+The two procedures differ in cost. Over 265,000 Project Gutenberg paragraphs, reconstruction takes 20.4 s, and assembly from storage takes 1.4 s with BM25 and 1.7 s with the weighted backend (measured 2026-09-11 and 2026-09-12). Indexing the same corpus takes 25.7 s and 26.4 s respectively, compared with 147.3 s before, because a block is now encoded by the parallel batch procedure of the library instead of one document at a time.
 
-Writing is incremental and blockwise. Each `index!` call encodes its backlog as one block, splices the block's document vectors and lengths into the live index, and hands its posting lists -- ids shifted from block-local to global -- to `IndexEngine.persist_block!`. The storage-backed implementation of that function performs a read-modify-write per token the block touched: appending is sound precisely because document ids grow monotonically, so a block's ids are larger than every id already stored and the ascending order the query-time merge depends on is preserved. `IndexEngine` never names RocksDB; it dispatches on the kind of adjacency list its index was built with.
+Writing is incremental and proceeds by blocks. Each call to `index!` encodes its backlog as one block, inserts the document vectors and lengths of that block into the index in memory, and passes its posting lists to `IndexEngine.persist_block!`, with identifiers converted from block-local to global. The implementation of that function reads, modifies and writes one stored list per token that the block contains. Appending is correct because document identifiers increase monotonically: the identifiers of a block are larger than every identifier already stored, so the ascending order required by the merge at query time is preserved. `IndexEngine` contains no reference to RocksDB, and dispatches on the type of adjacency list of its index.
 
-The unit of that write is the block, and its size has a cost: a token's list is rewritten once per block that touches it, so the same 50,000 documents cost 5.8 s indexed in one block, 6.8 s in ten, and 10.1 s in fifty (measured 2026-09-12). Indexing in large blocks is therefore worth preferring, which is what `append_items!` followed by a single `index!` already does.
+The unit of writing is the block, and the number of blocks has a cost. The list of a token is rewritten once per block that contains it, so the same 50,000 documents take 5.8 s in one block, 6.8 s in ten, and 10.1 s in fifty (measured 2026-09-12). Large blocks are therefore preferable, which is the result of calling `append_items!` and then a single `index!`.
 
-**Posting lists are lazy; document vectors are not**, and the asymmetry is measured rather than assumed. A query reads one posting list per query *term*, so serving them from storage costs 1.8% in latency (66.8 ms against 68.0 ms) while removing 55.8 MB of 237.5 MB from memory. Scoring, by contrast, reads a *candidate's* term vector (`bm25score(..., idx.db[docID])`), and the merge makes every document containing any query token a candidate -- so a query with a frequent term turns lazy document vectors into one point read per document in the collection: 1,771.9 ms against 66.8 ms for the same query. Document vectors are therefore read into memory at open (0.76 s for that corpus).
+**Posting lists are read on demand; document vectors are not.** The reason is measured. A query reads one posting list per query term, so reading them from storage increases latency by 1.8% (66.8 ms against 68.0 ms) and removes 55.8 MB of 237.5 MB from memory. Scoring reads the term vector of each candidate (`bm25score(..., idx.db[docID])`), and the merge makes every document that contains any query token a candidate. With a frequent term, reading document vectors on demand becomes one point read per document in the collection: 1,771.9 ms against 66.8 ms for the same query. Document vectors are therefore read into memory when the project is opened (0.76 s for that corpus).
 
-The lazy posting lists sit behind a least-frequently-used cache bounded by a maximum number of cached lists, trimmed back to a base size when it is exceeded. Eviction happens only after a query has fully resolved, never inside one: concurrent searches hold read locks, not exclusive ones, and a list dropped mid-query would be re-read by whichever of them was still walking it.
+Posting lists read on demand are kept in a least-frequently-used cache. The cache holds a maximum number of lists and is reduced to a base size when that maximum is exceeded. Lists are removed only after a query has finished, never during one: concurrent searches hold read locks rather than exclusive locks, and a list removed during a query would be read again by any search still using it.
 
-**There is no migration path from the previous format, deliberately.** A project written before the index was persisted opens with its profile and its staged text intact and no index at all; searching it says so, and one `index!` call rebuilds it from that staged text, which was always persisted independently of the index. Keeping the old format readable would mean keeping the whole rebuild-by-reinsertion path alive to serve projects that, with no released version, do not yet exist -- so the procedure is explicit and costs a line:
+**There is no migration from the previous format.** A project written before the index was persisted opens with its profile and its staged text, and with no index. A search against it reports this condition, and one call to `index!` builds the index from the staged text, which was always persisted independently of the index. Supporting the previous format would require keeping the reconstruction procedure for projects that do not yet exist, since no version has been released. The migration is therefore explicit:
 
 ```julia
 h = open_project(workdir, dataset)
@@ -286,13 +288,13 @@ index!(h)
 
 ### External Identifier Resolution
 
-`doc_id` is the caller's own identifier, and it is resolved through the `idx_docid` column family rather than by scanning `records`. Keys are composite (`doc_id` bytes followed by the four bytes of `_id`), which is what allows several items to share one `doc_id`: `fetch_items` returns every record carrying the requested identifier, in ascending `_id` order, and `exists` reports it as deleted only when all of them are. Measured on a 50,000-item project, resolving an external identifier costs 0.12 ms through this index against 59 ms for the full scan it replaces.
+`doc_id` is the identifier supplied by the caller. It is resolved through the `idx_docid` column family, not by scanning `records`. Keys are composite: the bytes of `doc_id` followed by the four bytes of `_id`. This allows several items to share one `doc_id`. `fetch_items` returns every record that carries the requested identifier, in ascending `_id` order, and `exists` reports the identifier as deleted only when all of those records are deleted. On a project of 50,000 items, resolving an external identifier takes 0.12 ms through this index, compared with 59 ms for the scan it replaces.
 
-A project written before this index existed is migrated on its first writable open: `Project.backfill_docid_index!` performs a single pass over `records` and writes a marker key so no later open repeats it. A read-only handle opened against an unmigrated project falls back to the scan.
+A project written before this index existed is migrated the first time it is opened for writing. `Project.backfill_docid_index!` performs one pass over `records` and writes a marker key, so that later opens do not repeat the pass. A read-only handle opened on a project that has not been migrated uses the scan instead.
 
 ### Compaction
 
-Bulk writes leave a write-ahead log that the *next* open must replay, so compaction is an open-latency concern rather than a write-latency one. `close_project!` therefore compacts every column family of the project before closing, unless the handle is read-only, the session performed no writes, or the caller passes `compact=false`; `compact_project!` exposes the same operation mid-session. Measured on a 50,000-vector dense project, reopening costs 2.97 s without compaction and 0.28 s with it, for a compaction that itself takes 0.03 s.
+Bulk writes leave a write-ahead log, and the next open must replay it. Compaction therefore affects the latency of opening a project, not the latency of writing to it. `close_project!` compacts every column family of the project before closing, unless the handle is read-only, the session performed no writes, or the caller passes `compact=false`. `compact_project!` performs the same operation while the project remains open. On a dense project of 50,000 vectors, reopening takes 2.97 s without compaction and 0.28 s with it, and the compaction itself takes 0.03 s.
 
 ### Storage Subsystems
 
@@ -301,7 +303,7 @@ Bulk writes leave a write-ahead log that the *next* open must replay, so compact
    - Mutations (e.g., updating deleted IDs or storing calibration results) rewrite only their specific keys.
 2. **Dense Vector Storage (`dense_vectors.mmapdb`)**:
    - Dense vectors are stored in a dedicated memory-mapped binary file managed by `MMapMatrixDatabase`.
-   - Bypasses key-value serialization overhead, providing high-speed sequential appends and zero-copy random access.
+   - Avoids key-value serialization. Appends are sequential, and random access reads the vector without copying it.
 3. **`AdjacencyStore` (Graph Topology)**:
    - Graph adjacencies are persisted incrementally through `CallbackLog` observer hooks during `index!`.
    - Stores only forward (direct) edges; reverse edges are reconstructed dynamically in memory during project reopening to ensure idempotency.
@@ -329,13 +331,13 @@ sequenceDiagram
     IE-->>Caller: Reconstructed DenseEngine{GraphBackend}
 ```
 
-When a project is reopened, stored forward edges are reloaded and bidirectional reverse links are regenerated, restoring the search index to its exact state prior to closure.
+When a project is reopened, the stored forward edges are read again and the reverse links are regenerated, which restores the index to the state it had before the project was closed.
 
 ---
 
 ## Failure Reporting: Typed Errors and Their Boundaries
 
-Every failure the engine raises deliberately is an `EngineError`, and the type is the contract. Four abstract categories sit beneath it, and a concrete type beneath each:
+Every failure that the engine raises is an `EngineError`. The type of the error, not its message, is the interface. There are four abstract categories, and one or more concrete types under each of them:
 
 | category | meaning | concrete types |
 |---|---|---|
@@ -344,9 +346,9 @@ Every failure the engine raises deliberately is an `EngineError`, and the type i
 | `ConflictingState` | the request is well formed but the project is not in a state that can serve it; the same call succeeds later | `PendingBacklog`, `NothingStaged`, `NoIndex`, `NotTrained`, `EmptyProject` |
 | `StorageFailure` | what was read back cannot be interpreted | `CorruptedStorage` |
 
-Concrete types carry structured detail where a caller can use it: `PendingBacklog` reports the staged and connected counts, `WrongDimension` the expected and received lengths, `InvalidOption` the keyword at fault.
+The concrete types carry the values a caller can use. `PendingBacklog` reports the number of staged items and the number of indexed items, `WrongDimension` reports the expected and the received length, and `InvalidOption` reports the keyword that was rejected.
 
-**Mapping lives at each boundary, never in the engine.** The engine does not know what an HTTP status code or an exit code is. Its consumers translate:
+**The mapping is defined at each interface, not in the engine.** The engine contains no reference to HTTP status codes or to process exit codes. Each consumer performs the translation:
 
 ```julia
 try
@@ -358,13 +360,13 @@ catch e
 end
 ```
 
-`SimilaritySearchServer` maps categories to status codes (`NotFound` to 404, `ConflictingState` to 409, `InvalidRequest` to 400, anything else to 500) and its CLIs map the same categories to exit codes (4, 5, 2, 70), so a shell script can branch on the reason without reading output. That mapping is the entire coupling between the two packages of this repository, and it is written out in one table in the [server manual](server/manual.qmd#how-failures-are-reported).
+`SimilaritySearchServer` maps the categories to status codes: `NotFound` to 404, `ConflictingState` to 409, `InvalidRequest` to 400, and any other failure to 500. Its command lines map the same categories to exit codes 4, 5, 2 and 70, so that a shell script can select a branch without reading the output text. This mapping is the only coupling between the two packages of this repository, and the [server manual](server/manual.qmd#how-failures-are-reported) states it in one table.
 
-The alternative — bare `error("...")` — forces every consumer to classify by message text, which breaks silently the first time the wording improves. That had already happened here: this engine's own concurrency test recognized a refused whole-dataset operation with `occursin("requires no pending backlog", e.msg)`, and now matches `PendingBacklog` instead.
+The alternative, `error("...")` with a message, requires every consumer to classify the failure by its text. Such a classification fails when the wording changes, and it fails without any error being reported. This had occurred in this repository: the concurrency test identified a rejected operation with `occursin("requires no pending backlog", e.msg)`. It now matches the type `PendingBacklog`.
 
-## Dual Logging Architecture: Reporters vs. Observers
+## Logging Channels: Reporters and Observers
 
-Contexts maintain two isolated logging channels:
+A context maintains two separate logging channels:
 - **Reporters (`ctx.reporters`)**: Receive progress messages via [`INFORM`](https://sadit.github.io/SimilaritySearch.jl/dev/api/) and output formatted status lines to `stderr` or custom `IO` streams. Throttled to prevent console flooding.
 - **Observers (`ctx.observers`)**: Receive structural mutation events (`:add!`) via [`OBSERVE`](https://sadit.github.io/SimilaritySearch.jl/dev/api/). Execute un-throttled callbacks that trigger persistence updates (`CallbackLog`).
 
@@ -380,5 +382,5 @@ flowchart LR
 
 ## Soft Deletions and Dataset Operations
 
-- **Soft Deletions**: The `delete_item!` function registers document identifiers in `deleted_ids`. The underlying index structure is preserved without requiring costly reorganization. Search queries evaluate candidates and attach an explicit `deleted::Bool` flag in `SearchResult`.
-- **Whole-Dataset Metric Operations**: Functions `allknn`, `fft`, `closestpairs`, and `bichromatic_kclosestpairs` execute directly on the in-memory graph index, utilizing multithreaded batch routines to perform comprehensive metric analyses across the entire collection.
+- **Soft deletions**: `delete_item!` records document identifiers in `deleted_ids`. The index is not reorganized. A query evaluates such candidates and reports them with the field `deleted::Bool` of `SearchResult`.
+- **Operations over an entire collection**: `allknn`, `fft`, `closestpairs` and `bichromatic_kclosestpairs` operate on the index in memory, using multithreaded batch routines over the whole collection.

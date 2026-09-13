@@ -246,17 +246,17 @@ window.Quarto = {
   </ul></li>
   <li><a href="#engine-type-hierarchy" id="toc-engine-type-hierarchy" class="nav-link" data-scroll-target="#engine-type-hierarchy">Engine Type Hierarchy</a>
   <ul class="collapse">
-  <li><a href="#architectural-properties-of-the-hierarchy" id="toc-architectural-properties-of-the-hierarchy" class="nav-link" data-scroll-target="#architectural-properties-of-the-hierarchy">Architectural Properties of the Hierarchy</a></li>
+  <li><a href="#properties-of-the-hierarchy" id="toc-properties-of-the-hierarchy" class="nav-link" data-scroll-target="#properties-of-the-hierarchy">Properties of the Hierarchy</a></li>
   </ul></li>
   <li><a href="#decoupled-lifecycle-staging-vs.-indexing" id="toc-decoupled-lifecycle-staging-vs.-indexing" class="nav-link" data-scroll-target="#decoupled-lifecycle-staging-vs.-indexing">Decoupled Lifecycle: Staging vs.&nbsp;Indexing</a>
   <ul class="collapse">
-  <li><a href="#operational-dynamics" id="toc-operational-dynamics" class="nav-link" data-scroll-target="#operational-dynamics">Operational Dynamics</a></li>
+  <li><a href="#behavior-of-each-engine-type" id="toc-behavior-of-each-engine-type" class="nav-link" data-scroll-target="#behavior-of-each-engine-type">Behavior of Each Engine Type</a></li>
   </ul></li>
   <li><a href="#concurrency-model" id="toc-concurrency-model" class="nav-link" data-scroll-target="#concurrency-model">Concurrency Model</a>
   <ul class="collapse">
   <li><a href="#reader-writer-synchronization-readwritelock" id="toc-reader-writer-synchronization-readwritelock" class="nav-link" data-scroll-target="#reader-writer-synchronization-readwritelock">Reader-Writer Synchronization: <code>ReadWriteLock</code></a></li>
   <li><a href="#context-isolation-contextpool" id="toc-context-isolation-contextpool" class="nav-link" data-scroll-target="#context-isolation-contextpool">Context Isolation: <code>ContextPool</code></a></li>
-  <li><a href="#cost-accounting-across-the-pool-boundary" id="toc-cost-accounting-across-the-pool-boundary" class="nav-link" data-scroll-target="#cost-accounting-across-the-pool-boundary">Cost Accounting Across the Pool Boundary</a></li>
+  <li><a href="#measuring-the-cost-of-a-query" id="toc-measuring-the-cost-of-a-query" class="nav-link" data-scroll-target="#measuring-the-cost-of-a-query">Measuring the Cost of a Query</a></li>
   </ul></li>
   <li><a href="#persistence-architecture" id="toc-persistence-architecture" class="nav-link" data-scroll-target="#persistence-architecture">Persistence Architecture</a>
   <ul class="collapse">
@@ -267,7 +267,7 @@ window.Quarto = {
   <li><a href="#project-reopening-lifecycle" id="toc-project-reopening-lifecycle" class="nav-link" data-scroll-target="#project-reopening-lifecycle">Project Reopening Lifecycle</a></li>
   </ul></li>
   <li><a href="#failure-reporting-typed-errors-and-their-boundaries" id="toc-failure-reporting-typed-errors-and-their-boundaries" class="nav-link" data-scroll-target="#failure-reporting-typed-errors-and-their-boundaries">Failure Reporting: Typed Errors and Their Boundaries</a></li>
-  <li><a href="#dual-logging-architecture-reporters-vs.-observers" id="toc-dual-logging-architecture-reporters-vs.-observers" class="nav-link" data-scroll-target="#dual-logging-architecture-reporters-vs.-observers">Dual Logging Architecture: Reporters vs.&nbsp;Observers</a></li>
+  <li><a href="#logging-channels-reporters-and-observers" id="toc-logging-channels-reporters-and-observers" class="nav-link" data-scroll-target="#logging-channels-reporters-and-observers">Logging Channels: Reporters and Observers</a></li>
   <li><a href="#soft-deletions-and-dataset-operations" id="toc-soft-deletions-and-dataset-operations" class="nav-link" data-scroll-target="#soft-deletions-and-dataset-operations">Soft Deletions and Dataset Operations</a></li>
   </ul>
 </nav>
@@ -294,7 +294,7 @@ window.Quarto = {
 </header>
 
 
-<p>This document describes the architectural design and internal subsystems of <code>SimilaritySearchEngine.jl</code>. It covers the module organization, the engine type hierarchy, the decoupled staging-versus-indexing lifecycle, the multithreaded concurrency model, and the hybrid persistence layout combining RocksDB column families with memory-mapped array storage.</p>
+<p>This document describes the internal design of <code>SimilaritySearchEngine.jl</code>: the organization of its modules, the engine type hierarchy, the separation between staging and indexing, the concurrency model, and the storage layout, which combines RocksDB column families with memory-mapped files.</p>
 <hr>
 <section id="subsystem-architecture-and-module-map" class="level2">
 <h2 class="anchored" data-anchor-id="subsystem-architecture-and-module-map">Subsystem Architecture and Module Map</h2>
@@ -304,7 +304,7 @@ window.Quarto = {
 <li><strong><code>Project</code></strong>: Implements project metadata storage (<code>ProjectManager</code>), document ID indexing, and secondary key lookups.</li>
 <li><strong><code>IndexEngine</code></strong>: Implements the <code>AbstractSearchEngine</code> hierarchy, encapsulating indexing algorithms from <code>SimilaritySearch.jl</code> and <code>TextSearch.jl</code>.</li>
 <li><strong><code>Persistence</code></strong>: Provides storage adapters for RocksDB column families and memory-mapped files.</li>
-<li><strong><code>embedded.jl</code></strong>: Implements <code>EmbeddedEngine</code> and exports the high-level transactional API (<code>create_project</code>, <code>append_items!</code>, <code>search</code>, etc.).</li>
+<li><strong><code>embedded.jl</code></strong>: Implements <code>EmbeddedEngine</code> and exports the public API (<code>create_project</code>, <code>append_items!</code>, <code>search</code>, and others).</li>
 </ul>
 <div class="cell" data-layout-align="default">
 <div class="cell-output-display">
@@ -333,7 +333,7 @@ window.Quarto = {
 </div>
 <section id="decoupling-of-subsystems" class="level3">
 <h3 class="anchored" data-anchor-id="decoupling-of-subsystems">Decoupling of Subsystems</h3>
-<p><code>IndexEngine</code> and <code>Persistence</code> operate independently of <code>Project</code> and <code>Schema</code>: - <code>IndexEngine</code> is agnostic to RocksDB, interacting with persistence exclusively through structural callback hooks <code>(index, sp, ep) -&gt; nothing</code>. - <code>Persistence</code> stores serialized Julia objects under key-value interfaces without semantic knowledge of index internals. - <code>embedded.jl</code> orchestrates these components into a unified transactional engine.</p>
+<p><code>IndexEngine</code> and <code>Persistence</code> operate independently of <code>Project</code> and <code>Schema</code>: - <code>IndexEngine</code> does not depend on RocksDB. It communicates with persistence only through callbacks of the form <code>(index, sp, ep) -&gt; nothing</code>. - <code>Persistence</code> stores serialized Julia objects through key-value interfaces, and does not interpret the contents of an index. - <code>embedded.jl</code> combines these components into one engine.</p>
 </section>
 <section id="uniform-metadata-contract" class="level3">
 <h3 class="anchored" data-anchor-id="uniform-metadata-contract">Uniform Metadata Contract</h3>
@@ -414,11 +414,11 @@ window.Quarto = {
 </div>
 </div>
 </div>
-<section id="architectural-properties-of-the-hierarchy" class="level3">
-<h3 class="anchored" data-anchor-id="architectural-properties-of-the-hierarchy">Architectural Properties of the Hierarchy</h3>
+<section id="properties-of-the-hierarchy" class="level3">
+<h3 class="anchored" data-anchor-id="properties-of-the-hierarchy">Properties of the Hierarchy</h3>
 <ul>
-<li><strong>First-Class Sparse Engine (<code>SparseEngine</code>)</strong>: Provides direct inverted-index search over externally encoded sparse vectors. Callers supply pre-computed <code>SparseVector</code> objects without requiring linguistic tokenizers or text profiles.</li>
-<li><strong>Payload Domain Introspection (<code>payload_kind</code>)</strong>: Returns <code>:dense</code>, <code>:sparse</code>, or <code>:text</code>, allowing client layers to inspect payload requirements.</li>
+<li><strong>Sparse engine (<code>SparseEngine</code>)</strong>: Performs inverted-index search over sparse vectors encoded outside the package. The caller supplies <code>SparseVector</code> objects, and no tokenizer or text profile is involved.</li>
+<li><strong>Introspection of the payload type (<code>payload_kind</code>)</strong>: Returns <code>:dense</code>, <code>:sparse</code> or <code>:text</code>, so that a calling layer can determine what a project accepts.</li>
 <li><strong>Backend Compatibility Registry (<code>BACKENDS</code>)</strong>: Enforces valid combinations of payload engines and search backends:
 <ul>
 <li><code>DenseEngine</code> accepts <code>SearchGraph</code>, <code>ExhaustiveSearch</code>, and <code>ParallelExhaustiveSearch</code>.</li>
@@ -427,22 +427,22 @@ window.Quarto = {
 </ul></li>
 <li><strong>Domain Separation of BM25</strong>: <code>BM25InvertedFile</code> is restricted to <code>FullTextEngine</code> because BM25 scoring relies on corpus-level document frequencies and average document lengths rather than purely geometric vector properties.</li>
 <li><strong>Structural Dimension Constraints</strong>: <code>SparseBackend</code> requires an explicit <code>dimension</code> parameter at initialization because an <code>InvertedFile</code> allocates a fixed array of posting lists.</li>
-<li><strong>Encapsulated Linguistic Modeling</strong>: <code>FullTextEngine</code> encapsulates its entire linguistic configuration within a <code>TextProfile</code> (<code>profile</code>), including vocabulary frequencies, term weighting schemes, stopword lists, lemma clusters, and query-expansion graphs.</li>
+<li><strong>Text model</strong>: <code>FullTextEngine</code> keeps its linguistic configuration in a <code>TextProfile</code> (<code>profile</code>): vocabulary frequencies, term weighting, stopword lists, lemma clusters, and query-expansion graphs.</li>
 </ul>
 <hr>
 </section>
 </section>
 <section id="decoupled-lifecycle-staging-vs.-indexing" class="level2">
 <h2 class="anchored" data-anchor-id="decoupled-lifecycle-staging-vs.-indexing">Decoupled Lifecycle: Staging vs.&nbsp;Indexing</h2>
-<p><code>SimilaritySearchEngine.jl</code> decouples the ingestion of raw items from the computationally intensive construction of search index structures:</p>
+<p>The package separates the insertion of items from the construction of the index, which is the expensive operation:</p>
 <pre><code>[ Ingestion ] ──────&gt; append_items! ──────&gt; [ Staged Backlog ] ──────&gt; index! ──────&gt; [ Searchable Index ]
                      (Durable in Store)                                              (Searchable in Engine)</code></pre>
-<section id="operational-dynamics" class="level3">
-<h3 class="anchored" data-anchor-id="operational-dynamics">Operational Dynamics</h3>
+<section id="behavior-of-each-engine-type" class="level3">
+<h3 class="anchored" data-anchor-id="behavior-of-each-engine-type">Behavior of Each Engine Type</h3>
 <ol type="1">
 <li><strong><code>SearchGraph</code> (Dense Engine)</strong>:
 <ul>
-<li><code>append_items!</code> appends raw <code>Vector{Float32}</code> arrays directly to the memory-mapped vector file <code>dense_vectors.mmapdb</code>. This operation is durable and fast (<span class="math inline">\(O(1)\)</span> per vector), but does not construct graph edges.</li>
+<li><code>append_items!</code> writes the <code>Vector{Float32}</code> arrays to the memory-mapped file <code>dense_vectors.mmapdb</code>. The operation is durable and costs <span class="math inline">\(O(1)\)</span> per vector. It does not construct graph edges.</li>
 <li><code>index!</code> evaluates the backlog range <code>length(index)+1:length(database(index))</code> and builds proximity graph connections via <code>SimilaritySearch.index!</code>.</li>
 </ul></li>
 <li><strong><code>FullTextEngine</code> (Text Engine)</strong>:
@@ -456,7 +456,7 @@ window.Quarto = {
 </ul></li>
 <li><strong><code>ExhaustiveSearch</code> and <code>InvertedFile</code> (Sparse Engine)</strong>:
 <ul>
-<li>Because exact linear scans evaluate directly over the database and sparse inverted files update posting lists upon insertion, <code>append_items!</code> makes items searchable immediately. <code>index!</code> operates as an idempotent no-op.</li>
+<li>An exact linear scan evaluates the database directly, and a sparse inverted file updates its posting lists on insertion. <code>append_items!</code> therefore makes an item searchable immediately, and <code>index!</code> performs no work.</li>
 </ul></li>
 </ol>
 <hr>
@@ -464,8 +464,8 @@ window.Quarto = {
 </section>
 <section id="concurrency-model" class="level2">
 <h2 class="anchored" data-anchor-id="concurrency-model">Concurrency Model</h2>
-<p>Index data structures in <code>SimilaritySearch.jl</code> and <code>TextSearch.jl</code> support concurrent read operations, but mutate unsafely if writes occur concurrently with reads or other writes.</p>
-<p><code>SimilaritySearchEngine.jl</code> coordinates multithreaded access via two synchronization mechanisms: <code>ReadWriteLock</code> and <code>ContextPool</code>.</p>
+<p>The index structures of <code>SimilaritySearch.jl</code> and <code>TextSearch.jl</code> support concurrent reads. A write that runs at the same time as a read, or as another write, corrupts them.</p>
+<p>The package coordinates access from several threads with two mechanisms: <code>ReadWriteLock</code> and <code>ContextPool</code>.</p>
 <section id="reader-writer-synchronization-readwritelock" class="level3">
 <h3 class="anchored" data-anchor-id="reader-writer-synchronization-readwritelock">Reader-Writer Synchronization: <code>ReadWriteLock</code></h3>
 <p>Each engine maintains a <code>ReadWriteLock</code> to coordinate thread access: - <strong>Read Lock (Shared)</strong>: Acquired by query operations (<code>search</code>, <code>ftsearch</code>, <code>allknn</code>, <code>closestpairs</code>). Allows multiple worker threads to execute searches in parallel. - <strong>Write Lock (Exclusive)</strong>: Acquired by mutating operations (<code>append_items!</code>, <code>index!</code>, <code>delete_item!</code>, <code>calibrate!</code>). Blocks all active readers and concurrent writers.</p>
@@ -498,7 +498,7 @@ window.Quarto = {
 </section>
 <section id="context-isolation-contextpool" class="level3">
 <h3 class="anchored" data-anchor-id="context-isolation-contextpool">Context Isolation: <code>ContextPool</code></h3>
-<p>Search contexts (<code>SearchGraphContext</code>, <code>GenericContext</code>, <code>InvertedFileContext</code>) contain internal scratch buffers (beam priority queues, visited-vertex bitvectors, and accumulator caches). If concurrent search threads share a single context instance, memory corruption occurs.</p>
+<p>A search context (<code>SearchGraphContext</code>, <code>GenericContext</code>, <code>InvertedFileContext</code>) contains working buffers: beam priority queues, bit vectors of visited vertices, and accumulator caches. If two threads search with the same context, these buffers are corrupted.</p>
 <p><code>ContextPool</code> manages a dynamic pool of isolated context instances:</p>
 <div class="cell" data-layout-align="default">
 <div class="cell-output-display">
@@ -518,22 +518,23 @@ window.Quarto = {
 </div>
 </div>
 </div>
-<p>The pool expands dynamically to match the peak concurrent query volume and retains allocated buffers to eliminate runtime allocation overhead.</p>
+<p>The pool grows to the number of queries that have run concurrently, and it keeps the allocated buffers, so that later queries do not allocate them again.</p>
 </section>
-<section id="cost-accounting-across-the-pool-boundary" class="level3">
-<h3 class="anchored" data-anchor-id="cost-accounting-across-the-pool-boundary">Cost Accounting Across the Pool Boundary</h3>
-<p>Pooling has a consequence for measurement. <code>SimilaritySearch.jl</code> accounts for the work an operation performs in the counters carried by the context itself (<code>ctx.costdists</code>), which accumulate and are never reset; the cost of a single operation is therefore a difference between two readings taken around it. That technique is sound for insertion, which runs on the engine’s own <code>ctx</code> under an exclusive write lock, and unsound for search: the context a query ran on was borrowed from the pool for the duration of the call and returned at the end, so a reading taken afterwards from outside describes whatever else has since been searching concurrently, not the query in question.</p>
-<p>The count is consequently produced where it is unambiguous – inside <code>IndexEngine.search_live</code>, between checkout and checkin – and surfaced to the caller through a supplied <code>SearchStats</code> instance:</p>
+<section id="measuring-the-cost-of-a-query" class="level3">
+<h3 class="anchored" data-anchor-id="measuring-the-cost-of-a-query">Measuring the Cost of a Query</h3>
+<p>The use of a pool has a consequence for measurement. <code>SimilaritySearch.jl</code> counts the work performed by an operation in the context itself (<code>ctx.costdists</code>). These counters accumulate and are never reset, so the cost of one operation is the difference between two readings taken before and after it.</p>
+<p>This method is correct for insertion, which uses the engine’s own <code>ctx</code> under an exclusive write lock. It is not correct for search. A query uses a context taken from the pool for the duration of the call, and the context returns to the pool when the call ends. A reading taken afterwards includes the work of any other query that has used the same context since.</p>
+<p>The count is therefore computed inside <code>IndexEngine.search_live</code>, between checkout and checkin, and is reported to the caller in a <code>SearchStats</code> instance that the caller provides:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>stats <span class="op">=</span> <span class="fu">SearchStats</span>()</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>results <span class="op">=</span> <span class="fu">search</span>(h, query, <span class="fl">10</span>; stats)</span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>stats.distance_evaluations</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p><code>search</code>, <code>ftsearch</code> and the filtered search path all accept it, the filtered path reporting the cost of the candidate search it actually ran rather than of the <code>k</code> results it returned. The field is overwritten by each call rather than accumulated. This is the mechanism behind the <code>distance_evaluations</code> field of the server’s <code>op_log</code>, which has no other way to attribute work to the request that caused it.</p>
+<p><code>search</code>, <code>ftsearch</code> and the filtered form of <code>search</code> accept this argument. For a filtered search, the value is the cost of the candidate search that was executed, not of the <code>k</code> results that satisfied the predicate. Each call overwrites the field; values are not accumulated. The server obtains the <code>distance_evaluations</code> field of its <code>op_log</code> from this mechanism.</p>
 <hr>
 </section>
 </section>
 <section id="persistence-architecture" class="level2">
 <h2 class="anchored" data-anchor-id="persistence-architecture">Persistence Architecture</h2>
-<p><code>SimilaritySearchEngine.jl</code> employs a fine-grained, column-family-based storage architecture where mutations modify only the affected persistence segments.</p>
+<p>A project is stored in RocksDB column families and in one memory-mapped file. A write modifies only the segments it affects.</p>
 <div class="cell" data-layout-align="default">
 <div class="cell-output-display">
 <div>
@@ -577,24 +578,24 @@ window.Quarto = {
 </div>
 <section id="the-persisted-text-index" class="level3">
 <h3 class="anchored" data-anchor-id="the-persisted-text-index">The Persisted Text Index</h3>
-<p>A text project stores its <em>index</em>: posting lists in <code>invfile_postings</code>, per-document vectors in <code>invfile_docvecs</code>. This covers both text backends – their posting lists hold the same thing, document ids, and they differ only in what each document is stored <em>as</em>. Three shapes occur, and each stored value carries a one-byte tag saying which: integer term frequencies (BM25), <code>Float32</code> model weights (the weighted backend), and bags of words (the weighted backend under a set distance, which reads membership rather than weights). A sparse project still stores the <em>objects</em> it indexed, in <code>sparse_db</code>, and reconstructs its index on every open; its items are vectors the caller encoded, so what it saves is already what it would have to write, and giving it the same treatment is a follow-up rather than a difference of principle.</p>
-<p>The difference is not small at scale: over 265,000 Project Gutenberg paragraphs, reconstruction costs 20.4 s and assembly from storage 1.4 s on BM25 and 1.7 s on the weighted backend (measured 2026-09-11 and 2026-09-12). Indexing the same corpus costs 25.7 s and 26.4 s respectively, against 147.3 s before, because a block is now encoded by the library’s parallel batch path rather than one document at a time.</p>
-<p>Writing is incremental and blockwise. Each <code>index!</code> call encodes its backlog as one block, splices the block’s document vectors and lengths into the live index, and hands its posting lists – ids shifted from block-local to global – to <code>IndexEngine.persist_block!</code>. The storage-backed implementation of that function performs a read-modify-write per token the block touched: appending is sound precisely because document ids grow monotonically, so a block’s ids are larger than every id already stored and the ascending order the query-time merge depends on is preserved. <code>IndexEngine</code> never names RocksDB; it dispatches on the kind of adjacency list its index was built with.</p>
-<p>The unit of that write is the block, and its size has a cost: a token’s list is rewritten once per block that touches it, so the same 50,000 documents cost 5.8 s indexed in one block, 6.8 s in ten, and 10.1 s in fifty (measured 2026-09-12). Indexing in large blocks is therefore worth preferring, which is what <code>append_items!</code> followed by a single <code>index!</code> already does.</p>
-<p><strong>Posting lists are lazy; document vectors are not</strong>, and the asymmetry is measured rather than assumed. A query reads one posting list per query <em>term</em>, so serving them from storage costs 1.8% in latency (66.8 ms against 68.0 ms) while removing 55.8 MB of 237.5 MB from memory. Scoring, by contrast, reads a <em>candidate’s</em> term vector (<code>bm25score(..., idx.db[docID])</code>), and the merge makes every document containing any query token a candidate – so a query with a frequent term turns lazy document vectors into one point read per document in the collection: 1,771.9 ms against 66.8 ms for the same query. Document vectors are therefore read into memory at open (0.76 s for that corpus).</p>
-<p>The lazy posting lists sit behind a least-frequently-used cache bounded by a maximum number of cached lists, trimmed back to a base size when it is exceeded. Eviction happens only after a query has fully resolved, never inside one: concurrent searches hold read locks, not exclusive ones, and a list dropped mid-query would be re-read by whichever of them was still walking it.</p>
-<p><strong>There is no migration path from the previous format, deliberately.</strong> A project written before the index was persisted opens with its profile and its staged text intact and no index at all; searching it says so, and one <code>index!</code> call rebuilds it from that staged text, which was always persisted independently of the index. Keeping the old format readable would mean keeping the whole rebuild-by-reinsertion path alive to serve projects that, with no released version, do not yet exist – so the procedure is explicit and costs a line:</p>
+<p>A text project stores the index itself: posting lists in <code>invfile_postings</code>, and one vector per document in <code>invfile_docvecs</code>. Both text backends are stored this way. Their posting lists contain the same data, document identifiers, and they differ only in the representation of each document. Three representations are used, and each stored value begins with a one-byte tag that identifies its own: integer term frequencies (BM25), <code>Float32</code> model weights (the weighted backend), and bags of words (the weighted backend under a set distance, which reads membership instead of weights). A sparse project stores the objects it indexed, in <code>sparse_db</code>, and reconstructs its index at every open. Its items are vectors encoded by the caller, so the stored objects are already the representation that would be written; applying the same treatment to a sparse project remains pending work.</p>
+<p>The two procedures differ in cost. Over 265,000 Project Gutenberg paragraphs, reconstruction takes 20.4 s, and assembly from storage takes 1.4 s with BM25 and 1.7 s with the weighted backend (measured 2026-09-11 and 2026-09-12). Indexing the same corpus takes 25.7 s and 26.4 s respectively, compared with 147.3 s before, because a block is now encoded by the parallel batch procedure of the library instead of one document at a time.</p>
+<p>Writing is incremental and proceeds by blocks. Each call to <code>index!</code> encodes its backlog as one block, inserts the document vectors and lengths of that block into the index in memory, and passes its posting lists to <code>IndexEngine.persist_block!</code>, with identifiers converted from block-local to global. The implementation of that function reads, modifies and writes one stored list per token that the block contains. Appending is correct because document identifiers increase monotonically: the identifiers of a block are larger than every identifier already stored, so the ascending order required by the merge at query time is preserved. <code>IndexEngine</code> contains no reference to RocksDB, and dispatches on the type of adjacency list of its index.</p>
+<p>The unit of writing is the block, and the number of blocks has a cost. The list of a token is rewritten once per block that contains it, so the same 50,000 documents take 5.8 s in one block, 6.8 s in ten, and 10.1 s in fifty (measured 2026-09-12). Large blocks are therefore preferable, which is the result of calling <code>append_items!</code> and then a single <code>index!</code>.</p>
+<p><strong>Posting lists are read on demand; document vectors are not.</strong> The reason is measured. A query reads one posting list per query term, so reading them from storage increases latency by 1.8% (66.8 ms against 68.0 ms) and removes 55.8 MB of 237.5 MB from memory. Scoring reads the term vector of each candidate (<code>bm25score(..., idx.db[docID])</code>), and the merge makes every document that contains any query token a candidate. With a frequent term, reading document vectors on demand becomes one point read per document in the collection: 1,771.9 ms against 66.8 ms for the same query. Document vectors are therefore read into memory when the project is opened (0.76 s for that corpus).</p>
+<p>Posting lists read on demand are kept in a least-frequently-used cache. The cache holds a maximum number of lists and is reduced to a base size when that maximum is exceeded. Lists are removed only after a query has finished, never during one: concurrent searches hold read locks rather than exclusive locks, and a list removed during a query would be read again by any search still using it.</p>
+<p><strong>There is no migration from the previous format.</strong> A project written before the index was persisted opens with its profile and its staged text, and with no index. A search against it reports this condition, and one call to <code>index!</code> builds the index from the staged text, which was always persisted independently of the index. Supporting the previous format would require keeping the reconstruction procedure for projects that do not yet exist, since no version has been released. The migration is therefore explicit:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>h <span class="op">=</span> <span class="fu">open_project</span>(workdir, dataset)</span>
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="fu">index!</span>(h)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </section>
 <section id="external-identifier-resolution" class="level3">
 <h3 class="anchored" data-anchor-id="external-identifier-resolution">External Identifier Resolution</h3>
-<p><code>doc_id</code> is the caller’s own identifier, and it is resolved through the <code>idx_docid</code> column family rather than by scanning <code>records</code>. Keys are composite (<code>doc_id</code> bytes followed by the four bytes of <code>_id</code>), which is what allows several items to share one <code>doc_id</code>: <code>fetch_items</code> returns every record carrying the requested identifier, in ascending <code>_id</code> order, and <code>exists</code> reports it as deleted only when all of them are. Measured on a 50,000-item project, resolving an external identifier costs 0.12 ms through this index against 59 ms for the full scan it replaces.</p>
-<p>A project written before this index existed is migrated on its first writable open: <code>Project.backfill_docid_index!</code> performs a single pass over <code>records</code> and writes a marker key so no later open repeats it. A read-only handle opened against an unmigrated project falls back to the scan.</p>
+<p><code>doc_id</code> is the identifier supplied by the caller. It is resolved through the <code>idx_docid</code> column family, not by scanning <code>records</code>. Keys are composite: the bytes of <code>doc_id</code> followed by the four bytes of <code>_id</code>. This allows several items to share one <code>doc_id</code>. <code>fetch_items</code> returns every record that carries the requested identifier, in ascending <code>_id</code> order, and <code>exists</code> reports the identifier as deleted only when all of those records are deleted. On a project of 50,000 items, resolving an external identifier takes 0.12 ms through this index, compared with 59 ms for the scan it replaces.</p>
+<p>A project written before this index existed is migrated the first time it is opened for writing. <code>Project.backfill_docid_index!</code> performs one pass over <code>records</code> and writes a marker key, so that later opens do not repeat the pass. A read-only handle opened on a project that has not been migrated uses the scan instead.</p>
 </section>
 <section id="compaction" class="level3">
 <h3 class="anchored" data-anchor-id="compaction">Compaction</h3>
-<p>Bulk writes leave a write-ahead log that the <em>next</em> open must replay, so compaction is an open-latency concern rather than a write-latency one. <code>close_project!</code> therefore compacts every column family of the project before closing, unless the handle is read-only, the session performed no writes, or the caller passes <code>compact=false</code>; <code>compact_project!</code> exposes the same operation mid-session. Measured on a 50,000-vector dense project, reopening costs 2.97 s without compaction and 0.28 s with it, for a compaction that itself takes 0.03 s.</p>
+<p>Bulk writes leave a write-ahead log, and the next open must replay it. Compaction therefore affects the latency of opening a project, not the latency of writing to it. <code>close_project!</code> compacts every column family of the project before closing, unless the handle is read-only, the session performed no writes, or the caller passes <code>compact=false</code>. <code>compact_project!</code> performs the same operation while the project remains open. On a dense project of 50,000 vectors, reopening takes 2.97 s without compaction and 0.28 s with it, and the compaction itself takes 0.03 s.</p>
 </section>
 <section id="storage-subsystems" class="level3">
 <h3 class="anchored" data-anchor-id="storage-subsystems">Storage Subsystems</h3>
@@ -607,7 +608,7 @@ window.Quarto = {
 <li><strong>Dense Vector Storage (<code>dense_vectors.mmapdb</code>)</strong>:
 <ul>
 <li>Dense vectors are stored in a dedicated memory-mapped binary file managed by <code>MMapMatrixDatabase</code>.</li>
-<li>Bypasses key-value serialization overhead, providing high-speed sequential appends and zero-copy random access.</li>
+<li>Avoids key-value serialization. Appends are sequential, and random access reads the vector without copying it.</li>
 </ul></li>
 <li><strong><code>AdjacencyStore</code> (Graph Topology)</strong>:
 <ul>
@@ -649,13 +650,13 @@ window.Quarto = {
 </div>
 </div>
 </div>
-<p>When a project is reopened, stored forward edges are reloaded and bidirectional reverse links are regenerated, restoring the search index to its exact state prior to closure.</p>
+<p>When a project is reopened, the stored forward edges are read again and the reverse links are regenerated, which restores the index to the state it had before the project was closed.</p>
 <hr>
 </section>
 </section>
 <section id="failure-reporting-typed-errors-and-their-boundaries" class="level2">
 <h2 class="anchored" data-anchor-id="failure-reporting-typed-errors-and-their-boundaries">Failure Reporting: Typed Errors and Their Boundaries</h2>
-<p>Every failure the engine raises deliberately is an <code>EngineError</code>, and the type is the contract. Four abstract categories sit beneath it, and a concrete type beneath each:</p>
+<p>Every failure that the engine raises is an <code>EngineError</code>. The type of the error, not its message, is the interface. There are four abstract categories, and one or more concrete types under each of them:</p>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 33%">
@@ -692,8 +693,8 @@ window.Quarto = {
 </tr>
 </tbody>
 </table>
-<p>Concrete types carry structured detail where a caller can use it: <code>PendingBacklog</code> reports the staged and connected counts, <code>WrongDimension</code> the expected and received lengths, <code>InvalidOption</code> the keyword at fault.</p>
-<p><strong>Mapping lives at each boundary, never in the engine.</strong> The engine does not know what an HTTP status code or an exit code is. Its consumers translate:</p>
+<p>The concrete types carry the values a caller can use. <code>PendingBacklog</code> reports the number of staged items and the number of indexed items, <code>WrongDimension</code> reports the expected and the received length, and <code>InvalidOption</code> reports the keyword that was rejected.</p>
+<p><strong>The mapping is defined at each interface, not in the engine.</strong> The engine contains no reference to HTTP status codes or to process exit codes. Each consumer performs the translation:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="cf">try</span></span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>    <span class="fu">search</span>(handle, query, <span class="fl">10</span>)</span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="cf">catch</span> <span class="cn">e</span></span>
@@ -701,12 +702,12 @@ window.Quarto = {
 <span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>    <span class="cn">e</span> isa NotFound <span class="op">&amp;&amp;</span> <span class="cf">return</span> <span class="fu">not_found</span>()</span>
 <span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>    <span class="fu">rethrow</span>()</span>
 <span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p><code>SimilaritySearchServer</code> maps categories to status codes (<code>NotFound</code> to 404, <code>ConflictingState</code> to 409, <code>InvalidRequest</code> to 400, anything else to 500) and its CLIs map the same categories to exit codes (4, 5, 2, 70), so a shell script can branch on the reason without reading output. That mapping is the entire coupling between the two packages of this repository, and it is written out in one table in the <a href="./server/manual.html#how-failures-are-reported">server manual</a>.</p>
-<p>The alternative — bare <code>error("...")</code> — forces every consumer to classify by message text, which breaks silently the first time the wording improves. That had already happened here: this engine’s own concurrency test recognized a refused whole-dataset operation with <code>occursin("requires no pending backlog", e.msg)</code>, and now matches <code>PendingBacklog</code> instead.</p>
+<p><code>SimilaritySearchServer</code> maps the categories to status codes: <code>NotFound</code> to 404, <code>ConflictingState</code> to 409, <code>InvalidRequest</code> to 400, and any other failure to 500. Its command lines map the same categories to exit codes 4, 5, 2 and 70, so that a shell script can select a branch without reading the output text. This mapping is the only coupling between the two packages of this repository, and the <a href="./server/manual.html#how-failures-are-reported">server manual</a> states it in one table.</p>
+<p>The alternative, <code>error("...")</code> with a message, requires every consumer to classify the failure by its text. Such a classification fails when the wording changes, and it fails without any error being reported. This had occurred in this repository: the concurrency test identified a rejected operation with <code>occursin("requires no pending backlog", e.msg)</code>. It now matches the type <code>PendingBacklog</code>.</p>
 </section>
-<section id="dual-logging-architecture-reporters-vs.-observers" class="level2">
-<h2 class="anchored" data-anchor-id="dual-logging-architecture-reporters-vs.-observers">Dual Logging Architecture: Reporters vs.&nbsp;Observers</h2>
-<p>Contexts maintain two isolated logging channels: - <strong>Reporters (<code>ctx.reporters</code>)</strong>: Receive progress messages via <a href="https://sadit.github.io/SimilaritySearch.jl/dev/api/"><code>INFORM</code></a> and output formatted status lines to <code>stderr</code> or custom <code>IO</code> streams. Throttled to prevent console flooding. - <strong>Observers (<code>ctx.observers</code>)</strong>: Receive structural mutation events (<code>:add!</code>) via <a href="https://sadit.github.io/SimilaritySearch.jl/dev/api/"><code>OBSERVE</code></a>. Execute un-throttled callbacks that trigger persistence updates (<code>CallbackLog</code>).</p>
+<section id="logging-channels-reporters-and-observers" class="level2">
+<h2 class="anchored" data-anchor-id="logging-channels-reporters-and-observers">Logging Channels: Reporters and Observers</h2>
+<p>A context maintains two separate logging channels: - <strong>Reporters (<code>ctx.reporters</code>)</strong>: Receive progress messages via <a href="https://sadit.github.io/SimilaritySearch.jl/dev/api/"><code>INFORM</code></a> and output formatted status lines to <code>stderr</code> or custom <code>IO</code> streams. Throttled to prevent console flooding. - <strong>Observers (<code>ctx.observers</code>)</strong>: Receive structural mutation events (<code>:add!</code>) via <a href="https://sadit.github.io/SimilaritySearch.jl/dev/api/"><code>OBSERVE</code></a>. Execute un-throttled callbacks that trigger persistence updates (<code>CallbackLog</code>).</p>
 <div class="cell" data-layout-align="default">
 <div class="cell-output-display">
 <div>
@@ -728,8 +729,8 @@ window.Quarto = {
 <section id="soft-deletions-and-dataset-operations" class="level2">
 <h2 class="anchored" data-anchor-id="soft-deletions-and-dataset-operations">Soft Deletions and Dataset Operations</h2>
 <ul>
-<li><strong>Soft Deletions</strong>: The <code>delete_item!</code> function registers document identifiers in <code>deleted_ids</code>. The underlying index structure is preserved without requiring costly reorganization. Search queries evaluate candidates and attach an explicit <code>deleted::Bool</code> flag in <code>SearchResult</code>.</li>
-<li><strong>Whole-Dataset Metric Operations</strong>: Functions <code>allknn</code>, <code>fft</code>, <code>closestpairs</code>, and <code>bichromatic_kclosestpairs</code> execute directly on the in-memory graph index, utilizing multithreaded batch routines to perform comprehensive metric analyses across the entire collection.</li>
+<li><strong>Soft deletions</strong>: <code>delete_item!</code> records document identifiers in <code>deleted_ids</code>. The index is not reorganized. A query evaluates such candidates and reports them with the field <code>deleted::Bool</code> of <code>SearchResult</code>.</li>
+<li><strong>Operations over an entire collection</strong>: <code>allknn</code>, <code>fft</code>, <code>closestpairs</code> and <code>bichromatic_kclosestpairs</code> operate on the index in memory, using multithreaded batch routines over the whole collection.</li>
 </ul>
 
 

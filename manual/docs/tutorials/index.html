@@ -191,9 +191,9 @@ ul.task-list li input[type="checkbox"] {
 </header>
 
 
-<p>This section provides hands-on tutorials for working with <code>SimilaritySearchEngine.jl</code>, the embedded engine. To reach the same capabilities over HTTP instead, the <a href="../server/tutorial.html">server tutorial</a> covers the service layer built on top of it.</p>
+<p>This section contains the tutorials for <code>SimilaritySearchEngine.jl</code>, the embedded engine. The <a href="../server/tutorial.html">server tutorial</a> presents the same operations over HTTP, through the service layer built on the engine.</p>
 <ul>
-<li><strong><a href="../tutorials/getting-started.html">Getting Started</a></strong>: A comprehensive walkthrough using paragraphs from Mary Shelley’s <em>Frankenstein</em>. Demonstrates:
+<li><strong><a href="../tutorials/getting-started.html">Getting Started</a></strong>: a sequence of examples over the paragraphs of Mary Shelley’s <em>Frankenstein</em>. It covers:
 <ul>
 <li>Dense vector similarity search using LSI-derived embeddings with <code>SearchGraph</code>.</li>
 <li>Sparse vector indexing with <code>InvertedFile</code>.</li>
@@ -203,14 +203,14 @@ ul.task-list li input[type="checkbox"] {
 <li>Transactional persistence (closing and reopening projects).</li>
 <li>Whole-dataset metric operations (<code>allknn</code>, <code>fft</code>, <code>closestpairs</code>, <code>bichromatic_kclosestpairs</code>).</li>
 </ul></li>
-<li><strong><a href="../tutorials/paragraph-search.html">Multilingual Paragraph Search</a></strong>: A large-scale tutorial indexing four corpora across three languages (English, Spanish, Portuguese Project Gutenberg collections, and English Wikipedia). Demonstrates:
+<li><strong><a href="../tutorials/paragraph-search.html">Multilingual Paragraph Search</a></strong>: indexing of corpora in three languages: the English, Spanish and Portuguese collections of Project Gutenberg, and English Wikipedia. It covers:
 <ul>
 <li>Fitting and configuring linguistic profiles (<code>TextProfile</code>).</li>
 <li>Orthographic query variant resolution and semantic query expansion.</li>
-<li>Empirical benchmarking of indexing throughput, memory overhead, and search latency.</li>
+<li>Measurements of indexing rate, memory use, and search latency.</li>
 </ul></li>
 </ul>
-<p>Once the engine’s model is familiar, the <a href="../server/manual.html">server manual</a> reads as a thin translation layer: an endpoint per call, a status code per error category, and a job per whole-dataset operation.</p>
+<p>After the model of the engine is known, the <a href="../server/manual.html">server manual</a> describes the translation it performs: one endpoint per call, one status code per error category, and one job per operation over an entire dataset.</p>
 
 
 

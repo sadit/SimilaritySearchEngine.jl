@@ -1,23 +1,23 @@
 ---
 title: "Server Tutorial"
-subtitle: "From an empty workdir to a query over HTTP, a job, and the same thing from the command line"
+subtitle: "From an empty working directory to a query over HTTP, an asynchronous job, and the equivalent command line"
 lang: en-US
 ---
 
-This walks through starting the server, creating a dataset, indexing documents, searching
-them, and running a heavy job asynchronously. It assumes you have this repository checked
-out; `SimilaritySearchServer` is the package under `server/`, and the engine it serves is the
-package at the root, whose own tutorial is [Getting started](../tutorials/getting-started.qmd).
+This tutorial starts the server, creates a dataset, indexes documents, searches them, and
+executes an asynchronous job. It assumes a local copy of this repository.
+`SimilaritySearchServer` is the package in `server/`, and the engine it uses is the package at
+the root, whose tutorial is [Getting started](../tutorials/getting-started.qmd).
 
-Everything below happens over HTTP or a command line, but nothing below is implemented here:
-each endpoint is a thin translation of one engine call, and reading the two tutorials side by
-side is the fastest way to see which is which.
+Every operation below is performed over HTTP or from a command line, and none of them is
+implemented in this package: each endpoint translates one engine call. Reading both tutorials
+together shows which part performs each operation.
 
 Julia 1.12 or later is required.
 
 ## Step 1: Set up the environment
 
-The server depends on the engine from this same repository, so develop it by path once:
+The server uses the engine from this repository, so the engine is added by path once:
 
 ```bash
 julia --project=server -e 'using Pkg; Pkg.develop(path="."); Pkg.instantiate()'
@@ -29,12 +29,13 @@ julia --project=server -e 'using Pkg; Pkg.develop(path="."); Pkg.instantiate()'
 julia --project=server -t auto -m SimilaritySearchServer serve
 ```
 
-On a first run it writes a default configuration and listens on `http://127.0.0.1:8080`.
-Every dataset lives under `<workdir>/datasets/`, and the server reopens all of them at
-startup — a restart loses nothing.
+On its first execution, the server writes a default configuration and accepts connections on
+`http://127.0.0.1:8080`. Every dataset is stored under `<workdir>/datasets/`, and the server
+opens all of them when it starts, so a restart preserves their contents.
 
-To install the three apps (`similarity-search`, `similarity-search-admin`,
-`similarity-search-serve`) into `~/.julia/bin` instead of invoking Julia each time:
+The three applications (`similarity-search`, `similarity-search-admin`,
+`similarity-search-serve`) can be installed into `~/.julia/bin`, so that Julia does not have to
+be invoked explicitly:
 
 ```bash
 julia -e 'using Pkg; Pkg.Apps.develop(path="server")'
@@ -55,12 +56,13 @@ curl -s -X POST localhost:8080/api/v1/simsearch/demo/append \
          ]}'
 ```
 
-`index_kind` names what the project holds and what indexes it: `searchgraph` (dense vectors,
-the default), `bm25_invfile` or `invfile` (text), `sparse_invfile` (caller-encoded sparse
-vectors, which also needs `dimension`). Any field that is not `doc_id`, `keywords`, `refs`,
-`text`, `vector`, `indices` or `values` becomes free-form metadata — `year` above.
+`index_kind` names the type of data the project holds and the structure that indexes it:
+`searchgraph` for dense vectors, which is the default; `bm25_invfile` or `invfile` for text;
+and `sparse_invfile` for sparse vectors encoded by the caller, which also requires `dimension`.
+Any field other than `doc_id`, `keywords`, `refs`, `text`, `vector`, `indices` and `values`
+becomes metadata of the item, such as `year` in the example above.
 
-Appending indexes immediately, so the documents are searchable when the call returns.
+The insertion indexes the documents, so they can be searched when the call returns.
 
 ## Step 4: Search
 
@@ -70,34 +72,35 @@ curl -s -X POST localhost:8080/api/v1/simsearch/demo/ftsearch \
      -d '{"text": "gato tejado", "k": 5}'
 ```
 
-A dense project answers `/search` with a `vector` instead, and accepts a metadata `filter`:
+A dense project uses `/search`, which receives a `vector` and accepts a metadata `filter`:
 
 ```json
 {"vector": [0.1, 0.2, 0.3], "k": 10, "filter": {"year": {"$gte": 2024}}}
 ```
 
-A filtered search reads a bounded number of candidates before filtering, so it can return
-fewer than `k`; the response says so with `insufficient_results`.
+A filtered search reads a limited number of candidates before applying the filter, so it can
+return fewer than `k` results. The response reports this condition in the field
+`insufficient_results`.
 
 ## Step 5: Read failures
 
-Failures are typed, and the status code tells you what kind of problem it is before you read
-the message:
+Failures are typed, and the status code identifies the class of the failure without the message
+being read:
 
 | status | meaning | example |
 | ---: | :--- | :--- |
-| 400 | the request cannot be honoured as written | a dense `vector` sent to a text project |
-| 404 | something named does not exist | an unknown dataset id |
-| 409 | the project is not in a state to serve it | a whole-dataset job against a staged backlog |
-| 500 | stored data could not be read | — |
+| 400 | the request cannot be executed as written | a dense `vector` sent to a text project |
+| 404 | an object named in the request does not exist | an unknown dataset identifier |
+| 409 | the project is not in a state that allows the request | a job over the entire dataset while items are staged |
+| 500 | the stored data could not be read | — |
 
-The body carries both `error` (prose) and `kind` (the engine's concrete error type), so a
-client can branch on `kind` without matching on text.
+The body contains `error`, the message, and `kind`, the concrete error type of the engine, so
+that a client can select a behavior from `kind` without comparing text.
 
 ## Step 6: Run a heavy job
 
-Anything that scans the whole collection runs as a job: the HTTP call enqueues and returns
-immediately, and a dispatcher runs it as its own Julia subprocess.
+An operation that reads the entire collection is executed as a job. The HTTP call enqueues the
+job and returns immediately, and a dispatcher executes it in a separate Julia subprocess.
 
 ```bash
 JOB=$(curl -s -X POST localhost:8080/api/v1/jobs/allknn \
@@ -108,11 +111,13 @@ curl -s localhost:8080/api/v1/jobs/$JOB          # queued | running | completed 
 curl -s localhost:8080/api/v1/jobs/$JOB/result   # once completed
 ```
 
-Jobs open their dataset read-only, so they can run while the server keeps serving it.
+A job opens its dataset in read-only mode, so it can run while the server continues to answer
+queries on that dataset.
 
 ## Step 7: The same thing from the command line
 
-Every operation is also a subcommand, against a workdir rather than a URL:
+Every operation is also available as a subcommand, applied to a working directory instead of a
+URL:
 
 ```bash
 julia --project=server -m SimilaritySearchServer build \
@@ -121,9 +126,11 @@ julia --project=server -m SimilaritySearchServer build \
 julia --project=server -m SimilaritySearchServer describe --dataset demo_cli --workdir ./workdir
 ```
 
-CLI exit codes mirror the status codes above: `2` invalid request, `4` not found, `5`
-conflicting state, `70` storage failure, and `1` for the command's own refusals (no such
-dataset, unreadable input). A script can branch on those without parsing output.
+The exit codes of the command line correspond to the status codes above: `2` for an invalid
+request, `4` for an object that does not exist, `5` for a conflicting state, and `70` for a
+storage failure. Code `1` is reserved for failures detected by the command itself, such as a
+dataset that does not exist or an input file that cannot be read. A script can select a branch
+from these codes without reading the output.
 
 ## Step 8: The Python client
 
@@ -144,7 +151,7 @@ ds_id = client.create_dataset()
 result = run_job(client, kind="allknn", command=["--dataset", ds_id, "--k", "5"])
 ```
 
-`stress_client.py` drives the whole loop under load:
+`stress_client.py` executes the same sequence under concurrent load:
 
 ```bash
 python stress_client.py --jobs 3
@@ -152,10 +159,9 @@ python stress_client.py --jobs 3
 
 ## Where to go next
 
-- The [server manual](manual.qmd) — what the package contains, how a dataset is held, the
-  full endpoint list, and the error mapping in full.
-- The [engine's architecture](../architecture.qmd) — everything about storage, indexing and
-  search behaviour, which is where the answers are whenever an endpoint's behaviour is
-  surprising.
-- The [Server API reference](https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html)
-  — every handler, job state and configuration field, from the docstrings.
+- The [server manual](manual.qmd): the contents of the package, how a dataset is held, the
+  complete list of endpoints, and the mapping of errors.
+- The [architecture of the engine](../architecture.qmd): storage, indexing and the behavior of a
+  search. It documents the behavior that an endpoint reproduces.
+- The [Server API reference](https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html):
+  every handler, job state and configuration field, generated from the docstrings.

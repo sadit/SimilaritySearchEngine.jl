@@ -247,8 +247,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </header>
 
 
-<p><code>SimilaritySearchServer</code> exposes <a href="../index.html"><code>SimilaritySearchEngine</code></a> — the embedded engine documented in the rest of this site — through a REST API, two CLIs, and an asynchronous job queue. It holds no index logic of its own: <strong>everything about storing, indexing and searching lives in the engine</strong>, and this package is the layer that turns HTTP requests and command lines into engine calls, and engine results and failures into responses and exit codes.</p>
-<p>That boundary is the thing to keep in mind while reading the rest: when something about projects, persistence, profiles or search behaviour is unclear, the answer is in the engine’s <a href="../architecture.html">architecture guide</a>, not here. The two packages live in one repository and are documented as one thing on purpose: the seam between them is the engine’s public API, and both sides of that seam are described here.</p>
+<p><code>SimilaritySearchServer</code> provides access to <a href="../index.html"><code>SimilaritySearchEngine</code></a>, the embedded engine documented in the rest of this site, through a REST API, two command lines and an asynchronous job queue. It implements no indexing logic. <strong>Storage, indexing and search are implemented in the engine.</strong> This package translates HTTP requests and command lines into engine calls, and engine results and failures into responses and exit codes.</p>
+<p>This division determines where each subject is documented. Questions about projects, persistence, text profiles or the behavior of a search are answered in the engine’s <a href="../architecture.html">architecture guide</a>. The two packages are documented on one site because the interface between them is the public API of the engine, and both sides of that interface are described here.</p>
 <section id="what-this-package-contains" class="level2">
 <h2 class="anchored" data-anchor-id="what-this-package-contains">1. What this package contains</h2>
 <table class="caption-top table">
@@ -293,17 +293,17 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </tr>
 </tbody>
 </table>
-<p>Schema, persistence, the index engine and project management are <strong>not</strong> here: they are <code>SimilaritySearchEngine.Schema</code>, <code>.Persistence</code>, <code>.IndexEngine</code> and <code>.Project</code>.</p>
+<p>The schema, the persistence layer, the index engine and project management are not part of this package. They are <code>SimilaritySearchEngine.Schema</code>, <code>.Persistence</code>, <code>.IndexEngine</code> and <code>.Project</code>.</p>
 </section>
 <section id="how-a-dataset-is-held" class="level2">
 <h2 class="anchored" data-anchor-id="how-a-dataset-is-held">2. How a dataset is held</h2>
-<p>One <code>SimilaritySearchEngine.EmbeddedEngine</code> per dataset id, in <code>AppState.handles</code>. That single handle carries both halves of a project (its RocksDB metadata store and its live search engine), which is what keeps them consistent across a restart: <code>reload_datasets!</code> reopens every dataset under <code>&lt;workdir&gt;/datasets/</code> with <code>open_project</code>, and a reopened dataset comes back with its index, profile, staged backlog and tombstones intact.</p>
-<p>There is no snapshot file. Earlier versions of this package wrote a JLD2 snapshot per dataset and reloaded it on demand, because the engine did not persist its own index; it does now, and a dataset is simply the directory it lives in.</p>
-<p><strong>Heavy jobs run as subprocesses and open their project read-only</strong>, since the serving process may hold it open and RocksDB’s write lock is exclusive per process.</p>
+<p>The server holds one <code>SimilaritySearchEngine.EmbeddedEngine</code> per dataset identifier, in <code>AppState.handles</code>. That handle contains the two parts of a project, its RocksDB metadata store and its search engine, which keeps them consistent across a restart. <code>reload_datasets!</code> opens every dataset under <code>&lt;workdir&gt;/datasets/</code> with <code>open_project</code>, and a reopened dataset preserves its index, its text profile, its staged items and its deletion marks.</p>
+<p>There is no snapshot file. Earlier versions of this package wrote one JLD2 snapshot per dataset and read it on demand, because the engine did not store its own index. The engine stores it now, and a dataset is the directory that contains it.</p>
+<p><strong>A job that operates on an entire dataset runs as a subprocess and opens its project in read-only mode</strong>, because the serving process may hold the project open, and the RocksDB write lock is exclusive per process.</p>
 </section>
 <section id="kinds-of-project" class="level2">
 <h2 class="anchored" data-anchor-id="kinds-of-project">3. Kinds of project</h2>
-<p>The API’s <code>index_kind</code> names a pair — what a project holds, and what indexes it:</p>
+<p>The parameter <code>index_kind</code> of the API names a pair: the type of data a project holds, and the structure that indexes it:</p>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 25%">
@@ -324,13 +324,13 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <td style="text-align: left;"><code>searchgraph</code></td>
 <td style="text-align: left;"><code>DenseEngine</code></td>
 <td style="text-align: left;"><code>SearchGraph</code></td>
-<td style="text-align: left;">approximate, self-tuning; the default</td>
+<td style="text-align: left;">approximate, adjusts its own parameters; the default</td>
 </tr>
 <tr class="even">
 <td style="text-align: left;"><code>exhaustive_search</code></td>
 <td style="text-align: left;"><code>DenseEngine</code></td>
 <td style="text-align: left;"><code>ExhaustiveSearch</code></td>
-<td style="text-align: left;">exact brute force</td>
+<td style="text-align: left;">exact, linear scan</td>
 </tr>
 <tr class="odd">
 <td style="text-align: left;"><code>parallel_exhaustive_search</code></td>
@@ -354,11 +354,11 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <td style="text-align: left;"><code>sparse_invfile</code></td>
 <td style="text-align: left;"><code>SparseEngine</code></td>
 <td style="text-align: left;"><code>InvertedFile</code></td>
-<td style="text-align: left;">caller-encoded sparse vectors; needs <code>dimension</code></td>
+<td style="text-align: left;">sparse vectors encoded by the caller; requires <code>dimension</code></td>
 </tr>
 </tbody>
 </table>
-<p>Text projects are created with <code>FitFromCorpus</code>: the vocabulary is fitted from whatever the dataset itself has been given by the first <code>index!</code>. Shipping a pre-trained profile to the server is not exposed over HTTP yet.</p>
+<p>A text project is created with <code>FitFromCorpus</code>. Its vocabulary is fitted from the documents the dataset has received when <code>index!</code> is called for the first time. Sending a pre-computed text profile to the server is not available over HTTP.</p>
 </section>
 <section id="rest-api-base-endpoints" class="level2">
 <h2 class="anchored" data-anchor-id="rest-api-base-endpoints">4. REST API (base endpoints)</h2>
@@ -366,7 +366,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="control">Control</h3>
 <ul>
 <li><code>GET /readyz</code> — health.</li>
-<li><code>GET /metrics</code> — Prometheus-style gauges, including per-dataset document and tombstone counts.</li>
+<li><code>GET /metrics</code> — metrics in Prometheus format, including the number of documents and the number of deleted records per dataset.</li>
 </ul>
 </section>
 <section id="datasets" class="level3">
@@ -374,18 +374,18 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <ul>
 <li><code>POST /api/v1/datasets</code> — creates one. Accepts <code>id</code>, <code>index_kind</code> (see above), <code>distance</code>, <code>dimension</code>, and the join-group fields <code>join_group</code>, <code>holds_metadata</code>, <code>key</code>.</li>
 <li><code>DELETE /api/v1/datasets/{id}</code> — destroys it.</li>
-<li><code>POST /api/v1/datasets/{id}/unload</code> / <code>reload</code> — closes or reopens a dataset without restarting the server (what the CLI’s <code>rebuild</code> needs, since RocksDB’s write lock is exclusive).</li>
+<li><code>POST /api/v1/datasets/{id}/unload</code> and <code>/reload</code> — closes or reopens a dataset without restarting the server. The <code>rebuild</code> subcommand of the command line requires this, because the RocksDB write lock is exclusive per process.</li>
 </ul>
 </section>
 <section id="search-and-indexing" class="level3">
 <h3 class="anchored" data-anchor-id="search-and-indexing">Search and indexing</h3>
 <ul>
-<li><code>POST /api/v1/simsearch/{id}/append</code> — appends items. Dense items carry <code>vector</code>, text items <code>text</code>, sparse items <code>indices</code>+<code>values</code>; <code>doc_id</code>, <code>keywords</code>, <code>refs</code> and any other field become the item’s metadata.</li>
+<li><code>POST /api/v1/simsearch/{id}/append</code> — inserts items. A dense item contains <code>vector</code>, a text item contains <code>text</code>, and a sparse item contains <code>indices</code> and <code>values</code>. The fields <code>doc_id</code>, <code>keywords</code> and <code>refs</code>, and any other field, become the metadata of the item.</li>
 <li><code>POST /api/v1/simsearch/{id}/search</code> — dense/sparse search, with optional <code>filter</code>, <code>page_size</code> and <code>beamsearch_overrides</code>.</li>
 <li><code>POST /api/v1/simsearch/{id}/ftsearch</code> — text search.</li>
-<li><code>POST /api/v1/simsearch/{id}/delete</code> — soft delete.</li>
+<li><code>POST /api/v1/simsearch/{id}/delete</code> — logical deletion.</li>
 <li><code>POST /api/v1/simsearch/{id}/calibrate</code> — recall calibration for a graph-backed project.</li>
-<li><code>POST /api/v1/simsearch/hybrid</code> and <code>/ftsearch_group</code> — reciprocal-rank fusion across two datasets, and text fan-out across a join group.</li>
+<li><code>POST /api/v1/simsearch/hybrid</code> and <code>/ftsearch_group</code> — reciprocal rank fusion over two datasets, and a text query sent to every dataset of a join group.</li>
 </ul>
 </section>
 <section id="telemetry" class="level3">
@@ -393,19 +393,19 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <ul>
 <li><code>GET /api/v1/datasets/{id}/log?offset=&amp;limit=</code> — the dataset’s <code>op_log</code>: one record per <code>search</code>/<code>ftsearch</code>/<code>append</code>/<code>delete</code>, with elapsed time and <code>distance_evaluations</code>.</li>
 </ul>
-<p>The evaluation count for a search comes from the engine (<code>SimilaritySearchEngine.SearchStats</code>, passed into <code>search</code>/<code>ftsearch</code> by <code>_run_search</code>), not from reading a context before and after the call: a search runs on a context borrowed from the engine’s pool, so counters read from out here belong to whatever else has searched in the meantime. <code>append</code> does read its context that way, correctly — insertion holds the engine’s own context under an exclusive write lock.</p>
+<p>The number of distance computations of a search is obtained from the engine, in a <code>SimilaritySearchEngine.SearchStats</code> instance that <code>_run_search</code> passes to <code>search</code> and to <code>ftsearch</code>. It is not obtained by reading a context before and after the call: a search uses a context taken from a pool of the engine, so a counter read from this package includes the work of any other search executed since. For <code>append</code> the second method is correct, because an insertion uses the engine’s own context under an exclusive write lock.</p>
 </section>
 <section id="asynchronous-jobs" class="level3">
 <h3 class="anchored" data-anchor-id="asynchronous-jobs">Asynchronous jobs</h3>
 <ul>
-<li><code>POST /api/v1/jobs/{kind}</code> — submits (<code>allknn</code>, <code>fft</code>, <code>neardup</code>, <code>hsp</code>, <code>searchbatch</code>, <code>closestpair</code>, <code>build</code>, <code>dump</code>, <code>load</code>). Returns <code>202</code> with a <code>job_id</code>.</li>
-<li><code>GET /api/v1/jobs/{job_id}</code> and <code>/result</code> — state and output.</li>
+<li><code>POST /api/v1/jobs/{kind}</code> — enqueues a job (<code>allknn</code>, <code>fft</code>, <code>neardup</code>, <code>hsp</code>, <code>searchbatch</code>, <code>closestpair</code>, <code>build</code>, <code>dump</code>, <code>load</code>). Returns <code>202</code> and a <code>job_id</code>.</li>
+<li><code>GET /api/v1/jobs/{job_id}</code> and <code>/result</code> — the state of the job, and its output.</li>
 </ul>
 </section>
 </section>
 <section id="how-failures-are-reported" class="level2">
 <h2 class="anchored" data-anchor-id="how-failures-are-reported">5. How failures are reported</h2>
-<p>The engine raises typed errors, and this package maps them <strong>by category</strong>, never by message:</p>
+<p>The engine raises typed errors. This package maps them <strong>by category</strong>, never by the text of the message:</p>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 33%">
@@ -442,7 +442,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </tr>
 </tbody>
 </table>
-<p>An error response carries <code>error</code> (the message, for a human) and <code>kind</code> (the concrete engine type, for a client that wants to branch). A CLI’s own refusals — no such dataset directory, unreadable input file — keep exit code <code>1</code>, decided before the engine is ever called.</p>
+<p>An error response contains two fields: <code>error</code>, the message, intended for a person, and <code>kind</code>, the concrete engine type, intended for a client that selects a behavior. Failures detected by a command line itself, such as a dataset directory that does not exist or an input file that cannot be read, return exit code <code>1</code>. They are detected before the engine is called.</p>
 </section>
 <section id="configuration" class="level2">
 <h2 class="anchored" data-anchor-id="configuration">6. Configuration</h2>
@@ -462,8 +462,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h2 class="anchored" data-anchor-id="tests">7. Tests</h2>
 <p>Two levels, selected with <code>test_args=["full"]</code> or <code>SSE_TEST_LEVEL=full</code>:</p>
 <ul>
-<li><strong>light</strong> (50 assertions, ~5 s): the boundary with the engine — wire names to engine types, engine errors to status and exit codes, wire items to engine items — with no server started and no subprocess spawned. This is what catches an engine-side change on the day it lands.</li>
-<li><strong>full</strong> (585 assertions, ~19 min): the API, job and CLI end-to-end suites, which start real servers and poll real subprocesses. It includes a stretch of some ten minutes with no output at all, near the end, where the CLI suite waits for job expiry — the run is not stuck.</li>
+<li><strong>light</strong> (50 assertions, approximately 5 s): the interface with the engine. It verifies the mapping from the names used in requests to engine types, from engine errors to status codes and exit codes, and from the items of a request to engine items. No server is started and no subprocess is created. This level detects a change in the engine on the day it is made.</li>
+<li><strong>full</strong> (585 assertions, approximately 19 minutes): the end-to-end suites for the API, the jobs and the command lines. They start servers and execute subprocesses. Near the end, the run produces no output for about ten minutes, while the command-line suite waits for jobs to expire. The run has not stopped.</li>
 </ul>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">--project</span><span class="op">=</span>server <span class="at">-e</span> <span class="st">'using Pkg; Pkg.develop(path="."); Pkg.test()'</span></span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">--project</span><span class="op">=</span>server <span class="at">-e</span> <span class="st">'using Pkg; Pkg.test(test_args=["full"])'</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -471,8 +471,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section id="where-to-go-next" class="level2">
 <h2 class="anchored" data-anchor-id="where-to-go-next">8. Where to go next</h2>
 <ul>
-<li>The <a href="../server/tutorial.html">server tutorial</a> — the same surface from the outside: a dataset created, indexed, queried, and a heavy job run, in eight steps.</li>
-<li>The <a href="../architecture.html">engine’s architecture</a> — the storage layout, the engine hierarchy, the concurrency model and the typed errors this package maps.</li>
+<li>The <a href="../server/tutorial.html">server tutorial</a>: the same interface in use, in eight steps. A dataset is created, indexed and queried, and a job is executed.</li>
+<li>The <a href="../architecture.html">architecture of the engine</a>: the storage layout, the engine hierarchy, the concurrency model, and the typed errors this package maps.</li>
 <li>The reference, generated from the docstrings of both packages: <a href="https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html">Server API</a> and <a href="https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html">Engine API</a>.</li>
 </ul>
 

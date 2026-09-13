@@ -4,17 +4,17 @@ subtitle: "SimilaritySearchServer: the REST API, the job queue and the two comma
 lang: en-US
 ---
 
-`SimilaritySearchServer` exposes [`SimilaritySearchEngine`](../index.qmd) — the embedded
-engine documented in the rest of this site — through a REST API, two CLIs, and an asynchronous job
-queue. It holds no index logic of its own: **everything about storing, indexing and searching
-lives in the engine**, and this package is the layer that turns HTTP requests and command
-lines into engine calls, and engine results and failures into responses and exit codes.
+`SimilaritySearchServer` provides access to [`SimilaritySearchEngine`](../index.qmd), the
+embedded engine documented in the rest of this site, through a REST API, two command lines and
+an asynchronous job queue. It implements no indexing logic. **Storage, indexing and search are
+implemented in the engine.** This package translates HTTP requests and command lines into
+engine calls, and engine results and failures into responses and exit codes.
 
-That boundary is the thing to keep in mind while reading the rest: when something about
-projects, persistence, profiles or search behaviour is unclear, the answer is in the engine's
-[architecture guide](../architecture.qmd), not here. The two packages live in one
-repository and are documented as one thing on purpose: the seam between them is the engine's
-public API, and both sides of that seam are described here.
+This division determines where each subject is documented. Questions about projects,
+persistence, text profiles or the behavior of a search are answered in the engine's
+[architecture guide](../architecture.qmd). The two packages are documented on one site because
+the interface between them is the public API of the engine, and both sides of that interface
+are described here.
 
 ## 1. What this package contains
 
@@ -28,76 +28,79 @@ public API, and both sides of that seam are described here.
 | `interactive.jl` | guided invocation through `REPL.TerminalMenus` |
 | `apps/` | the three installable app entry points |
 
-Schema, persistence, the index engine and project management are **not** here: they are
-`SimilaritySearchEngine.Schema`, `.Persistence`, `.IndexEngine` and `.Project`.
+The schema, the persistence layer, the index engine and project management are not part of this
+package. They are `SimilaritySearchEngine.Schema`, `.Persistence`, `.IndexEngine` and
+`.Project`.
 
 ## 2. How a dataset is held
 
-One `SimilaritySearchEngine.EmbeddedEngine` per dataset id, in `AppState.handles`. That single
-handle carries both halves of a project (its RocksDB metadata store and its live search
-engine), which is what keeps them consistent across a restart: `reload_datasets!` reopens
-every dataset under `<workdir>/datasets/` with `open_project`, and a reopened dataset comes
-back with its index, profile, staged backlog and tombstones intact.
+The server holds one `SimilaritySearchEngine.EmbeddedEngine` per dataset identifier, in
+`AppState.handles`. That handle contains the two parts of a project, its RocksDB metadata store
+and its search engine, which keeps them consistent across a restart. `reload_datasets!` opens
+every dataset under `<workdir>/datasets/` with `open_project`, and a reopened dataset preserves
+its index, its text profile, its staged items and its deletion marks.
 
-There is no snapshot file. Earlier versions of this package wrote a JLD2 snapshot per dataset
-and reloaded it on demand, because the engine did not persist its own index; it does now, and
-a dataset is simply the directory it lives in.
+There is no snapshot file. Earlier versions of this package wrote one JLD2 snapshot per dataset
+and read it on demand, because the engine did not store its own index. The engine stores it
+now, and a dataset is the directory that contains it.
 
-**Heavy jobs run as subprocesses and open their project read-only**, since the serving process
-may hold it open and RocksDB's write lock is exclusive per process.
+**A job that operates on an entire dataset runs as a subprocess and opens its project in
+read-only mode**, because the serving process may hold the project open, and the RocksDB write
+lock is exclusive per process.
 
 ## 3. Kinds of project
 
-The API's `index_kind` names a pair — what a project holds, and what indexes it:
+The parameter `index_kind` of the API names a pair: the type of data a project holds, and the structure that indexes it:
 
 | `index_kind` | engine | backend | notes |
 | :--- | :--- | :--- | :--- |
-| `searchgraph` | `DenseEngine` | `SearchGraph` | approximate, self-tuning; the default |
-| `exhaustive_search` | `DenseEngine` | `ExhaustiveSearch` | exact brute force |
+| `searchgraph` | `DenseEngine` | `SearchGraph` | approximate, adjusts its own parameters; the default |
+| `exhaustive_search` | `DenseEngine` | `ExhaustiveSearch` | exact, linear scan |
 | `parallel_exhaustive_search` | `DenseEngine` | `ParallelExhaustiveSearch` | exact, data-parallel |
 | `bm25_invfile` | `FullTextEngine` | `BM25InvertedFile` | BM25 scoring |
 | `invfile` | `FullTextEngine` | `TextInvertedFile` | TF-IDF cosine |
-| `sparse_invfile` | `SparseEngine` | `InvertedFile` | caller-encoded sparse vectors; needs `dimension` |
+| `sparse_invfile` | `SparseEngine` | `InvertedFile` | sparse vectors encoded by the caller; requires `dimension` |
 
-Text projects are created with `FitFromCorpus`: the vocabulary is fitted from whatever the
-dataset itself has been given by the first `index!`. Shipping a pre-trained profile to the
-server is not exposed over HTTP yet.
+A text project is created with `FitFromCorpus`. Its vocabulary is fitted from the documents the
+dataset has received when `index!` is called for the first time. Sending a pre-computed text
+profile to the server is not available over HTTP.
 
 ## 4. REST API (base endpoints)
 
 ### Control
 - `GET /readyz` — health.
-- `GET /metrics` — Prometheus-style gauges, including per-dataset document and tombstone counts.
+- `GET /metrics` — metrics in Prometheus format, including the number of documents and the number of deleted records per dataset.
 
 ### Datasets
 - `POST /api/v1/datasets` — creates one. Accepts `id`, `index_kind` (see above), `distance`, `dimension`, and the join-group fields `join_group`, `holds_metadata`, `key`.
 - `DELETE /api/v1/datasets/{id}` — destroys it.
-- `POST /api/v1/datasets/{id}/unload` / `reload` — closes or reopens a dataset without restarting the server (what the CLI's `rebuild` needs, since RocksDB's write lock is exclusive).
+- `POST /api/v1/datasets/{id}/unload` and `/reload` — closes or reopens a dataset without restarting the server. The `rebuild` subcommand of the command line requires this, because the RocksDB write lock is exclusive per process.
 
 ### Search and indexing
-- `POST /api/v1/simsearch/{id}/append` — appends items. Dense items carry `vector`, text items `text`, sparse items `indices`+`values`; `doc_id`, `keywords`, `refs` and any other field become the item's metadata.
+- `POST /api/v1/simsearch/{id}/append` — inserts items. A dense item contains `vector`, a text item contains `text`, and a sparse item contains `indices` and `values`. The fields `doc_id`, `keywords` and `refs`, and any other field, become the metadata of the item.
 - `POST /api/v1/simsearch/{id}/search` — dense/sparse search, with optional `filter`, `page_size` and `beamsearch_overrides`.
 - `POST /api/v1/simsearch/{id}/ftsearch` — text search.
-- `POST /api/v1/simsearch/{id}/delete` — soft delete.
+- `POST /api/v1/simsearch/{id}/delete` — logical deletion.
 - `POST /api/v1/simsearch/{id}/calibrate` — recall calibration for a graph-backed project.
-- `POST /api/v1/simsearch/hybrid` and `/ftsearch_group` — reciprocal-rank fusion across two datasets, and text fan-out across a join group.
+- `POST /api/v1/simsearch/hybrid` and `/ftsearch_group` — reciprocal rank fusion over two datasets, and a text query sent to every dataset of a join group.
 
 ### Telemetry
 - `GET /api/v1/datasets/{id}/log?offset=&limit=` — the dataset's `op_log`: one record per `search`/`ftsearch`/`append`/`delete`, with elapsed time and `distance_evaluations`.
 
-The evaluation count for a search comes from the engine (`SimilaritySearchEngine.SearchStats`,
-passed into `search`/`ftsearch` by `_run_search`), not from reading a context before and after
-the call: a search runs on a context borrowed from the engine's pool, so counters read from out
-here belong to whatever else has searched in the meantime. `append` does read its context that
-way, correctly — insertion holds the engine's own context under an exclusive write lock.
+The number of distance computations of a search is obtained from the engine, in a
+`SimilaritySearchEngine.SearchStats` instance that `_run_search` passes to `search` and to
+`ftsearch`. It is not obtained by reading a context before and after the call: a search uses a
+context taken from a pool of the engine, so a counter read from this package includes the work
+of any other search executed since. For `append` the second method is correct, because an
+insertion uses the engine's own context under an exclusive write lock.
 
 ### Asynchronous jobs
-- `POST /api/v1/jobs/{kind}` — submits (`allknn`, `fft`, `neardup`, `hsp`, `searchbatch`, `closestpair`, `build`, `dump`, `load`). Returns `202` with a `job_id`.
-- `GET /api/v1/jobs/{job_id}` and `/result` — state and output.
+- `POST /api/v1/jobs/{kind}` — enqueues a job (`allknn`, `fft`, `neardup`, `hsp`, `searchbatch`, `closestpair`, `build`, `dump`, `load`). Returns `202` and a `job_id`.
+- `GET /api/v1/jobs/{job_id}` and `/result` — the state of the job, and its output.
 
 ## 5. How failures are reported
 
-The engine raises typed errors, and this package maps them **by category**, never by message:
+The engine raises typed errors. This package maps them **by category**, never by the text of the message:
 
 | engine category | HTTP | CLI exit code |
 | :--- | ---: | ---: |
@@ -106,9 +109,10 @@ The engine raises typed errors, and this package maps them **by category**, neve
 | `InvalidRequest` (wrong payload, wrong dimension, bad option) | 400 | 2 |
 | `StorageFailure` | 500 | 70 |
 
-An error response carries `error` (the message, for a human) and `kind` (the concrete engine
-type, for a client that wants to branch). A CLI's own refusals — no such dataset directory,
-unreadable input file — keep exit code `1`, decided before the engine is ever called.
+An error response contains two fields: `error`, the message, intended for a person, and `kind`,
+the concrete engine type, intended for a client that selects a behavior. Failures detected by a
+command line itself, such as a dataset directory that does not exist or an input file that
+cannot be read, return exit code `1`. They are detected before the engine is called.
 
 ## 6. Configuration
 
@@ -131,12 +135,14 @@ batch_threads_pct = 20
 
 Two levels, selected with `test_args=["full"]` or `SSE_TEST_LEVEL=full`:
 
-- **light** (50 assertions, ~5 s): the boundary with the engine — wire names to engine types,
-  engine errors to status and exit codes, wire items to engine items — with no server started
-  and no subprocess spawned. This is what catches an engine-side change on the day it lands.
-- **full** (585 assertions, ~19 min): the API, job and CLI end-to-end suites, which start real
-  servers and poll real subprocesses. It includes a stretch of some ten minutes with no output
-  at all, near the end, where the CLI suite waits for job expiry — the run is not stuck.
+- **light** (50 assertions, approximately 5 s): the interface with the engine. It verifies the
+  mapping from the names used in requests to engine types, from engine errors to status codes
+  and exit codes, and from the items of a request to engine items. No server is started and no
+  subprocess is created. This level detects a change in the engine on the day it is made.
+- **full** (585 assertions, approximately 19 minutes): the end-to-end suites for the API, the
+  jobs and the command lines. They start servers and execute subprocesses. Near the end, the
+  run produces no output for about ten minutes, while the command-line suite waits for jobs to
+  expire. The run has not stopped.
 
 ```bash
 julia --project=server -e 'using Pkg; Pkg.develop(path="."); Pkg.test()'
@@ -145,10 +151,10 @@ julia --project=server -e 'using Pkg; Pkg.test(test_args=["full"])'
 
 ## 8. Where to go next
 
-- The [server tutorial](tutorial.qmd) — the same surface from the outside: a dataset created,
-  indexed, queried, and a heavy job run, in eight steps.
-- The [engine's architecture](../architecture.qmd) — the storage layout, the engine hierarchy,
-  the concurrency model and the typed errors this package maps.
+- The [server tutorial](tutorial.qmd): the same interface in use, in eight steps. A dataset is
+  created, indexed and queried, and a job is executed.
+- The [architecture of the engine](../architecture.qmd): the storage layout, the engine
+  hierarchy, the concurrency model, and the typed errors this package maps.
 - The reference, generated from the docstrings of both packages:
   [Server API](https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html) and
   [Engine API](https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html).
