@@ -450,6 +450,12 @@ version = "1.11.0"
 uuid = "14a3606d-f60d-562e-9121-12d972cd8159"
 version = "2025.11.4"
 
+[[deps.MultivariateStats]]
+deps = ["Arpack", "Distributions", "LinearAlgebra", "SparseArrays", "Statistics", "StatsAPI", "StatsBase"]
+git-tree-sha1 = "8bcdc90d5c361a73635ad1c19d9c39a52bf3e0a3"
+uuid = "6f286f6a-111f-5878-ab1e-185364afe411"
+version = "0.10.5"
+
 [[deps.NetworkOptions]]
 uuid = "ca575930-c2e3-43a9-ace4-1e988b2c1908"
 version = "1.3.0"
@@ -626,13 +632,13 @@ uuid = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
 version = "1.11.0"
 
 [[deps.SimilaritySearch]]
-deps = ["Accessors", "Dates", "Distances", "Distributions", "Hadamard", "JSON", "LinearAlgebra", "Mmap", "ProgressMeter", "Random", "SIMD", "SearchModels", "SparseArrays", "Statistics", "StatsBase"]
+deps = ["Accessors", "Dates", "Distances", "Distributions", "Hadamard", "JSON", "LinearAlgebra", "Mmap", "MultivariateStats", "ProgressMeter", "Random", "SIMD", "SearchModels", "SparseArrays", "Statistics", "StatsBase"]
 path = "../../SimilaritySearch.jl"
 uuid = "053f045d-5466-53fd-b400-a066f88fe02a"
-version = "1.2.0"
+version = "1.4.1"
 
 [[deps.SimilaritySearchEngine]]
-deps = ["Avro", "Dates", "JSON", "JSON3", "RocksDB", "SimilaritySearch", "SparseArrays", "TextSearch"]
+deps = ["Avro", "Dates", "JSON", "JSON3", "PrecompileTools", "RocksDB", "SimilaritySearch", "SparseArrays", "TextSearch"]
 path = ".."
 uuid = "727cb942-cf72-4dec-85ff-a934ba36de1c"
 version = "0.1.0"
@@ -763,10 +769,10 @@ uuid = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 version = "1.11.0"
 
 [[deps.TextSearch]]
-deps = ["Accessors", "Arpack", "JSON3", "LinearAlgebra", "ProgressMeter", "Random", "SimilaritySearch", "SparseArrays", "StatsBase", "Unicode", "ZipArchives"]
+deps = ["Accessors", "Arpack", "Downloads", "JSON3", "LinearAlgebra", "ProgressMeter", "Random", "SimilaritySearch", "SparseArrays", "StatsBase", "Unicode", "ZipArchives"]
 path = "../../TextSearch.jl"
 uuid = "7f6f6c8a-3b03-11e9-223d-e7d88259bd6c"
-version = "1.1.0"
+version = "1.1.2"
 
 [[deps.TranscodingStreams]]
 git-tree-sha1 = "0c45878dcfdcfa8480052b6ab162cdd138781742"

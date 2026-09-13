@@ -26,14 +26,16 @@ Indexing a long document, such as a complete book or an encyclopedia article, as
 The datasets and the text profiles used in this tutorial are produced by `tutorials/prepare.jl`. The script downloads texts in the public domain, divides them into paragraphs, fits the text profiles, and indexes the corpora:
 
 ```sh
-# Full evaluation (~1 hour compute time)
-julia --project=tutorials tutorials/prepare.jl
+# Complete build (approximately one hour)
+julia -t 8 --project=tutorials tutorials/prepare.jl
 
-# Lightweight smoke-test build (~5 minutes compute time)
-julia --project=tutorials tutorials/prepare.jl --smoke
+# Reduced build, for verification (approximately five minutes)
+julia -t 8 --project=tutorials tutorials/prepare.jl --smoke
 ```
 
-Each stage (`corpora`, `profiles`, `projects`) writes its result to disk, so a later execution repeats only the stages that are missing.
+Each stage (`corpora`, `profiles`, `projects`) writes its result to disk, so a later execution repeats only the stages that are missing. A single stage can also be requested by name, and `--force` rebuilds it: `julia -t 8 --project=tutorials tutorials/prepare.jl projects --force`.
+
+The times reported in this page were measured with 8 threads. Indexing uses them, so a different number of threads changes the values in the last table.
 
 ::: {.callout-note}
 ## Quarto Rendering Configuration
@@ -344,6 +346,7 @@ Markdown.parse(join(rows, "\n"))
 - **Cost of persistence**: writing each document to RocksDB adds little time compared with an indexing loop in memory, and the data survive an interruption of the process.
 - **Compilation time**: the first execution in Julia includes the compilation of the code. Later batches show the rate of the compiled code.
 - **Storage of the profile**: creating a project with a fitted profile writes that profile into the RocksDB store of the project, so the project can be copied to another machine without additional files.
+- **Storage of the index**: a text project stores the inverted index, so opening it does not index the corpus again. The [architecture guide](../architecture.qmd) reports the difference: 1.4 s against 20.4 s for the largest of these corpora.
 
 ```{julia}
 #| echo: false

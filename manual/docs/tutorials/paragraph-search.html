@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 
-<title>Paragraph search over books and Wikipedia – SimilaritySearchEngine.jl</title>
+<title>Multilingual Paragraph Search over Books and Wikipedia – SimilaritySearchEngine.jl</title>
 <style>
 /* Default styles provided by pandoc.
 ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
@@ -209,21 +209,25 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <h2 id="toc-title">On this page</h2>
    
   <ul>
-  <li><a href="#before-you-start" id="toc-before-you-start" class="nav-link active" data-scroll-target="#before-you-start">Before you start</a></li>
-  <li><a href="#the-corpora" id="toc-the-corpora" class="nav-link" data-scroll-target="#the-corpora">The corpora</a></li>
-  <li><a href="#profiles" id="toc-profiles" class="nav-link" data-scroll-target="#profiles">Profiles</a>
+  <li><a href="#motivation-for-paragraph-level-granularity" id="toc-motivation-for-paragraph-level-granularity" class="nav-link active" data-scroll-target="#motivation-for-paragraph-level-granularity">Motivation for Paragraph-Level Granularity</a></li>
+  <li><a href="#dataset-preparation" id="toc-dataset-preparation" class="nav-link" data-scroll-target="#dataset-preparation">Dataset Preparation</a></li>
+  <li><a href="#corpus-statistics" id="toc-corpus-statistics" class="nav-link" data-scroll-target="#corpus-statistics">Corpus Statistics</a>
   <ul class="collapse">
-  <li><a href="#installing-listing-and-describing-profiles" id="toc-installing-listing-and-describing-profiles" class="nav-link" data-scroll-target="#installing-listing-and-describing-profiles">Installing, listing and describing profiles</a></li>
+  <li><a href="#statistical-observations" id="toc-statistical-observations" class="nav-link" data-scroll-target="#statistical-observations">Statistical Observations</a></li>
   </ul></li>
-  <li><a href="#searching" id="toc-searching" class="nav-link" data-scroll-target="#searching">Searching</a></li>
-  <li><a href="#correcting-a-query" id="toc-correcting-a-query" class="nav-link" data-scroll-target="#correcting-a-query">Correcting a query</a></li>
-  <li><a href="#expanding-a-query" id="toc-expanding-a-query" class="nav-link" data-scroll-target="#expanding-a-query">Expanding a query</a></li>
-  <li><a href="#building-a-project-from-scratch" id="toc-building-a-project-from-scratch" class="nav-link" data-scroll-target="#building-a-project-from-scratch">Building a project from scratch</a>
+  <li><a href="#linguistic-profiles-textprofile" id="toc-linguistic-profiles-textprofile" class="nav-link" data-scroll-target="#linguistic-profiles-textprofile">Linguistic Profiles (<code>TextProfile</code>)</a>
   <ul class="collapse">
-  <li><a href="#the-two-alternatives-and-why-this-page-takes-neither" id="toc-the-two-alternatives-and-why-this-page-takes-neither" class="nav-link" data-scroll-target="#the-two-alternatives-and-why-this-page-takes-neither">The two alternatives, and why this page takes neither</a></li>
+  <li><a href="#normalization-policy-preserving-case-and-diacritics" id="toc-normalization-policy-preserving-case-and-diacritics" class="nav-link" data-scroll-target="#normalization-policy-preserving-case-and-diacritics">Normalization Policy: Preserving Case and Diacritics</a></li>
+  <li><a href="#applied-vs.-carried-artifacts" id="toc-applied-vs.-carried-artifacts" class="nav-link" data-scroll-target="#applied-vs.-carried-artifacts">Applied vs.&nbsp;Carried Artifacts</a></li>
   </ul></li>
-  <li><a href="#what-building-this-cost" id="toc-what-building-this-cost" class="nav-link" data-scroll-target="#what-building-this-cost">What building this cost</a></li>
-  <li><a href="#where-to-go-next" id="toc-where-to-go-next" class="nav-link" data-scroll-target="#where-to-go-next">Where to go next</a></li>
+  <li><a href="#query-execution-and-ranking" id="toc-query-execution-and-ranking" class="nav-link" data-scroll-target="#query-execution-and-ranking">Query Execution and Ranking</a></li>
+  <li><a href="#orthographic-query-correction" id="toc-orthographic-query-correction" class="nav-link" data-scroll-target="#orthographic-query-correction">Orthographic Query Correction</a></li>
+  <li><a href="#semantic-query-expansion" id="toc-semantic-query-expansion" class="nav-link" data-scroll-target="#semantic-query-expansion">Semantic Query Expansion</a></li>
+  <li><a href="#programmatic-project-lifecycle" id="toc-programmatic-project-lifecycle" class="nav-link" data-scroll-target="#programmatic-project-lifecycle">Programmatic Project Lifecycle</a></li>
+  <li><a href="#empirical-benchmark-analysis" id="toc-empirical-benchmark-analysis" class="nav-link" data-scroll-target="#empirical-benchmark-analysis">Empirical Benchmark Analysis</a>
+  <ul class="collapse">
+  <li><a href="#performance-observations" id="toc-performance-observations" class="nav-link" data-scroll-target="#performance-observations">Performance Observations</a></li>
+  </ul></li>
   </ul>
 </nav>
     </div>
@@ -232,7 +236,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 
 <header id="title-block-header" class="quarto-title-block default">
 <div class="quarto-title">
-<h1 class="title">Paragraph search over books and Wikipedia</h1>
+<h1 class="title">Multilingual Paragraph Search over Books and Wikipedia</h1>
 </div>
 
 
@@ -249,7 +253,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </header>
 
 
-<p>This is the tutorial to read after <a href="../tutorials/getting-started.html">Getting started</a>. That one used one novel and took every default; this one uses three real corpora, in two languages, each indexed against a text model fitted for it — which is where the decisions that matter start mattering.</p>
+<p>This tutorial applies full-text retrieval to corpora in several languages. The <a href="../tutorials/getting-started.html">Getting Started</a> tutorial uses one novel in English; this one indexes three corpora:</p>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 20%">
@@ -260,100 +264,108 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </colgroup>
 <thead>
 <tr class="header">
-<th>corpus</th>
-<th>source</th>
-<th>language</th>
-<th>documents</th>
-<th>retrieval unit</th>
+<th style="text-align: left;">Corpus Identifier</th>
+<th style="text-align: left;">Source Collection</th>
+<th style="text-align: left;">Language</th>
+<th style="text-align: left;">Volume</th>
+<th style="text-align: left;">Retrieval Unit</th>
 </tr>
 </thead>
 <tbody>
 <tr class="odd">
-<td><code>gutenberg-en</code></td>
-<td>Project Gutenberg</td>
-<td>English</td>
-<td>100 books</td>
-<td>paragraph</td>
+<td style="text-align: left;"><code>gutenberg-en</code></td>
+<td style="text-align: left;">Project Gutenberg</td>
+<td style="text-align: left;">English</td>
+<td style="text-align: left;">100 volumes</td>
+<td style="text-align: left;">Paragraph</td>
 </tr>
 <tr class="even">
-<td><code>gutenberg-es</code></td>
-<td>Project Gutenberg</td>
-<td>Spanish</td>
-<td>100 books</td>
-<td>paragraph</td>
+<td style="text-align: left;"><code>gutenberg-es</code></td>
+<td style="text-align: left;">Project Gutenberg</td>
+<td style="text-align: left;">Spanish</td>
+<td style="text-align: left;">100 volumes</td>
+<td style="text-align: left;">Paragraph</td>
 </tr>
 <tr class="odd">
-<td><code>wikipedia-en</code></td>
-<td>Wikipedia 2023-11-01</td>
-<td>English</td>
-<td>1000 articles</td>
-<td>paragraph</td>
+<td style="text-align: left;"><code>wikipedia-en</code></td>
+<td style="text-align: left;">Wikipedia (2023-11-01 dump)</td>
+<td style="text-align: left;">English</td>
+<td style="text-align: left;">1,000 articles</td>
+<td style="text-align: left;">Paragraph</td>
 </tr>
 </tbody>
 </table>
-<p><strong>Paragraphs, not documents.</strong> A search here answers with the paragraph that contains the answer, not with the book it appears in. That choice runs all the way down: it is the unit the corpora are built in, the unit the profiles are fitted on, and the unit the projects index. Retrieving whole books would be close to useless — <em>Moby-Dick</em> is “about” almost anything you can ask — and it is also a worse model, because a document frequency computed over books says nothing (nearly every word is in nearly every book) while one computed over paragraphs is informative.</p>
-<section id="before-you-start" class="level2">
-<h2 class="anchored" data-anchor-id="before-you-start">Before you start</h2>
-<p>Everything below reads what <code>tutorials/prepare.jl</code> builds. That script downloads the books, extracts the Wikipedia articles, fits a profile per corpus and indexes each into a project. It is measured in tens of minutes and hundreds of megabytes, which is exactly why it is a script and not a section of this page:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode sh code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># from the repository root</span></span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">--project</span><span class="op">=</span>tutorials tutorials/prepare.jl            <span class="co"># the documented scale, ~1 hour</span></span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">--project</span><span class="op">=</span>tutorials tutorials/prepare.jl <span class="at">--smoke</span>    <span class="co"># a few books and articles, ~5 minutes</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Each step (<code>corpora</code>, <code>profiles</code>, <code>projects</code>) is separately runnable and caches to disk, so a run that fails halfway resumes instead of restarting.</p>
+<section id="motivation-for-paragraph-level-granularity" class="level3">
+<h3 class="anchored" data-anchor-id="motivation-for-paragraph-level-granularity">Motivation for Paragraph-Level Granularity</h3>
+<p>Indexing a long document, such as a complete book or an encyclopedia article, as a single unit reduces precision. A long document covers several topics, and the document frequency of a term carries little information when most terms of the vocabulary occur in almost every document. A <strong>paragraph</strong> is a shorter unit, restricted to one topic, and is therefore appropriate both for matching a query and for fitting a text model.</p>
+<hr>
+</section>
+<section id="dataset-preparation" class="level2">
+<h2 class="anchored" data-anchor-id="dataset-preparation">Dataset Preparation</h2>
+<p>The datasets and the text profiles used in this tutorial are produced by <code>tutorials/prepare.jl</code>. The script downloads texts in the public domain, divides them into paragraphs, fits the text profiles, and indexes the corpora:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode sh code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Complete build (approximately one hour)</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">-t</span> 8 <span class="at">--project</span><span class="op">=</span>tutorials tutorials/prepare.jl</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="co"># Reduced build, for verification (approximately five minutes)</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">-t</span> 8 <span class="at">--project</span><span class="op">=</span>tutorials tutorials/prepare.jl <span class="at">--smoke</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Each stage (<code>corpora</code>, <code>profiles</code>, <code>projects</code>) writes its result to disk, so a later execution repeats only the stages that are missing. A single stage can also be requested by name, and <code>--force</code> rebuilds it: <code>julia -t 8 --project=tutorials tutorials/prepare.jl projects --force</code>.</p>
+<p>The times reported in this page were measured with 8 threads. Indexing uses them, so a different number of threads changes the values in the last table.</p>
 <div class="callout callout-style-default callout-note callout-titled">
 <div class="callout-header d-flex align-content-center">
 <div class="callout-icon-container">
 <i class="callout-icon"></i>
 </div>
 <div class="callout-title-container flex-fill">
-<span class="screen-reader-only">Note</span>Rendering this page yourself
+<span class="screen-reader-only">Note</span>Quarto Rendering Configuration
 </div>
 </div>
 <div class="callout-body-container callout-body">
-<p>Quarto’s Julia engine needs a writable runtime directory. On a machine where <code>/run/user/$UID</code> is not writable, <code>quarto render</code> fails with <code>PermissionDenied ... mkdir '/run/user/…/julia'</code> before running a single cell. Point it somewhere else:</p>
+<p>When rendering this manual via Quarto on systems where <code>/run/user/$UID</code> is restricted, configure a custom runtime directory:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode sh code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="va">XDG_RUNTIME_DIR</span><span class="op">=</span><span class="va">$(</span><span class="fu">mktemp</span> <span class="at">-d</span><span class="va">)</span> <span class="ex">quarto</span> render manual</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 </div>
+<hr>
 </section>
-<section id="the-corpora" class="level2">
-<h2 class="anchored" data-anchor-id="the-corpora">The corpora</h2>
+<section id="corpus-statistics" class="level2">
+<h2 class="anchored" data-anchor-id="corpus-statistics">Corpus Statistics</h2>
 <div id="4" class="cell" data-execution_count="1">
 <div class="cell-output cell-output-display" data-execution_count="1">
 <pre><code>true</code></pre>
 </div>
 </div>
-<p><code>prepare.jl</code> writes one JSONL file per corpus, one paragraph per line, and records what it measured. Everything this page reports about the build is read back from that record rather than typed into the prose — a number in a document goes stale silently; a number read from the file the build wrote is either current or missing.</p>
+<p>The preparation script generates one JSONL file per corpus, recording structural measurements dynamically:</p>
 <div id="6" class="cell" data-execution_count="1">
 <div class="cell-output cell-output-display" data-execution_count="1">
 <div class="markdown">
 <table class="caption-top table table-sm table-striped small">
 <tbody>
 <tr class="odd">
-<th style="text-align: right;" data-quarto-table-cell-role="th">corpus</th>
-<th style="text-align: right;" data-quarto-table-cell-role="th">language</th>
-<th style="text-align: right;" data-quarto-table-cell-role="th">documents</th>
-<th style="text-align: right;" data-quarto-table-cell-role="th">paragraphs</th>
-<th style="text-align: right;" data-quarto-table-cell-role="th">per document</th>
-<th style="text-align: right;" data-quarto-table-cell-role="th">JSONL</th>
+<th style="text-align: left;" data-quarto-table-cell-role="th">Corpus</th>
+<th style="text-align: left;" data-quarto-table-cell-role="th">Language</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Documents</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Paragraphs</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Paragraphs / Document</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Storage Size</th>
 </tr>
 <tr class="even">
-<td style="text-align: right;"><code>gutenberg-en</code></td>
-<td style="text-align: right;">en</td>
+<td style="text-align: left;"><code>gutenberg-en</code></td>
+<td style="text-align: left;">en</td>
 <td style="text-align: right;">100</td>
 <td style="text-align: right;">265,424</td>
 <td style="text-align: right;">2654.2</td>
 <td style="text-align: right;">120.1 MB</td>
 </tr>
 <tr class="odd">
-<td style="text-align: right;"><code>gutenberg-es</code></td>
-<td style="text-align: right;">es</td>
+<td style="text-align: left;"><code>gutenberg-es</code></td>
+<td style="text-align: left;">es</td>
 <td style="text-align: right;">100</td>
 <td style="text-align: right;">216,247</td>
 <td style="text-align: right;">2162.5</td>
 <td style="text-align: right;">89.2 MB</td>
 </tr>
 <tr class="even">
-<td style="text-align: right;"><code>wikipedia-en</code></td>
-<td style="text-align: right;">en</td>
+<td style="text-align: left;"><code>wikipedia-en</code></td>
+<td style="text-align: left;">en</td>
 <td style="text-align: right;">1,000</td>
 <td style="text-align: right;">41,279</td>
 <td style="text-align: right;">41.3</td>
@@ -365,48 +377,54 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </div>
 </div>
 </div>
-<p>Two things in that table are worth pausing on.</p>
-<p><strong>Wikipedia yields far more paragraphs per article than you would expect.</strong> The dump is ordered longest-article-first, so the first shard — which is what a thousand articles come from — is the densest part of the corpus. TextSearch’s own measurements put the corpus-wide figure near 7 paragraphs per article; take them from the front and you get an order of magnitude more. Sampling the convenient slice and extrapolating is how corpus-size estimates go wrong.</p>
-<p><strong>Books vary enormously, and the average hides it.</strong> A hundred Gutenberg volumes is not a hundred comparable things. The English hundred runs from 87 paragraphs to 36,096 — a <em>Complete Works of William Shakespeare</em> that is 13.6% of the corpus on its own — against a median book of 1,859. The Spanish hundred’s largest contributor is not a novel at all but a <code>Diccionario Ingles-Español-Tagalog</code> at 17,682 paragraphs, 8.2% of that corpus. The per-document average in the table above is therefore a number no actual book resembles, and what it costs you shows up in <em>Searching</em> below.</p>
-<p>Each record carries the paragraph plus enough metadata to say where it came from:</p>
+<section id="statistical-observations" class="level3">
+<h3 class="anchored" data-anchor-id="statistical-observations">Statistical Observations</h3>
+<ol type="1">
+<li><strong>Variation in the length of encyclopedia articles</strong>: a long Wikipedia article contains many more paragraphs than a short entry.</li>
+<li><strong>Variation in the length of books</strong>: in the Project Gutenberg collections, the size of a volume ranges from a short pamphlet to a work in several volumes. Indexing by paragraph gives units of comparable size for documents of any length.</li>
+</ol>
+<p>Each JSONL record contains the text of one paragraph and the metadata of its source:</p>
 <div id="8" class="cell" data-execution_count="1">
 <div class="cell-output cell-output-stdout">
-<pre><code>keys: doc_id, text, source, lang, book_id, title, author, paragraph
+<pre><code>Metadata Keys: doc_id, text, source, lang, book_id, title, author, paragraph
 
-doc_id: gutenberg-es-61851-p1
-title:  El crimen y el castigo — Dostoyevsky, Fyodor
-text:   Se ha respetado la ortografía y la acentuación del original.…</code></pre>
+Document ID:   gutenberg-es-61851-p1
+Title / Author: El crimen y el castigo — Dostoyevsky, Fyodor
+Text Preview:  Se ha respetado la ortografía y la acentuación del original.…</code></pre>
 </div>
 </div>
-<p><code>doc_id</code> is the caller’s own identifier; the engine hands it back on every hit. Everything except <code>text</code>, <code>vector</code>, <code>keywords</code>, <code>ref</code> and <code>doc_id</code> goes into the record’s metadata, which is what a filtered search reads.</p>
+<hr>
 </section>
-<section id="profiles" class="level2">
-<h2 class="anchored" data-anchor-id="profiles">Profiles</h2>
-<p>A text project needs to know how to turn text into tokens and how to weight them. That is a <code>TextProfile</code>: a vocabulary and weights, plus whatever a corpus produced — a stopword set, a lemma map, a query-expansion network — plus the lineage saying how it was made.</p>
-<p><code>prepare.jl</code> fits one per corpus with TextSearch’s own <code>textsearch fit</code>, and not with this package’s <code>fit_profile</code>. The difference is what you get: <code>fit_profile</code> produces a vocabulary and weights, which is all an indexing corpus can yield on its own, while <code>textsearch fit</code> additionally runs an LSI over the corpus and derives a query-expansion network and a lemma map from it. Those artifacts are the reason the two query-side sections below demonstrate something instead of describing it.</p>
-<p>The configuration used for every corpus is worth reading, because one line in it drives most of this page:</p>
+</section>
+<section id="linguistic-profiles-textprofile" class="level2">
+<h2 class="anchored" data-anchor-id="linguistic-profiles-textprofile">Linguistic Profiles (<code>TextProfile</code>)</h2>
+<p>A text project requires a <a href="https://sadit.github.io/TextSearch.jl/dev/api/"><code>TextProfile</code></a>, which defines the tokenization of the vocabulary, the term weighting, the stopword list, the lemma map, and the query-expansion network.</p>
+<p>The preparation script fits the profiles with the procedure of <code>TextSearch.jl</code> (<code>textsearch fit</code>). That procedure applies Latent Semantic Indexing (LSI) to obtain word embeddings, and builds the query-expansion structures from them.</p>
+<section id="normalization-policy-preserving-case-and-diacritics" class="level3">
+<h3 class="anchored" data-anchor-id="normalization-policy-preserving-case-and-diacritics">Normalization Policy: Preserving Case and Diacritics</h3>
+<p>The corpora are processed under the following normalization configuration:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode toml code-with-copy"><code class="sourceCode toml"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">[normalization]</span></span>
-<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="dt">del_diac</span> <span class="op">=</span> <span class="cn">false</span>      <span class="co"># keep diacritics</span></span>
-<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="dt">lc</span> <span class="op">=</span> <span class="cn">false</span>            <span class="co"># keep case</span></span>
-<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="dt">del_punc</span> <span class="op">=</span> <span class="cn">true</span></span>
-<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="dt">group_num</span> <span class="op">=</span> <span class="cn">true</span></span>
-<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="dt">group_url</span> <span class="op">=</span> <span class="cn">true</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Keeping case and diacritics is a deliberate cost. Folding them is cheaper and gives a smaller vocabulary, and it is what the default <code>TextConfig()</code> does — but it also collapses <code>leon</code> and <code>León</code> into one token before the index ever sees them, which leaves the query side with nothing to work with. Everything in <em>Correcting a query</em> below exists only because these are <code>false</code>.</p>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="dt">del_diac</span> <span class="op">=</span> <span class="cn">false</span>      <span class="co"># Preserve diacritical marks (e.g., accents)</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="dt">lc</span> <span class="op">=</span> <span class="cn">false</span>            <span class="co"># Preserve character casing</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="dt">del_punc</span> <span class="op">=</span> <span class="cn">true</span>       <span class="co"># Remove punctuation marks</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="dt">group_num</span> <span class="op">=</span> <span class="cn">true</span>      <span class="co"># Normalize numeric sequences</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="dt">group_url</span> <span class="op">=</span> <span class="cn">true</span>      <span class="co"># Normalize URL strings</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Preserving case and diacritics preserves distinctions in meaning, for example between a proper noun and a common noun, or between two words of a Romance language that differ only in an accent. The query is resolved against this vocabulary, and a query written without accents is mapped to the accented form at search time.</p>
 <div id="10" class="cell" data-execution_count="1">
 <div class="cell-output cell-output-display" data-execution_count="1">
 <div class="markdown">
 <table class="caption-top table table-sm table-striped small">
 <tbody>
 <tr class="odd">
-<th style="text-align: right;" data-quarto-table-cell-role="th">profile</th>
-<th style="text-align: right;" data-quarto-table-cell-role="th">vocabulary</th>
-<th style="text-align: right;" data-quarto-table-cell-role="th">stopwords</th>
-<th style="text-align: right;" data-quarto-table-cell-role="th">lemmas</th>
-<th style="text-align: right;" data-quarto-table-cell-role="th">expansion</th>
-<th style="text-align: right;" data-quarto-table-cell-role="th">fit</th>
+<th style="text-align: left;" data-quarto-table-cell-role="th">Profile</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Vocabulary Size</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Stopwords</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Lemmas</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Expansion Entries</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Fit Time</th>
 </tr>
 <tr class="even">
-<td style="text-align: right;"><code>gutenberg-en</code></td>
+<td style="text-align: left;"><code>gutenberg-en</code></td>
 <td style="text-align: right;">136,716</td>
 <td style="text-align: right;">9 <em>(applied)</em></td>
 <td style="text-align: right;">28,465</td>
@@ -414,7 +432,7 @@ text:   Se ha respetado la ortografía y la acentuación del original.…</code>
 <td style="text-align: right;">265s</td>
 </tr>
 <tr class="odd">
-<td style="text-align: right;"><code>gutenberg-es</code></td>
+<td style="text-align: left;"><code>gutenberg-es</code></td>
 <td style="text-align: right;">337,336</td>
 <td style="text-align: right;">0</td>
 <td style="text-align: right;">83,792</td>
@@ -422,7 +440,7 @@ text:   Se ha respetado la ortografía y la acentuación del original.…</code>
 <td style="text-align: right;">476s</td>
 </tr>
 <tr class="even">
-<td style="text-align: right;"><code>wikipedia-en</code></td>
+<td style="text-align: left;"><code>wikipedia-en</code></td>
 <td style="text-align: right;">139,776</td>
 <td style="text-align: right;">18 <em>(applied)</em></td>
 <td style="text-align: right;">23,186</td>
@@ -435,8 +453,11 @@ text:   Se ha respetado la ortografía y la acentuación del original.…</code>
 </div>
 </div>
 </div>
-<p>Note the <em>(applied)</em> markers, or rather where they are missing. A freshly fitted profile <strong>carries</strong> its lemma map and its expansion network without applying them. That is not an oversight, it is the distinction the type exists to make: computing an artifact and deciding to use it are different acts, and the second belongs to whoever indexes with the profile. Stopwords are applied because the vocabulary was counted with them already removed — un-applying those would mean refitting.</p>
-<p>Printing a profile shows its lineage, which answers “where did this come from?” without guesswork:</p>
+</section>
+<section id="applied-vs.-carried-artifacts" class="level3">
+<h3 class="anchored" data-anchor-id="applied-vs.-carried-artifacts">Applied vs.&nbsp;Carried Artifacts</h3>
+<p>A fitted profile stores its lemma clusters and its expansion network, and does not apply them by default. Applying one of them modifies the tokenization, and the project configuration selects it explicitly. The stopwords are marked as applied because the vocabulary frequencies were computed with the stopwords removed.</p>
+<p>The profile records its origin and the parameters used to fit it:</p>
 <div id="12" class="cell" data-execution_count="1">
 <div class="cell-output cell-output-stdout">
 <pre><code>TextProfile: base
@@ -475,233 +496,187 @@ text:   Se ha respetado la ortografía y la acentuación del original.…</code>
         language: unknown</code></pre>
 </div>
 </div>
-<section id="installing-listing-and-describing-profiles" class="level3">
-<h3 class="anchored" data-anchor-id="installing-listing-and-describing-profiles">Installing, listing and describing profiles</h3>
-<p>This tutorial loads profiles from plain files on disk, with <code>load_profile(path)</code>, because that needs nothing installed and keeps every path in this page explicit. For day-to-day use TextSearch’s CLI manages a profile library under <code>~/.textsearch/profiles/</code> instead:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode sh code-with-copy"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">textsearch</span> install tutorials/profiles/gutenberg-es.zip gutenberg-es   <span class="co"># copy in under a nickname</span></span>
-<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="ex">textsearch</span> install tutorials/profiles/gutenberg-es.zip                <span class="co"># nickname defaults to the filename</span></span>
-<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="ex">textsearch</span> list                                                       <span class="co"># what is installed</span></span>
-<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a><span class="ex">textsearch</span> info gutenberg-es                                          <span class="co"># vocabulary, artifacts, lineage</span></span>
-<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="ex">textsearch</span> uninstall gutenberg-es                                     <span class="co"># reports what it *would* delete</span></span>
-<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a><span class="ex">textsearch</span> uninstall gutenberg-es <span class="at">--force</span>                             <span class="co"># actually deletes it</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>The nickname is a positional argument, not a flag, and defaults to the zip’s filename. Note what <code>uninstall</code> does without <code>--force</code>: it prints the path, the size and the command that would delete it, and removes nothing. Here the registration <em>is</em> the file — a profile can represent hours of compute and the installed copy may be the only one left — so the destructive reading of the word has to be asked for.</p>
-<p>Once installed, a nickname works anywhere a path does in the CLI’s own commands. The file itself sits at <code>~/.textsearch/profiles/&lt;nickname&gt;.zip</code> (or under <code>$TEXTSEARCH_HOME</code>), and <code>load_profile</code> takes that path like any other. Nothing below depends on having installed anything.</p>
+<hr>
 </section>
 </section>
-<section id="searching" class="level2">
-<h2 class="anchored" data-anchor-id="searching">Searching</h2>
-<p>A project is created against a profile, and from then on it is trained: the vocabulary covers the language rather than whichever batch happened to arrive first.</p>
+<section id="query-execution-and-ranking" class="level2">
+<h2 class="anchored" data-anchor-id="query-execution-and-ranking">Query Execution and Ranking</h2>
+<p>Search queries evaluate against the indexed BM25 inverted files:</p>
 <div id="16" class="cell" data-execution_count="1">
 <div class="cell-output cell-output-stdout">
-<pre><code>[gutenberg-en]  the whale rose out of the sea
-  1. Moby Dick; Or, The Whale                    -74.805
+<pre><code>[gutenberg-en] Query: the whale rose out of the sea
+  1. Moby Dick; Or, The Whale                   | Distance: -74.805
      Secondly: It is well known in the Sperm Whale Fishery, however ignorant the world ashore may be of it, that there have been several memorable historic…
-  2. Moby Dick; Or, The Whale                    -70.770
+  2. Moby Dick; Or, The Whale                   | Distance: -70.770
      Throughout the Pacific, and also in Nantucket, and New Bedford, and Sag Harbor, you will come across lively sketches of whales and whaling-scenes, gra…
-  3. Moby Dick; Or, The Whale                    -67.435
+  3. Moby Dick; Or, The Whale                   | Distance: -67.435
      In life, the visible surface of the Sperm Whale is not the least among the many marvels he presents. Almost invariably it is all over obliquely crosse…
 
-[gutenberg-es]  Fortunata y Jacinta en Madrid
-  1. La Odisea                                   -90.754
+[gutenberg-es] Query: Fortunata y Jacinta en Madrid
+  1. La Odisea                                  | Distance: -90.754
      TEBAS (Θήβη y Θῆβαι):
-  2. La Ilíada                                   -90.754
+  2. La Ilíada                                  | Distance: -90.754
      TEBAS (Θήβη y Θῆβαι):
-  3. Fortunata y Jacinta: dos historias de casa  -63.504
+  3. Fortunata y Jacinta: dos historias de casa | Distance: -63.504
      Doña Lupe la invitó, dos días después de la tarde del choque con Jacinta, a volver a visitar a Mauricia. ¡Qué diría doña Guillermina si no volvían! Ne…
 
-[wikipedia-en]  anarchism as a political philosophy
-  1. Anarcho-capitalism                          -141.363
+[wikipedia-en] Query: anarchism as a political philosophy
+  1. Anarcho-capitalism                         | Distance: -141.363
      Anarcho-capitalism Anarchist activists and scholars do not consider anarcho-capitalism as a part of the anarchist movement, arguing that anarchism has…
-  2. Anarcho-capitalism                          -134.281
+  2. Anarcho-capitalism                         | Distance: -134.281
      Anarcho-capitalism Anarchism In both its social and individualist forms, anarchism is usually considered an anti-capitalist and radical left-wing or f…
-  3. Anarcho-capitalism                          -134.086
+  3. Anarcho-capitalism                         | Distance: -134.086
      Anarcho-capitalism Rothbard argued that anarcho-capitalism is the only true form of anarchism—the only form of anarchism that could possibly exist in …
 </code></pre>
 </div>
 </div>
-<p>The distances are BM25 scores, negated so that smaller is better — the same convention every index kind in <code>SimilaritySearch.jl</code> uses, so a caller never has to ask whether high or low wins.</p>
-<p>Nothing about the calls above is language-specific. The language lives in the profile the project was created with; <code>ftsearch</code> is the same function in all three.</p>
-<p>If a dictionary entry outranked the novel you were expecting, that is the corpus and the scoring function telling you something true. Gutenberg’s popularity ranking is not a balanced sample: the Spanish top hundred’s single biggest contributor is a <code>Diccionario Ingles-Español-Tagalog</code>, 17,682 paragraphs — 8.2% of the corpus, and 1.7× the largest volume of prose in it. BM25 normalises by document length, and a two-line dictionary entry sharing one query term with you scores far above a hundred-word paragraph of prose sharing three. So a corpus with one dictionary in it has, in effect, seventeen thousand tiny documents competing for every query that touches their headwords. Neither the index nor the profile is misbehaving — a corpus assembled by popularity is simply not a corpus assembled for retrieval, and this is what that looks like before anyone filters it.</p>
+<p>The reported distances are BM25 scores with the sign inverted, which follows the convention of <code>SimilaritySearch.jl</code>: a smaller value indicates a closer match.</p>
+<hr>
 </section>
-<section id="correcting-a-query" class="level2">
-<h2 class="anchored" data-anchor-id="correcting-a-query">Correcting a query</h2>
-<p>Because the profiles keep case and diacritics, a Spanish query typed without accents is not the same query the corpus contains. <code>QueryPolicy</code>’s default handles that, and can explain itself:</p>
+<section id="orthographic-query-correction" class="level2">
+<h2 class="anchored" data-anchor-id="orthographic-query-correction">Orthographic Query Correction</h2>
+<p>Because linguistic profiles preserve diacritics, unaccented search terms (e.g., <code>musica</code>) do not match accented vocabulary entries (<code>música</code>) by default.</p>
+<p>Under the default <code>QueryPolicy(correction=:auto)</code>, the query resolution engine identifies unaccented query terms and maps them to their most probable accented vocabulary counterparts:</p>
 <div id="18" class="cell" data-execution_count="1">
 <div class="cell-output cell-output-stdout">
-<pre><code>query: la musica del corazon
+<pre><code>Query: la musica del corazon
   ~ musica is in 9 documents against música's 724, so it reads as a misspelling; searched as música (variant), Música (variant) instead
 
-query: el pais y la republica
+Query: el pais y la republica
   ~ republica is in 3 documents against República's 307, so it reads as a misspelling; searched as República (variant), república (variant) instead
 </code></pre>
 </div>
 </div>
-<p>Each line is a token the search replaced, with the evidence for replacing it. A correction happens only where the evidence says the typed spelling is wrong — it is absent from the vocabulary, or far rarer than another spelling of the same word. A correctly typed query produces no lines at all:</p>
+<p><code>ftexplain</code> reports the token substitutions that were applied. A query written with correct orthography produces no substitution:</p>
 <div id="20" class="cell" data-execution_count="1">
 <div class="cell-output cell-output-stdout">
-<pre><code>ftexplain on a correctly typed query: String[]</code></pre>
+<pre><code>ftexplain output on correctly typed query: String[]</code></pre>
 </div>
 </div>
-<p>A search that silently substitutes what was asked for owes the person a way back, which is <code>correction=:off</code>:</p>
+<p>To enforce exact literal matching without orthographic correction, set <code>correction=:off</code>:</p>
 <div id="22" class="cell" data-execution_count="1">
 <div class="cell-output cell-output-stdout">
-<pre><code>[gutenberg-es]  la musica del corazon
-  1. Diccionario Bagobo-Español                  -121.829
+<pre><code>[gutenberg-es] Query: la musica del corazon
+  1. Diccionario Bagobo-Español                 | Distance: -121.829
      Pipit ca casócot.--Menudear, repitir la petición.
-  2. Diccionario Bagobo-Español                  -94.831
+  2. Diccionario Bagobo-Español                 | Distance: -94.831
      Ca-polao.--Letargo, pertubación del jucio.
 
-[gutenberg-es]  la musica del corazon
-  1. The Spanish American Reader                 -134.627
+[gutenberg-es] Query: la musica del corazon
+  1. The Spanish American Reader                | Distance: -134.627
      [10] =Telegrama=, _telegram_. RELATED WORDS: =Dirección=, _address_; =firma=, _signature_; =telegrama al interior=, =telegrama al exterior= (or =cable…
-  2. Diccionario Bagobo-Español                  -121.829
+  2. Diccionario Bagobo-Español                 | Distance: -121.829
      Pipit ca casócot.--Menudear, repitir la petición.
 </code></pre>
 </div>
 </div>
-<p>This is the “showing results for … / search instead for …” pair every commercial search engine offers, and both halves are one keyword apart.</p>
+<hr>
 </section>
-<section id="expanding-a-query" class="level2">
-<h2 class="anchored" data-anchor-id="expanding-a-query">Expanding a query</h2>
-<p>The expansion network relates each vocabulary token to its nearest neighbours in the LSI space the fit computed. <code>prepare.jl</code> turns it on when it creates each project — <code>fit</code> leaves it carried, and applying it is the indexer’s decision:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb12"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>base <span class="op">=</span> <span class="fu">load_profile</span>(<span class="st">"tutorials/profiles/wikipedia-en.zip"</span>)</span>
-<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>prof <span class="op">=</span> TextSearch.<span class="fu">with_applied</span>(base; query_expansion<span class="op">=</span><span class="cn">true</span>)</span>
-<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="fu">create_project</span>(dir, <span class="st">"wikipedia-en"</span>; engine<span class="op">=</span>FullTextEngine, backend<span class="op">=</span>BM25InvertedFile, textmodel<span class="op">=</span><span class="fu">BaseProfile</span>(prof))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>What the network holds for a few terms:</p>
+<section id="semantic-query-expansion" class="level2">
+<h2 class="anchored" data-anchor-id="semantic-query-expansion">Semantic Query Expansion</h2>
+<p>Query expansion adds to each query term its nearest neighbors in the LSI embedding space:</p>
 <div id="24" class="cell" data-execution_count="1">
 <div class="cell-output cell-output-stdout">
-<pre><code>anarchism    -&gt; anarchist, capitalism, individualist, Individualist, anarcho, anarchists
-philosophy   -&gt; metaphysics, philosophical, epistemology, Immanuel, Sramana, Sramanas
-revolution   -&gt; revolutions, Enlightenment, revolutionary, monde, mentalités, autonomy</code></pre>
+<pre><code>anarchism      -&gt; anarchist, capitalism, individualist, Individualist, anarcho, anarchists
+philosophy     -&gt; metaphysics, philosophical, epistemology, Immanuel, Sramana, Sramanas
+revolution     -&gt; revolutions, Enlightenment, revolutionary, monde, mentalités, autonomy</code></pre>
 </div>
 </div>
-<p>And what turning it off does to a search:</p>
+<p>Query expansion increases recall, because it adds related terms to the query:</p>
 <div id="26" class="cell" data-execution_count="1">
 <div class="cell-output cell-output-stdout">
-<pre><code>[wikipedia-en]  anarchism
-  1. Anarcho-capitalism                          -124.245
+<pre><code>[wikipedia-en] Query: anarchism
+  1. Anarcho-capitalism                         | Distance: -124.245
      Anarcho-capitalism Anarchist activists and scholars do not consider anarcho-capitalism as a part of the anarchist movement, arguing that anarchism has…
-  2. Anarcho-capitalism                          -121.518
+  2. Anarcho-capitalism                         | Distance: -121.518
      Anarcho-capitalism Classification Anarcho-capitalism developed from radical American anti-state libertarianism and individualist anarchism. A strong c…
 
-[wikipedia-en]  anarchism
-  1. Anarchism                                   -18.357
+[wikipedia-en] Query: anarchism
+  1. Anarchism                                  | Distance: -18.357
      Anarchism References Explanatory notes Citations General and cited sources Primary sources Secondary sources Tertiary sources Further reading Criticis…
-  2. Anarcho-capitalism                          -18.200
+  2. Anarcho-capitalism                         | Distance: -18.200
      Anarcho-capitalism See also Agorism Anarcho-capitalism and minarchism Consequentialist libertarianism Counter-economics Creative disruption Crypto-ana…
 </code></pre>
 </div>
 </div>
-<p>Expansion widens reach at the cost of precision, which is why it is a property of the query rather than of the index: the same project answers both ways, one keyword apart. <code>expansion_k</code> takes only the nearest few neighbours per token instead of the whole list, which is the middle setting between the two.</p>
+<hr>
 </section>
-<section id="building-a-project-from-scratch" class="level2">
-<h2 class="anchored" data-anchor-id="building-a-project-from-scratch">Building a project from scratch</h2>
-<p>Everything above opened projects <code>prepare.jl</code> had already built. Here is the whole path, live, on a small slice — this is what <code>prepare.jl</code> does, minus the scale:</p>
+<section id="programmatic-project-lifecycle" class="level2">
+<h2 class="anchored" data-anchor-id="programmatic-project-lifecycle">Programmatic Project Lifecycle</h2>
+<p>The following example performs the complete sequence over a subset of one corpus:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb13"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="co"># 1. Ingest slice of paragraph records</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>slice <span class="op">=</span> <span class="fu">map</span>(<span class="bu">Iterators</span>.<span class="fu">take</span>(<span class="fu">eachline</span>(<span class="fu">corpus_file</span>(<span class="st">"gutenberg-en"</span>)), <span class="fl">2000</span>)) <span class="cf">do</span> line</span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>    o <span class="op">=</span> JSON3.<span class="fu">read</span>(line)</span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>    meta <span class="op">=</span> <span class="fu">Dict</span><span class="dt">{String,Any}</span>(<span class="fu">String</span>(k) <span class="op">=&gt;</span> v <span class="cf">for</span> (k, v) <span class="kw">in</span> <span class="fu">pairs</span>(o) <span class="cf">if</span> k <span class="op">!==</span> <span class="op">:</span>text <span class="op">&amp;&amp;</span> k <span class="op">!==</span> <span class="op">:</span>doc_id)</span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>    SSE.<span class="fu">TextItem</span>(<span class="fu">String</span>(o.text); doc_id<span class="op">=</span><span class="fu">String</span>(o.doc_id), meta)</span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="co"># 2. Create project using a pre-computed BaseProfile</span></span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a>workdir <span class="op">=</span> <span class="fu">mktempdir</span>()</span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a>h <span class="op">=</span> SSE.<span class="fu">create_project</span>(workdir, <span class="st">"sample_project"</span>;</span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a>        engine    <span class="op">=</span> SSE.FullTextEngine,</span>
+<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a>        backend   <span class="op">=</span> TextSearch.BM25InvertedFile,</span>
+<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a>        textmodel <span class="op">=</span> SSE.<span class="fu">BaseProfile</span>(profiles[<span class="st">"gutenberg-en"</span>]))</span>
+<span id="cb13-14"><a href="#cb13-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-15"><a href="#cb13-15" aria-hidden="true" tabindex="-1"></a><span class="co"># 3. Stage items (durable on disk, pending indexing)</span></span>
+<span id="cb13-16"><a href="#cb13-16" aria-hidden="true" tabindex="-1"></a>SSE.<span class="fu">append_items!</span>(h, slice)</span>
+<span id="cb13-17"><a href="#cb13-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-18"><a href="#cb13-18" aria-hidden="true" tabindex="-1"></a><span class="co"># 4. Construct inverted file postings over staged backlog</span></span>
+<span id="cb13-19"><a href="#cb13-19" aria-hidden="true" tabindex="-1"></a><span class="fu">quiet</span>() <span class="cf">do</span></span>
+<span id="cb13-20"><a href="#cb13-20" aria-hidden="true" tabindex="-1"></a>    SSE.<span class="fu">index!</span>(h)</span>
+<span id="cb13-21"><a href="#cb13-21" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span>
+<span id="cb13-22"><a href="#cb13-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-23"><a href="#cb13-23" aria-hidden="true" tabindex="-1"></a><span class="co"># 5. Execute full-text query</span></span>
+<span id="cb13-24"><a href="#cb13-24" aria-hidden="true" tabindex="-1"></a>results <span class="op">=</span> SSE.<span class="fu">ftsearch</span>(h, <span class="st">"the whale"</span>, <span class="fl">3</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<hr>
+</section>
+<section id="empirical-benchmark-analysis" class="level2">
+<h2 class="anchored" data-anchor-id="empirical-benchmark-analysis">Empirical Benchmark Analysis</h2>
+<p>The following table reports the construction and indexing times measured over the three corpora:</p>
 <div id="28" class="cell" data-execution_count="1">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>slice <span class="op">=</span> <span class="fu">map</span>(<span class="bu">Iterators</span>.<span class="fu">take</span>(<span class="fu">eachline</span>(<span class="fu">corpus_file</span>(<span class="st">"gutenberg-en"</span>)), <span class="fl">2000</span>)) <span class="cf">do</span> line</span>
-<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>    o <span class="op">=</span> JSON3.<span class="fu">read</span>(line)</span>
-<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>    meta <span class="op">=</span> <span class="fu">Dict</span><span class="dt">{String,Any}</span>(<span class="fu">String</span>(k) <span class="op">=&gt;</span> v <span class="cf">for</span> (k, v) <span class="kw">in</span> <span class="fu">pairs</span>(o) <span class="cf">if</span> k <span class="op">!==</span> <span class="op">:</span>text <span class="op">&amp;&amp;</span> k <span class="op">!==</span> <span class="op">:</span>doc_id)</span>
-<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>    SSE.<span class="fu">TextItem</span>(<span class="fu">String</span>(o.text); doc_id<span class="op">=</span><span class="fu">String</span>(o.doc_id), meta)   <span class="co"># typed in, typed out</span></span>
-<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span>
-<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>workdir <span class="op">=</span> <span class="fu">mktempdir</span>()</span>
-<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>h <span class="op">=</span> SSE.<span class="fu">create_project</span>(workdir, <span class="st">"slice"</span>;</span>
-<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>        engine    <span class="op">=</span> SSE.FullTextEngine,</span>
-<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>        backend   <span class="op">=</span> TextSearch.BM25InvertedFile,</span>
-<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>        textmodel <span class="op">=</span> SSE.<span class="fu">BaseProfile</span>(profiles[<span class="st">"gutenberg-en"</span>]))</span>
-<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a>SSE.<span class="fu">append_items!</span>(h, slice)          <span class="co"># stages: durable, but nothing is searchable yet</span></span>
-<span id="cb15-14"><a href="#cb15-14" aria-hidden="true" tabindex="-1"></a><span class="fu">isempty</span>(SSE.<span class="fu">ftsearch</span>(h, <span class="st">"the whale"</span>, <span class="fl">3</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-display" data-execution_count="1">
-<pre><code>true</code></pre>
-</div>
-</div>
-<div id="30" class="cell" data-execution_count="1">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="fu">quiet</span>() <span class="cf">do</span>                           <span class="co"># see the note below on the engine's progress log</span></span>
-<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>    SSE.<span class="fu">index!</span>(h)                    <span class="co"># encodes and indexes the backlog</span></span>
-<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span>
-<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>[r.doc_id for r <span class="kw">in</span> SSE.<span class="fu">ftsearch</span>(h, <span class="st">"the whale"</span>, <span class="fl">3</span>)]</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-display" data-execution_count="1">
-<pre><code>3-element Vector{String}:
- "gutenberg-en-2701-p576"
- "gutenberg-en-2701-p1200"
- "gutenberg-en-2701-p775"</code></pre>
-</div>
-</div>
-<p><code>quiet</code> there is this page’s own helper, <code>redirect_stderr(devnull) do … end</code>. Every index kind installs an <code>InformativeLog</code> that reports insertion progress on stderr, which is the right default for a build that runs for an hour and the wrong one for a document. Nothing about it is configurable through <code>create_project</code>; redirecting the stream is how you turn it off.</p>
-<p>The split between the two cells is the engine’s staging model: <code>append_items!</code> makes an item durable immediately and searchable never; <code>index!</code> is the explicit, idempotent step that makes it searchable. It is why the first cell finds nothing and the second finds everything, and it is what lets a caller decide when to pay for indexing.</p>
-<p>Reusing a profile a project already fitted is the same two lines in the other direction:</p>
-<div id="32" class="cell" data-execution_count="1">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb19"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a>TextSearch.<span class="fu">save_profile</span>(<span class="fu">joinpath</span>(workdir, <span class="st">"exported"</span>), SSE.<span class="fu">text_profile</span>(h))</span>
-<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>reloaded <span class="op">=</span> TextSearch.<span class="fu">load_profile</span>(<span class="fu">joinpath</span>(workdir, <span class="st">"exported"</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-</div>
-<div id="34" class="cell" data-execution_count="1">
-<div class="cell-output cell-output-stdout">
-<pre><code>exported vocabulary: 136,716 tokens</code></pre>
-</div>
-</div>
-<section id="the-two-alternatives-and-why-this-page-takes-neither" class="level3">
-<h3 class="anchored" data-anchor-id="the-two-alternatives-and-why-this-page-takes-neither">The two alternatives, and why this page takes neither</h3>
-<p>Every project on this page was created from a <code>BaseProfile</code>, because <code>prepare.jl</code> had just fitted the profile and held it in hand. The other two forms matter more for a project you are starting from nothing.</p>
-<p><code>DefaultProfile</code> is the one to reach for, and it is what this page would use if it were not building its own profiles as it goes:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb21"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="fu">create_project</span>(workdir, <span class="st">"noticias"</span>; engine<span class="op">=</span>FullTextEngine, backend<span class="op">=</span>BM25InvertedFile,</span>
-<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>               textmodel<span class="op">=</span><span class="fu">DefaultProfile</span>(<span class="op">:</span>es))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>At the first <code>index!</code> call it loads the published Spanish paragraph profile — the same <code>wiki20231101-es-paragraphs</code> this tutorial’s own fits are modelled on — and refits it against whatever you staged: counts blended, weights recomputed, stopwords and lemmas and the expansion network inherited. It resolves from the profile library <code>textsearch install</code> maintains, and says how to install the profile if it is not there.</p>
-<p>The refit narrows the vocabulary to your corpus rather than keeping the language’s: measured on the English base, 335,336 tokens become 12,238 against an 800-document sample. What it buys is calibration and artifacts, not coverage; <code>refit=false</code> keeps the base whole if coverage is what you are after. <code>DefaultProfile</code>’s docstring has the numbers.</p>
-<p><code>FitFromCorpus</code> says, deliberately, that there is no pre-fitted model and one should be fitted from the project’s own corpus:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb22"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="fu">create_project</span>(workdir, <span class="st">"self-fitted"</span>; engine<span class="op">=</span>FullTextEngine, backend<span class="op">=</span>BM25InvertedFile,</span>
-<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>               textmodel<span class="op">=</span><span class="fu">FitFromCorpus</span>(<span class="fu">TextConfig</span>(language<span class="op">=:</span>en); min_ndocs<span class="op">=</span><span class="fl">3</span>, stopwords<span class="op">=</span><span class="fl">0.9</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>There is no default among the three, and the reason is a trap. That fit is delegated whole to <code>TextSearch.fit_profile</code>, which has no cheap variant — it always runs the LSI, the expansion network and the lemma clustering — so it is bounded by <code>max_documents</code> (1,000 by default) instead of by the corpus. Which means its vocabulary is fitted from a <em>sample</em>: every term appended later that the sample never held is out-of-vocabulary and silently dropped, forever. Nothing about the project’s behaviour afterwards distinguishes “I chose this” from “I never said”, which is exactly why it cannot be arrived at by omission — <code>create_project</code> refuses a text project with no <code>textmodel</code>.</p>
-<p>The <code>profiles</code> table above is what that trap costs in the other direction: the fits on this page took 129 to 476 seconds each, on corpora of 41,000 to 265,000 paragraphs. That is the price of a real profile, paid once, by a script — and the reason a project should be handed one rather than asked to produce it during its first <code>index!</code>.</p>
-</section>
-</section>
-<section id="what-building-this-cost" class="level2">
-<h2 class="anchored" data-anchor-id="what-building-this-cost">What building this cost</h2>
-<p>The numbers below were measured by the build, not estimated:</p>
-<div id="36" class="cell" data-execution_count="1">
 <div class="cell-output cell-output-display" data-execution_count="1">
 <div class="markdown">
 <table class="caption-top table table-sm table-striped small">
 <tbody>
 <tr class="odd">
-<th style="text-align: right;" data-quarto-table-cell-role="th">project</th>
-<th style="text-align: right;" data-quarto-table-cell-role="th">paragraphs</th>
-<th style="text-align: right;" data-quarto-table-cell-role="th">vocabulary</th>
-<th style="text-align: right;" data-quarto-table-cell-role="th">create</th>
-<th style="text-align: right;" data-quarto-table-cell-role="th">append</th>
-<th style="text-align: right;" data-quarto-table-cell-role="th">index</th>
-<th style="text-align: right;" data-quarto-table-cell-role="th">ms/paragraph</th>
-<th style="text-align: right;" data-quarto-table-cell-role="th">on disk</th>
+<th style="text-align: left;" data-quarto-table-cell-role="th">Project</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Paragraphs</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Vocabulary</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Create (s)</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Append (s)</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Index (s)</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Indexing Latency (ms/doc)</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Disk Footprint</th>
 </tr>
 <tr class="even">
-<td style="text-align: right;"><code>gutenberg-en</code></td>
+<td style="text-align: left;"><code>gutenberg-en</code></td>
 <td style="text-align: right;">265,424</td>
 <td style="text-align: right;">136,716</td>
-<td style="text-align: right;">3s</td>
-<td style="text-align: right;">5s</td>
-<td style="text-align: right;">96s</td>
-<td style="text-align: right;">0.36</td>
-<td style="text-align: right;">278 MB</td>
+<td style="text-align: right;">1s</td>
+<td style="text-align: right;">4s</td>
+<td style="text-align: right;">22s</td>
+<td style="text-align: right;">0.08</td>
+<td style="text-align: right;">102 MB</td>
 </tr>
 <tr class="odd">
-<td style="text-align: right;"><code>gutenberg-es</code></td>
+<td style="text-align: left;"><code>gutenberg-es</code></td>
 <td style="text-align: right;">216,247</td>
 <td style="text-align: right;">337,336</td>
 <td style="text-align: right;">2s</td>
-<td style="text-align: right;">4s</td>
-<td style="text-align: right;">44s</td>
-<td style="text-align: right;">0.20</td>
-<td style="text-align: right;">201 MB</td>
+<td style="text-align: right;">3s</td>
+<td style="text-align: right;">15s</td>
+<td style="text-align: right;">0.07</td>
+<td style="text-align: right;">91 MB</td>
 </tr>
 <tr class="even">
-<td style="text-align: right;"><code>wikipedia-en</code></td>
+<td style="text-align: left;"><code>wikipedia-en</code></td>
 <td style="text-align: right;">41,279</td>
 <td style="text-align: right;">139,776</td>
 <td style="text-align: right;">1s</td>
 <td style="text-align: right;">1s</td>
-<td style="text-align: right;">7s</td>
-<td style="text-align: right;">0.17</td>
-<td style="text-align: right;">66 MB</td>
+<td style="text-align: right;">5s</td>
+<td style="text-align: right;">0.13</td>
+<td style="text-align: right;">32 MB</td>
 </tr>
 </tbody>
 </table>
@@ -709,22 +684,17 @@ revolution   -&gt; revolutions, Enlightenment, revolutionary, monde, mentalités
 </div>
 </div>
 </div>
-<p>Three things in that table are worth naming.</p>
-<p><strong>Incremental persistence is cheap, and the first project pays for the whole run.</strong> Every <code>push_item!</code> reports an <code>:add!</code> event and the project’s callback writes that paragraph’s encoded object to RocksDB as its own record, which sounds expensive and is not: measured warm on 3,000 paragraphs, the raw TextSearch push loop takes 0.08 ms per paragraph and the engine’s <code>index!</code> takes 0.129 — <strong>1.6×</strong> for durability at every step.</p>
-<p>The <code>index!</code> column is worth reading with that in mind, because the first row is not comparable with the others. Julia compiles the indexing path on its first execution, and the first project built absorbs all of it: an earlier measurement here reported thirty times the library’s cost per paragraph, and it was measuring compilation. The lesson generalises past this table — the first timing in a fresh Julia session is a compilation measurement wearing a throughput measurement’s clothes.</p>
-<p><strong>A search hit carries an id and a score, and nothing else.</strong> <code>ftsearch</code> answers with [<code>SearchResult</code>]s — <code>_id</code>, <code>doc_id</code>, <code>distance</code>, <code>deleted</code> — and getting from there to the paragraph means one <code>fetch_items</code> call per hit, as <code>show_hits</code> above does. That is one metadata read and one payload read per result, and a caller displaying a page of ten hits pays for ten of each.</p>
-<p>Writing this page is what found that: the first version of it could not print a paragraph at all. <code>fetch_items</code> used to return a <code>Dict{String,Any}</code> of the record merged with its metadata, and the paragraph was in neither — <code>text</code> was a reserved key, stripped on the way in — so the page reached through <code>handle.engine.staged[…]</code> into a private field. Both halves are fixed now: <code>fetch_items</code> returns a typed <code>StoredItem</code> whose <code>payload</code> is the indexed text or vector, read through the public <code>IndexEngine.stored_payload</code>.</p>
-<p><strong>Creating a project against a large profile writes the whole profile into it.</strong> The <code>create</code> column is not project setup; it is the profile being serialised into the project’s own store so that reopening needs nothing but the project directory. That is the right default — a project that depends on a file somewhere else is a project that breaks when the file moves — but it does mean a shared profile is stored once per project that uses it.</p>
-</section>
-<section id="where-to-go-next" class="level2">
-<h2 class="anchored" data-anchor-id="where-to-go-next">Where to go next</h2>
+<section id="performance-observations" class="level3">
+<h3 class="anchored" data-anchor-id="performance-observations">Performance Observations</h3>
 <ul>
-<li><a href="../tutorials/getting-started.html">Getting started</a> — the smaller tour: dense vector search, soft deletes, filtering, recall calibration and the whole-dataset operations (<code>allknn</code>, <code>fft</code>, <code>closestpairs</code>).</li>
-<li><a href="../architecture.html">Architecture</a> — why the staging split exists, how a project is laid out on disk, and what each engine kind persists.</li>
-<li><code>tutorials/prepare.jl</code> — the build itself, which is also the worked example of driving the engine over a corpus that does not fit in a page.</li>
+<li><strong>Cost of persistence</strong>: writing each document to RocksDB adds little time compared with an indexing loop in memory, and the data survive an interruption of the process.</li>
+<li><strong>Compilation time</strong>: the first execution in Julia includes the compilation of the code. Later batches show the rate of the compiled code.</li>
+<li><strong>Storage of the profile</strong>: creating a project with a fitted profile writes that profile into the RocksDB store of the project, so the project can be copied to another machine without additional files.</li>
+<li><strong>Storage of the index</strong>: a text project stores the inverted index, so opening it does not index the corpus again. The <a href="../architecture.html">architecture guide</a> reports the difference: 1.4 s against 20.4 s for the largest of these corpora.</li>
 </ul>
 
 
+</section>
 </section>
 
 </main> <!-- /main -->
@@ -801,7 +771,7 @@ revolution   -&gt; revolutions, Enlightenment, revolutionary, monde, mentalités
     }
       var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
       var mailtoRegex = new RegExp(/^mailto:/);
-        var filterRegex = new RegExp('/' + window.location.host + '/');
+        var filterRegex = new RegExp("https:\/\/sadit\.github\.io\/SimilaritySearchEngine\.jl\/");
       var isInternal = (href) => {
           return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
       }
