@@ -13,7 +13,7 @@ using JSON3
         fetch_req = JSON3.write(Dict(
             "ids" => ["frankenstein_1", "frankenstein_2"]
         ))
-        resp = HTTP.post("$base_url/simsearch/ops_dataset/fetch", [], fetch_req)
+        resp = HTTP.post("$base_url/datasets/ops_dataset/fetch", [], fetch_req)
         @test resp.status == 200
         @test isempty(JSON3.read(String(resp.body)).results)
 
@@ -22,7 +22,7 @@ using JSON3
         # `_require_dense` guard), not something these tests want to exercise.
         data_path = joinpath(@__DIR__, "..", "..", "..", "test", "data", "frankenstein.jsonl")
         docs = [JSON3.read(line) for line in readlines(data_path)[1:100]]
-        resp = HTTP.post("$base_url/simsearch/ops_dataset/append", [], JSON3.write(Dict("items" => docs)))
+        resp = HTTP.post("$base_url/datasets/ops_dataset/append", [], JSON3.write(Dict("items" => docs)))
         @test resp.status == 200
 
         function wait_terminal(job_id)
@@ -154,7 +154,7 @@ using JSON3
         @test resp.status == 200
         @test JSON3.read(String(resp.body)).doc_count == 100
 
-        resp = HTTP.post("$base_url/simsearch/ops_dataset_loaded/search", [], JSON3.write(Dict("vector" => docs[1].vector, "k" => 3)))
+        resp = HTTP.post("$base_url/datasets/ops_dataset_loaded/search", [], JSON3.write(Dict("vector" => docs[1].vector, "k" => 3)))
         @test resp.status == 200
         @test !isempty(JSON3.read(String(resp.body)).results)
 

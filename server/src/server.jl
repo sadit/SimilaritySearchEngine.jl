@@ -142,6 +142,72 @@ struct AppState
     handles::Dict{String, SSE.EmbeddedEngine}
 
     lock::ReentrantLock
+
+    # Whether every /api/v1 endpoint requires a valid token (PLAN.md §4.1, `[auth] enabled` in
+    # config.toml). False keeps the behavior of a server that has never had authentication.
+    #
+    # A `Ref` rather than a plain `Bool` because `AppState` is immutable and the test suite
+    # enables authentication on the server it already started. No endpoint writes it: the value
+    # comes from the configuration file, once, at startup.
+    auth_enabled::Base.RefValue{Bool}
+end
+
+AppState(workdir, job_mgr, cursor_mgr, executor, token_mgr, handles, lock, auth_enabled::Bool) =
+    AppState(workdir, job_mgr, cursor_mgr, executor, token_mgr, handles, lock, Ref(auth_enabled))
+
+# The seven-argument form is the one every existing caller uses, and it leaves authentication
+# off, which is the default of `[auth] enabled`.
+AppState(workdir, job_mgr, cursor_mgr, executor, token_mgr, handles, lock) =
+    AppState(workdir, job_mgr, cursor_mgr, executor, token_mgr, handles, lock, Ref(false))
+
+"""
+    _guard(handler, req, app, op::Symbol, dataset::AbstractString) -> HTTP.Response
+
+Runs `handler()` if the request may perform `op` on `dataset`, and answers `401` or `403`
+otherwise. Every `/api/v1` route is registered through this function in `run_server`, which
+is where the authorization table of this server can be read in one place.
+
+`dataset` is the dataset the route acts on, or `"*"` for a route that is not about one
+dataset. With `app.auth_enabled` false the handler runs without any check, which is the
+behavior of a server that has never had authentication.
+
+- `401` when no token is presented, or the token does not exist, or it has expired. The
+  response says which of those it was only as far as "invalid or expired": a caller that does
+  not hold a token learns nothing from the difference.
+- `403` when the token is valid and does not carry the permission. The response names the
+  permission that was required, because its holder is a legitimate caller who needs to know
+  what to ask for.
+"""
+function _guard(handler, req::HTTP.Request, app::AppState, op::Symbol, dataset::AbstractString)
+    app.auth_enabled[] || return handler()
+    record = Tokens.validate_token(app.token_mgr, _request_token(req))
+    record === nothing &&
+        return json_response(401, Dict("error" => "a valid token is required", "kind" => "Unauthenticated"))
+    Tokens.has_permission(record, op, dataset) ||
+        return json_response(403, Dict("error" => "token lacks permission $(op):$(dataset)",
+                                       "kind" => "Forbidden", "required" => "$(op):$(dataset)"))
+    return handler()
+end
+
+"""
+    _body_dataset(req, keys...) -> String
+
+The dataset a request names in its body, for the two routes whose scope is not in the path:
+job submission (`"dataset"`) and the queries that span two datasets (`"dense_index"`,
+`"lexical_index"`). Returns `"*"` when the body names none, so that such a request requires a
+permission over every dataset rather than accidentally requiring none.
+"""
+function _body_dataset(req::HTTP.Request, keys::String...)
+    data = try
+        JSON3.read(String(req.body), Dict{String, Any})
+    catch
+        return "*"
+    end
+    for k in keys
+        v = get(data, k, nothing)
+        v isa AbstractString && !isempty(v) && return String(v)
+    end
+    return "*"
 end
 
 # ==========================================
@@ -605,7 +671,7 @@ end
 """
     handle_exists(req, app, index) -> HTTP.Response
 
-`GET /api/v1/simsearch/{index}/exists?ids=a,b,c` (PLAN.md §5.1): lightweight
+`GET /api/v1/datasets/{id}/exists?ids=a,b,c` (PLAN.md §5.1): lightweight
 existence/tombstone check by id, without paying for a full `fetch`'s metadata decode.
 Accepts either internal `doc_id`s or original ids, same resolution as `handle_fetch`.
 """
@@ -944,7 +1010,7 @@ end
 """
     handle_calibrate(req, app, index) -> HTTP.Response
 
-`POST /api/v1/simsearch/{index}/calibrate` (PLAN.md §5.6): runs `IndexEngine.calibrate!`'s
+`POST /api/v1/datasets/{id}/calibrate` (PLAN.md §5.6): runs `IndexEngine.calibrate!`'s
 real `SearchModels`-driven hyperparameter sweep against `index`'s already-indexed data (or
 an explicit `queries` ground-truth set, if given), installs the best-found `BeamSearch` as
 the index's new default, and persists it into the dataset's descriptor. Only applies to a
@@ -1154,8 +1220,8 @@ end
 """
     handle_ftsearch_group(req, app)
 
-`POST /api/v1/simsearch/ftsearch` (PLAN.md §5.3/§7): join-group-aware full-text search,
-distinct from the simpler per-index `POST /api/v1/simsearch/{index}/ftsearch` (still
+`POST /api/v1/search/group` (PLAN.md §5.3/§7): join-group-aware full-text search,
+distinct from the simpler per-index `POST /api/v1/datasets/{id}/ftsearch` (still
 supported unchanged, e.g. by `test_02_full_text_search.jl`). Takes a `join_group` and a
 `key`: either one specific key string (routes to the one text-kind member tagged with
 that key) or the reserved wildcard `"*"` (fans out to every text-kind member of the
@@ -1560,8 +1626,17 @@ function handle_create_token(req::HTTP.Request, app::AppState)
     permissions = collect(String, get(data, "permissions", String[]))
     expires_at = get(data, "expires_at", nothing)
 
-    token_str = Tokens.create_token!(app.token_mgr, user, permissions; expires_at=expires_at)
-    return json_response(201, Dict("status" => "created", "token" => token_str))
+    # `create_token!` rejects an `expires_at` that is not a timestamp, and drops a permission
+    # that is not `operation:dataset`. The first is the caller's error and is reported; the
+    # second is reported by returning the permissions that were actually stored.
+    token_str = try
+        Tokens.create_token!(app.token_mgr, user, permissions; expires_at=expires_at)
+    catch e
+        e isa ArgumentError || rethrow()
+        return json_response(400, Dict("error" => e.msg, "kind" => "InvalidRequest"))
+    end
+    return json_response(201, Dict("status" => "created", "token" => token_str,
+                                   "permissions" => Tokens.normalize_permissions(permissions)))
 end
 
 function handle_revoke_token(req::HTTP.Request, app::AppState, token::String)
@@ -1617,41 +1692,51 @@ function run_server(host::String, port::Int, app::AppState; async::Bool=false)
     @get "/readyz" req -> handle_readyz(req, app)
     @get "/metrics" req -> handle_metrics(req, app)
 
-    @post "/api/v1/datasets" req -> handle_create_dataset(req, app)
-    @get "/api/v1/datasets" req -> handle_list_datasets(req, app)
-    @get "/api/v1/datasets/{id}/join_group" (req, id) -> handle_get_join_group(req, app, id)
-    @get "/api/v1/datasets/{id}/log" (req, id) -> handle_get_op_log(req, app, id)
-    @get "/api/v1/datasets/{id}" (req, id) -> handle_get_dataset(req, app, id)
-    @delete "/api/v1/datasets/{id}" (req, id) -> handle_delete_dataset(req, app, id)
+    # Every route below states the permission it requires, as `operation, dataset`. This is the
+    # authorization table of the server: read it here rather than in the handlers, which do not
+    # know about tokens. `"*"` is a route that is not about one dataset.
+    @post "/api/v1/datasets" req -> _guard(() -> handle_create_dataset(req, app), req, app, :admin, "*")
+    @get "/api/v1/datasets" req -> _guard(() -> handle_list_datasets(req, app), req, app, :read, "*")
+    @get "/api/v1/datasets/{id}/join_group" (req, id) -> _guard(() -> handle_get_join_group(req, app, id), req, app, :read, id)
+    # The operation log records the token presented by each request, so reading it is an
+    # administrative operation even though it is a GET.
+    @get "/api/v1/datasets/{id}/log" (req, id) -> _guard(() -> handle_get_op_log(req, app, id), req, app, :admin, id)
+    @get "/api/v1/datasets/{id}" (req, id) -> _guard(() -> handle_get_dataset(req, app, id), req, app, :read, id)
+    @delete "/api/v1/datasets/{id}" (req, id) -> _guard(() -> handle_delete_dataset(req, app, id), req, app, :admin, id)
 
-    @post "/api/v1/simsearch/hybrid_search" req -> handle_hybrid_search(req, app)
-    @post "/api/v1/simsearch/ftsearch" req -> handle_ftsearch_group(req, app)
-    @post "/api/v1/simsearch/{index}/append" (req, index) -> handle_append(req, app, index)
-    @post "/api/v1/simsearch/{index}/search" (req, index) -> handle_search(req, app, index)
-    @post "/api/v1/simsearch/{index}/calibrate" (req, index) -> handle_calibrate(req, app, index)
-    @post "/api/v1/simsearch/{index}/ftsearch" (req, index) -> handle_ftsearch(req, app, index)
-    @post "/api/v1/simsearch/{index}/delete" (req, index) -> handle_delete_item(req, app, index)
-    @post "/api/v1/simsearch/{index}/fetch" (req, index) -> handle_fetch(req, app, index)
-    @get "/api/v1/simsearch/{index}/exists" (req, index) -> handle_exists(req, app, index)
+    @post "/api/v1/search/hybrid" req -> _guard(() -> handle_hybrid_search(req, app), req, app, :read, _body_dataset(req, "dense_index", "lexical_index"))
+    # A query over a join group reaches every dataset of that group, and the group is a tag
+    # datasets carry, not a fixed list, so this requires read over every dataset.
+    @post "/api/v1/search/group" req -> _guard(() -> handle_ftsearch_group(req, app), req, app, :read, "*")
+    @post "/api/v1/datasets/{id}/append" (req, id) -> _guard(() -> handle_append(req, app, id), req, app, :write, id)
+    @post "/api/v1/datasets/{id}/search" (req, id) -> _guard(() -> handle_search(req, app, id), req, app, :read, id)
+    @post "/api/v1/datasets/{id}/calibrate" (req, id) -> _guard(() -> handle_calibrate(req, app, id), req, app, :write, id)
+    @post "/api/v1/datasets/{id}/ftsearch" (req, id) -> _guard(() -> handle_ftsearch(req, app, id), req, app, :read, id)
+    @post "/api/v1/datasets/{id}/delete" (req, id) -> _guard(() -> handle_delete_item(req, app, id), req, app, :write, id)
+    @post "/api/v1/datasets/{id}/fetch" (req, id) -> _guard(() -> handle_fetch(req, app, id), req, app, :read, id)
+    @get "/api/v1/datasets/{id}/exists" (req, id) -> _guard(() -> handle_exists(req, app, id), req, app, :read, id)
 
-    @post "/api/v1/jobs/{kind}" (req, kind) -> handle_submit_job(req, app, kind)
-    @post "/api/v1/jobs/{job_id}/block" (req, job_id) -> handle_block_job(req, app, job_id)
-    @post "/api/v1/jobs/{job_id}/resume" (req, job_id) -> handle_resume_job(req, app, job_id)
-    @post "/api/v1/jobs/{job_id}/kill" (req, job_id) -> handle_kill_job(req, app, job_id)
-    @delete "/api/v1/jobs/{job_id}" (req, job_id) -> handle_delete_job(req, app, job_id)
-    @get "/api/v1/jobs/{job_id}/result" (req, job_id) -> handle_get_job_result(req, app, job_id)
-    @get "/api/v1/jobs/{job_id}" (req, job_id) -> handle_get_job(req, app, job_id)
-    @get "/api/v1/jobs" req -> handle_list_jobs(req, app)
+    # A job is submitted against the dataset named in its body. The job records themselves are
+    # global objects with no dataset of their own, so reading them requires read over every
+    # dataset, and controlling one is administrative.
+    @post "/api/v1/jobs/{kind}" (req, kind) -> _guard(() -> handle_submit_job(req, app, kind), req, app, :write, _body_dataset(req, "dataset"))
+    @post "/api/v1/jobs/{job_id}/block" (req, job_id) -> _guard(() -> handle_block_job(req, app, job_id), req, app, :admin, "*")
+    @post "/api/v1/jobs/{job_id}/resume" (req, job_id) -> _guard(() -> handle_resume_job(req, app, job_id), req, app, :admin, "*")
+    @post "/api/v1/jobs/{job_id}/kill" (req, job_id) -> _guard(() -> handle_kill_job(req, app, job_id), req, app, :admin, "*")
+    @delete "/api/v1/jobs/{job_id}" (req, job_id) -> _guard(() -> handle_delete_job(req, app, job_id), req, app, :admin, "*")
+    @get "/api/v1/jobs/{job_id}/result" (req, job_id) -> _guard(() -> handle_get_job_result(req, app, job_id), req, app, :read, "*")
+    @get "/api/v1/jobs/{job_id}" (req, job_id) -> _guard(() -> handle_get_job(req, app, job_id), req, app, :read, "*")
+    @get "/api/v1/jobs" req -> _guard(() -> handle_list_jobs(req, app), req, app, :read, "*")
 
-    @get "/api/v1/cursors/{cursor_id}" (req, cursor_id) -> handle_poll_cursor(req, app, cursor_id)
+    @get "/api/v1/cursors/{cursor_id}" (req, cursor_id) -> _guard(() -> handle_poll_cursor(req, app, cursor_id), req, app, :read, "*")
 
-    @post "/api/v1/admin/tokens" req -> handle_create_token(req, app)
-    @get "/api/v1/admin/tokens" req -> handle_list_tokens(req, app)
-    @post "/api/v1/admin/tokens/prune" req -> handle_prune_tokens(req, app)
-    @delete "/api/v1/admin/tokens/{token}" (req, token) -> handle_revoke_token(req, app, token)
-    @post "/api/v1/admin/jobs/gc" req -> handle_jobs_gc(req, app)
-    @post "/api/v1/admin/datasets/{id}/unload" (req, id) -> handle_unload_dataset(req, app, id)
-    @post "/api/v1/admin/datasets/{id}/reload" (req, id) -> handle_reload_dataset(req, app, id)
+    @post "/api/v1/admin/tokens" req -> _guard(() -> handle_create_token(req, app), req, app, :admin, "*")
+    @get "/api/v1/admin/tokens" req -> _guard(() -> handle_list_tokens(req, app), req, app, :admin, "*")
+    @post "/api/v1/admin/tokens/prune" req -> _guard(() -> handle_prune_tokens(req, app), req, app, :admin, "*")
+    @delete "/api/v1/admin/tokens/{token}" (req, token) -> _guard(() -> handle_revoke_token(req, app, token), req, app, :admin, "*")
+    @post "/api/v1/admin/jobs/gc" req -> _guard(() -> handle_jobs_gc(req, app), req, app, :admin, "*")
+    @post "/api/v1/admin/datasets/{id}/unload" (req, id) -> _guard(() -> handle_unload_dataset(req, app, id), req, app, :admin, id)
+    @post "/api/v1/admin/datasets/{id}/reload" (req, id) -> _guard(() -> handle_reload_dataset(req, app, id), req, app, :admin, id)
 
     println("Starting SimilaritySearchServer at http://$host:$port")
     serve(host=host, port=port, async=async)

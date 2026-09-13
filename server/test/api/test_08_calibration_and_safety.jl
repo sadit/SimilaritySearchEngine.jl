@@ -10,7 +10,7 @@ using JSON3
 
         resp = HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "calib_test_ds", "index_type" => "searchgraph", "distance" => "L2")))
         @test resp.status == 201
-        resp = HTTP.post("$base_url/simsearch/calib_test_ds/append", [], JSON3.write(Dict("items" => docs)))
+        resp = HTTP.post("$base_url/datasets/calib_test_ds/append", [], JSON3.write(Dict("items" => docs)))
         @test resp.status == 200
 
         # 1. Before any calibrate call, the baseline reported is the library's own
@@ -25,7 +25,7 @@ using JSON3
         @test before.maxvisits == 1_000_000
 
         # 2. POST .../calibrate runs the real sweep and installs a new baseline.
-        resp = HTTP.post("$base_url/simsearch/calib_test_ds/calibrate", [], JSON3.write(Dict("minrecall" => 0.9, "numqueries" => 40, "ksearch" => 8)))
+        resp = HTTP.post("$base_url/datasets/calib_test_ds/calibrate", [], JSON3.write(Dict("minrecall" => 0.9, "numqueries" => 40, "ksearch" => 8)))
         @test resp.status == 200
         calibrated = JSON3.read(String(resp.body))
         @test calibrated.status == "calibrated"
@@ -42,7 +42,7 @@ using JSON3
         @test after.maxvisits == baseline.maxvisits
 
         # 4. A plain search (no beamsearch_overrides) is completely unaffected.
-        resp = HTTP.post("$base_url/simsearch/calib_test_ds/search", [], JSON3.write(Dict("vector" => docs[1].vector, "k" => 5)))
+        resp = HTTP.post("$base_url/datasets/calib_test_ds/search", [], JSON3.write(Dict("vector" => docs[1].vector, "k" => 5)))
         @test resp.status == 200
         @test !any(h -> h.first == "X-Beamsearch-Warning", resp.headers)
         plain = JSON3.read(String(resp.body))
@@ -50,7 +50,7 @@ using JSON3
         @test plain.results[1].id == docs[1].doc_id
 
         # 5. An override AT the calibrated baseline (not above it) -> no warning header.
-        resp = HTTP.post("$base_url/simsearch/calib_test_ds/search", [], JSON3.write(Dict(
+        resp = HTTP.post("$base_url/datasets/calib_test_ds/search", [], JSON3.write(Dict(
             "vector" => docs[1].vector, "k" => 5,
             "beamsearch_overrides" => Dict("bsize" => baseline.bsize),
         )))
@@ -59,7 +59,7 @@ using JSON3
 
         # 6. An override ABOVE baseline but within the 3x safety multiplier -> allowed,
         # with a warning header (PLAN.md §3's "log WARN + return an HTTP warning header").
-        resp = HTTP.post("$base_url/simsearch/calib_test_ds/search", [], JSON3.write(Dict(
+        resp = HTTP.post("$base_url/datasets/calib_test_ds/search", [], JSON3.write(Dict(
             "vector" => docs[1].vector, "k" => 5,
             "beamsearch_overrides" => Dict("bsize" => baseline.bsize * 2),
         )))
@@ -68,7 +68,7 @@ using JSON3
 
         # 7. An override far beyond the safety multiplier -> hard-rejected, not just warned.
         resp = try
-            HTTP.post("$base_url/simsearch/calib_test_ds/search", [], JSON3.write(Dict(
+            HTTP.post("$base_url/datasets/calib_test_ds/search", [], JSON3.write(Dict(
                 "vector" => docs[1].vector, "k" => 5,
                 "beamsearch_overrides" => Dict("bsize" => baseline.bsize * 100),
             )))
@@ -81,18 +81,18 @@ using JSON3
         # not a silent no-op.
         resp = HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "calib_exact_ds", "index_type" => "exhaustive_search", "distance" => "L2")))
         @test resp.status == 201
-        resp = HTTP.post("$base_url/simsearch/calib_exact_ds/append", [], JSON3.write(Dict("items" => docs[1:5])))
+        resp = HTTP.post("$base_url/datasets/calib_exact_ds/append", [], JSON3.write(Dict("items" => docs[1:5])))
         @test resp.status == 200
 
         resp = try
-            HTTP.post("$base_url/simsearch/calib_exact_ds/calibrate", [], JSON3.write(Dict()))
+            HTTP.post("$base_url/datasets/calib_exact_ds/calibrate", [], JSON3.write(Dict()))
         catch e
             e.response
         end
         @test resp.status == 400
 
         resp = try
-            HTTP.post("$base_url/simsearch/calib_exact_ds/search", [], JSON3.write(Dict("vector" => docs[1].vector, "k" => 3, "beamsearch_overrides" => Dict("bsize" => 5))))
+            HTTP.post("$base_url/datasets/calib_exact_ds/search", [], JSON3.write(Dict("vector" => docs[1].vector, "k" => 3, "beamsearch_overrides" => Dict("bsize" => 5))))
         catch e
             e.response
         end
@@ -102,7 +102,7 @@ using JSON3
         resp = HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "calib_empty_ds", "index_type" => "searchgraph")))
         @test resp.status == 201
         resp = try
-            HTTP.post("$base_url/simsearch/calib_empty_ds/calibrate", [], JSON3.write(Dict()))
+            HTTP.post("$base_url/datasets/calib_empty_ds/calibrate", [], JSON3.write(Dict()))
         catch e
             e.response
         end

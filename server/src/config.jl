@@ -38,6 +38,22 @@ port = 8080
 [search]
 # Global policy in case of long queries: "deny" or "warn_only"
 long_query_policy = "deny"
+
+[auth]
+# Require a token on every /api/v1 endpoint. /healthz, /readyz and /metrics stay open, so a
+# supervisor and a metrics collector keep working without credentials.
+#
+# The default is false, which is what a server upgraded from an earlier version was doing
+# already. With enabled = true the server refuses to start while no token exists, because in
+# that state it could not answer any request; create the first one with
+#
+#     similarity-search-ctl add-token --user admin --permissions "admin:*"
+#
+# A permission is `operation:dataset`, where operation is read, write or admin, and dataset is
+# a dataset id or `*`. read covers the queries and the GET endpoints, write covers append,
+# delete, calibrate and job submission, admin covers dataset creation and deletion, the token
+# endpoints and the control of jobs. Each operation includes the ones before it.
+enabled = false
 """
 end
 

@@ -48,7 +48,7 @@ curl -s -X POST localhost:8080/api/v1/datasets \
      -H 'Content-Type: application/json' \
      -d '{"id": "demo", "index_kind": "bm25_invfile"}'
 
-curl -s -X POST localhost:8080/api/v1/simsearch/demo/append \
+curl -s -X POST localhost:8080/api/v1/datasets/demo/append \
      -H 'Content-Type: application/json' \
      -d '{"items": [
            {"doc_id": "d1", "text": "el gato duerme sobre el tejado", "keywords": ["gato"]},
@@ -67,12 +67,13 @@ The insertion indexes the documents, so they can be searched when the call retur
 ## Step 4: Search
 
 ```bash
-curl -s -X POST localhost:8080/api/v1/simsearch/demo/ftsearch \
+curl -s -X POST localhost:8080/api/v1/datasets/demo/ftsearch \
      -H 'Content-Type: application/json' \
      -d '{"text": "gato tejado", "k": 5}'
 ```
 
-A dense project uses `/search`, which receives a `vector` and accepts a metadata `filter`:
+A dense project uses `/api/v1/datasets/{id}/search`, which receives a `vector` and accepts a
+metadata `filter`:
 
 ```json
 {"vector": [0.1, 0.2, 0.3], "k": 10, "filter": {"year": {"$gte": 2024}}}
@@ -156,6 +157,37 @@ result = run_job(client, kind="allknn", command=["--dataset", ds_id, "--k", "5"]
 ```bash
 python stress_client.py --jobs 3
 ```
+
+## Step 9: Require a token
+
+Everything above answered without credentials, which is the default. To require a token on
+every `/api/v1` endpoint, create the first token against the working directory and enable
+authentication:
+
+```bash
+similarity-search add-token --user admin --permissions "admin:*" --workdir ./workdir
+```
+
+```toml
+[auth]
+enabled = true
+```
+
+The command prints the token once. A server started with `enabled = true` and no token
+refuses to start, because no request could be answered. From then on, each request carries it:
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+     -X POST localhost:8080/api/v1/datasets/demo/ftsearch \
+     -H 'Content-Type: application/json' \
+     -d '{"text": "gato tejado", "k": 5}'
+```
+
+A permission is `operation:dataset`, with `read`, `write` or `admin` as the operation and a
+dataset id or `*` as the scope. A token for an ingestion process is
+`--permissions "write:demo"`, which also reads `demo` and reaches nothing else. `/healthz`,
+`/readyz` and `/metrics` keep answering without a token. See the
+[server manual](manual.qmd#authentication) for the complete table.
 
 ## Where to go next
 

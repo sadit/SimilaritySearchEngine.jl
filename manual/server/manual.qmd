@@ -77,12 +77,18 @@ profile to the server is not available over HTTP.
 - `POST /api/v1/datasets/{id}/unload` and `/reload` — closes or reopens a dataset without restarting the server. The `rebuild` subcommand of the command line requires this, because the RocksDB write lock is exclusive per process.
 
 ### Search and indexing
-- `POST /api/v1/simsearch/{id}/append` — inserts items. A dense item contains `vector`, a text item contains `text`, and a sparse item contains `indices` and `values`. The fields `doc_id`, `keywords` and `refs`, and any other field, become the metadata of the item.
-- `POST /api/v1/simsearch/{id}/search` — dense/sparse search, with optional `filter`, `page_size` and `beamsearch_overrides`.
-- `POST /api/v1/simsearch/{id}/ftsearch` — text search.
-- `POST /api/v1/simsearch/{id}/delete` — logical deletion.
-- `POST /api/v1/simsearch/{id}/calibrate` — recall calibration for a graph-backed project.
-- `POST /api/v1/simsearch/hybrid` and `/ftsearch_group` — reciprocal rank fusion over two datasets, and a text query sent to every dataset of a join group.
+- `POST /api/v1/datasets/{id}/append` — inserts items. A dense item contains `vector`, a text item contains `text`, and a sparse item contains `indices` and `values`. The fields `doc_id`, `keywords` and `refs`, and any other field, become the metadata of the item.
+- `POST /api/v1/datasets/{id}/search` — dense and sparse search, with optional `filter`, `page_size` and `beamsearch_overrides`.
+- `POST /api/v1/datasets/{id}/ftsearch` — text search.
+- `POST /api/v1/datasets/{id}/fetch` and `GET /api/v1/datasets/{id}/exists` — records by identifier, and whether an identifier exists.
+- `POST /api/v1/datasets/{id}/delete` — logical deletion.
+- `POST /api/v1/datasets/{id}/calibrate` — recall calibration for a graph-backed project.
+- `POST /api/v1/search/hybrid` and `POST /api/v1/search/group` — reciprocal rank fusion over two datasets, and a text query sent to every dataset of a join group.
+
+An operation on one dataset is addressed under that dataset. The two queries that read more
+than one are under `/api/v1/search/`, which is the only place where a route is not about a
+single dataset. The earlier prefix `/api/v1/simsearch/` was removed on 2026-09-13: it marked a
+distinction that the API stopped making.
 
 ### Telemetry
 - `GET /api/v1/datasets/{id}/log?offset=&limit=` — the dataset's `op_log`: one record per `search`/`ftsearch`/`append`/`delete`, with elapsed time and `distance_evaluations`.
@@ -98,6 +104,40 @@ insertion uses the engine's own context under an exclusive write lock.
 - `POST /api/v1/jobs/{kind}` — enqueues a job (`allknn`, `fft`, `neardup`, `hsp`, `searchbatch`, `closestpair`, `build`, `dump`, `load`). Returns `202` and a `job_id`.
 - `GET /api/v1/jobs/{job_id}` and `/result` — the state of the job, and its output.
 
+### Authentication
+
+Every `/api/v1` endpoint requires a token when `[auth] enabled` is true in `config.toml`.
+`/healthz`, `/readyz` and `/metrics` answer without one, so a supervisor and a metrics
+collector work without credentials. The default is `false`, which is the behavior of a server
+that has never had authentication.
+
+The token travels in the `Authorization` header, as `Bearer <token>` or as the bare token.
+A permission is `operation:dataset`:
+
+| operation | grants | includes |
+| :--- | :--- | :--- |
+| `read` | the queries and the `GET` endpoints | — |
+| `write` | append, delete, calibrate, job submission | `read` |
+| `admin` | dataset creation and deletion, the token endpoints, job control, the operation log | `write` and `read` |
+
+`dataset` is a dataset id or `*`. A route that is not about one dataset — listing datasets,
+the job endpoints, the token endpoints, `/api/v1/search/group` — requires the operation over
+`*`, so a token restricted to one dataset uses that dataset and cannot enumerate the rest.
+`admin:*` grants everything. A request without a valid token is answered `401`; a valid token
+without the permission is answered `403`, and the body names the permission that was required.
+
+The first token is created against the working directory, because a server with
+authentication enabled refuses to start while no token exists, and the endpoint that creates
+tokens is itself behind authentication:
+
+```bash
+similarity-search add-token --user admin --permissions "admin:*" --workdir ./workdir
+```
+
+Later tokens are created with `POST /api/v1/admin/tokens` or with `similarity-search-ctl
+add-token`, which is the same endpoint. A token may carry an `expires_at`, an ISO 8601
+timestamp that is verified when the token is created and again on every request.
+
 ## 5. How failures are reported
 
 The engine raises typed errors. This package maps them **by category**, never by the text of the message:
@@ -108,6 +148,9 @@ The engine raises typed errors. This package maps them **by category**, never by
 | `ConflictingState` (staged backlog, untrained profile, empty project) | 409 | 5 |
 | `InvalidRequest` (wrong payload, wrong dimension, bad option) | 400 | 2 |
 | `StorageFailure` | 500 | 70 |
+
+Two status codes come from this package rather than from the engine: `401` when a request
+carries no valid token, and `403` when its token lacks the permission the route requires.
 
 An error response contains two fields: `error`, the message, intended for a person, and `kind`,
 the concrete engine type, intended for a client that selects a behavior. Failures detected by a

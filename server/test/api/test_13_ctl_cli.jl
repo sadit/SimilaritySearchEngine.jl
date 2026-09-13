@@ -31,7 +31,7 @@ end
 
         data_path = joinpath(@__DIR__, "..", "..", "..", "test", "data", "frankenstein.jsonl")
         docs = [JSON3.read(line) for line in readlines(data_path)[1:5]]
-        resp = HTTP.post("$base_url/simsearch/ctl_ds/append", [], JSON3.write(Dict("items" => docs)))
+        resp = HTTP.post("$base_url/datasets/ctl_ds/append", [], JSON3.write(Dict("items" => docs)))
         @test resp.status == 200
 
         # --- list / stats -------------------------------------------------------------

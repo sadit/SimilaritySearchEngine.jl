@@ -55,6 +55,7 @@ const FULL = "full" in ARGS || lowercase(get(ENV, "SSE_TEST_LEVEL", "light")) ==
             include("api/test_11_admin_jobs_and_dataset_reload.jl")
             include("api/test_12_dump_load_via_admin.jl")
             include("api/test_13_ctl_cli.jl")
+            include("api/test_14_auth.jl")
         end
 
         @testset "CLI Commands" begin

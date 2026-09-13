@@ -6,8 +6,11 @@
 using SimilaritySearchEngine
 import SimilaritySearchEngine as SSE
 using SimilaritySearchServer.Server: parse_index_kind, parse_distance, default_textmodel,
-                                     engine_error_response, _typed_item
+                                     engine_error_response, _typed_item, AppState, _guard,
+                                     json_response
 using SimilaritySearchServer: cli_exit_code, wire_kind
+import SimilaritySearchServer.Tokens as Tokens
+using HTTP
 using JSON3
 
 @testset "the wire's index kinds map onto engine/backend pairs" begin
@@ -76,4 +79,111 @@ end
     # An item carrying no payload for this kind of project is skipped, not an error
     @test _typed_item(:dense, Dict{String, Any}("text" => "no vector here")) === nothing
     @test _typed_item(:text, Dict{String, Any}("vector" => [1.0])) === nothing
+end
+
+
+# ---------------------------------------------------------------------------------------
+# Authorization (PLAN.md §4.1). No server and no socket: the decision is a pure function of
+# the token record and the permission a route asks for, and `_guard` is where it is taken.
+# ---------------------------------------------------------------------------------------
+
+@testset "a permission string is an operation and a dataset" begin
+    @test Tokens.parse_permission("write:corpus_es") == (:write, "corpus_es")
+    @test Tokens.parse_permission("admin:*") == (:admin, "*")
+    # A permission that names no dataset applies to every dataset
+    @test Tokens.parse_permission("read") == (:read, "*")
+    @test Tokens.parse_permission("read:") == (:read, "*")
+    # Anything else grants nothing rather than granting something unintended
+    @test Tokens.parse_permission("superuser") === nothing
+    @test Tokens.parse_permission("") === nothing
+    @test Tokens.normalize_permissions(["read", "admin:ds", "nonsense"]) == ["read:*", "admin:ds"]
+end
+
+@testset "an operation includes the ones before it, within its own dataset" begin
+    rec(perms) = Tokens.TokenRecord("tok", "user", perms, "2026-01-01T00:00:00", nothing)
+
+    reader = rec(["read:*"])
+    @test Tokens.has_permission(reader, :read, "anything")
+    @test !Tokens.has_permission(reader, :write, "anything")
+    @test !Tokens.has_permission(reader, :admin, "anything")
+
+    writer = rec(["write:corpus_es"])
+    @test Tokens.has_permission(writer, :write, "corpus_es")
+    @test Tokens.has_permission(writer, :read, "corpus_es")   # write includes read
+    @test !Tokens.has_permission(writer, :read, "corpus_en")  # ... in its own dataset only
+    @test !Tokens.has_permission(writer, :admin, "corpus_es")
+
+    admin = rec(["admin:*"])
+    @test all(op -> Tokens.has_permission(admin, op, "whatever"), (:read, :write, :admin))
+
+    # A route that is not about one dataset asks for "*", and only a "*" permission matches
+    @test Tokens.has_permission(reader, :read, "*")
+    @test !Tokens.has_permission(writer, :read, "*")
+
+    @test !Tokens.has_permission(rec(String[]), :read, "*")
+    @test !Tokens.has_permission(rec(["bogus:*"]), :read, "*")
+end
+
+@testset "a token expires, and an unreadable expiry counts as expired" begin
+    rec(exp) = Tokens.TokenRecord("tok", "user", ["read:*"], "2026-01-01T00:00:00", exp)
+    @test !Tokens.is_expired(rec(nothing))
+    @test Tokens.is_expired(rec("2000-01-01T00:00:00"))
+    @test !Tokens.is_expired(rec("2999-01-01T00:00:00"))
+    @test Tokens.is_expired(rec("last tuesday"))
+end
+
+@testset "_guard answers 401, 403, or the handler" begin
+    workdir = mktempdir()
+    mgr = Tokens.open_token_manager(workdir)
+    ok = () -> json_response(200, Dict("status" => "ok"))
+    app = AppState(workdir, nothing, nothing, nothing, mgr,
+                   Dict{String, SSE.EmbeddedEngine}(), ReentrantLock(), true)
+    request(token) = token === nothing ? HTTP.Request("GET", "/api/v1/datasets") :
+                                         HTTP.Request("GET", "/api/v1/datasets", ["Authorization" => "Bearer $token"])
+
+    reader = Tokens.create_token!(mgr, "reader", ["read:*"])
+    writer = Tokens.create_token!(mgr, "writer", ["write:corpus_es"])
+    expired = Tokens.create_token!(mgr, "past", ["admin:*"]; expires_at="2000-01-01T00:00:00")
+
+    # No token, an unknown token, and an expired token are all 401: a caller without a valid
+    # token learns nothing from the difference between them.
+    @test _guard(ok, request(nothing), app, :read, "*").status == 401
+    @test _guard(ok, request("not-a-token"), app, :read, "*").status == 401
+    @test _guard(ok, request(expired), app, :read, "*").status == 401
+
+    # A valid token without the permission is 403, and the response names what was required,
+    # because its holder is a legitimate caller.
+    resp = _guard(ok, request(reader), app, :write, "corpus_es")
+    @test resp.status == 403
+    @test JSON3.read(String(resp.body)).required == "write:corpus_es"
+
+    @test _guard(ok, request(reader), app, :read, "corpus_es").status == 200
+    @test _guard(ok, request(writer), app, :write, "corpus_es").status == 200
+    @test _guard(ok, request(writer), app, :read, "*").status == 403
+
+    # A token presented without the "Bearer " prefix is accepted, as the header parser allows
+    @test _guard(ok, HTTP.Request("GET", "/x", ["Authorization" => reader]), app, :read, "*").status == 200
+
+    # With authentication disabled the handler runs and no token is consulted
+    app.auth_enabled[] = false
+    @test _guard(ok, request(nothing), app, :read, "*").status == 200
+
+    Tokens.close_token_manager(mgr)
+    rm(workdir; recursive=true, force=true)
+end
+
+@testset "every /api/v1 route is registered through _guard" begin
+    # The authorization table is the route block of `run_server`, so the invariant that matters
+    # is structural: a route added without a guard is a route that answers without a token.
+    src = read(joinpath(@__DIR__, "..", "src", "server.jl"), String)
+    routes = [m.match for m in eachmatch(r"@(get|post|delete|put) \"[^\"]+\"[^\n]*", src)]
+    api = filter(r -> occursin("\"/api/v1", r), routes)
+    open_routes = filter(r -> !occursin("\"/api/v1", r), routes)
+
+    @test length(api) == 31
+    @test all(r -> occursin("_guard(", r), api)
+    # Health and metrics stay open on purpose: a supervisor and a metrics collector have no
+    # token, and refusing them would report a healthy server as down.
+    @test sort([match(r"\"([^\"]+)\"", r).captures[1] for r in open_routes]) ==
+          ["/healthz", "/metrics", "/readyz"]
 end

@@ -37,17 +37,23 @@ of it exist.
 | 2. Concurrency | partial | The engine provides the reader-writer lock and the context pool, and a job that reads the whole dataset runs as a subprocess, which is what keeps queries answerable while it runs. The 80/20 split is **not implemented**: `query_threads_pct` and `batch_threads_pct` exist in `config.toml` and no code reads them. There is no request collector and no `:dynamic` queue. |
 | 3. Persistence and telemetry | complete except §4.5 | RocksDB, and an `op_log` with elapsed time and a real distance-computation count per request. The declared metadata schema (typed fields plus an `extra` blob) and the `meta_idx_<field>` column families do not exist: `meta` is free-form, and the indexed fields are `doc_id`, `keywords` and `refs`. |
 | 3.5. Job model and cursors | complete, with a deliberate change of persistence | Job registry with `queued`, `running`, `blocked`, `completed` and `failed`, `kill`, `gc`, `LocalCLIExecutor`, and result cursors. JLD2 snapshots were removed, because the engine persists its own index; Avro remains for `dump` and `load`. |
-| 4. Web layer | complete except two items | 34 routes, `/healthz`, `/readyz`, `/metrics`, join groups. `/metrics` does not derive counters from the `op_log` (§5.8), and **authentication is not enforced** (see below). |
-| 5. Full text and hybrid | mostly complete | `ftsearch`, fan-out over a join group, `hybrid_search` with reciprocal rank fusion, and `QueryPolicy` for correction and expansion. The stemmer registry is absent: neither `Snowball` nor `Languages` is a dependency. Vocabulary-drift detection by out-of-vocabulary rate is absent; `rebuild` is the manual procedure. |
+| 4. Web layer | complete except `/metrics` | 34 routes, `/healthz`, `/readyz`, `/metrics`, join groups, and authentication (below). `/metrics` does not derive counters from the `op_log` (§5.8). The routes were reorganized on 2026-09-13: the operations of a dataset are under `/api/v1/datasets/{id}/`, the two queries that read more than one dataset are under `/api/v1/search/`, and the prefix `/api/v1/simsearch/` that §5.1 to §5.3 below describe no longer exists. |
+| 5. Full text and hybrid | complete, minus one item | `ftsearch`, fan-out over a join group, `hybrid_search` with reciprocal rank fusion, and `QueryPolicy` for correction and expansion. The stemmer registry of §5.3 was **discarded on 2026-09-13**: what it was for is done by the query pipeline of `TextSearch.jl` — the text profile carries the lemma clusters, and `QueryPolicy` performs the orthographic correction and the expansion at query time — so neither `Snowball` nor `Languages` is a dependency and no stemmer is configured. Vocabulary-drift detection by out-of-vocabulary rate is absent; `rebuild` is the manual procedure. |
 | 6. Scripting packages | one of three | The Python client exists (`client`, `async_client`, `jobs.run_job`, `cursors`, `stress_client.py`). There is no Julia scripting package (§8.3), although §8.5, access without HTTP, is provided by the engine itself. The Node package (§8.4) was never started. |
 | §3. Long-lived search policy | not implemented | `long_query_policy = "deny"` is in `config.toml` and no code reads it. No request is answered with 429, and no search is converted into a job. |
 
 ### Pending work, in the order it is being addressed
 
-1. **Authentication (§4.1).** Tokens are created, revoked, listed and pruned, and the
-   `Authorization` header is read into the operation log, but no endpoint validates it. A
-   caller that reaches the port can delete a dataset. This is the only item in this list that
-   is a risk rather than a missing feature.
+1. ~~**Authentication (§4.1).**~~ Done on 2026-09-13. `[auth] enabled` in `config.toml`,
+   false by default. With it enabled, every `/api/v1` endpoint requires a token and
+   `/healthz`, `/readyz` and `/metrics` do not. A permission is `operation:dataset`, where
+   the operation is `read`, `write` or `admin` and each one includes the ones before it, and
+   the dataset is an id or `*`. Expiry is verified when a token is created and on every
+   request. The first token is created against the working directory with
+   `similarity-search add-token`, because a server with authentication enabled and no token
+   refuses to start. **Still open:** the operation log records the token string presented by
+   each caller, which is why reading the log is an administrative operation; storing a hash
+   of it instead would make the log safe to read with `read`.
 2. **Remnants of the port.** Removed on 2026-09-13: the `JLD2` dependency, `src/snapshots.jl`,
    and the passages that described a snapshot file as current behavior. Still pending: two
    docstrings in `server.jl` that document `parse_meta_schema` and `serialize_meta_schema`,
@@ -58,8 +64,17 @@ of it exist.
    real value per request.
 5. **§4.5**, the declared metadata schema with an index per field. This is the item that
    requires work in the engine, not only in this package.
-6. **Snowball and out-of-vocabulary tracking** (§5). These change the quality of retrieval,
-   not the operation of the server.
+6. **Out-of-vocabulary tracking** (§5), so that a text project reports when its vocabulary no
+   longer matches what it is being asked, which is the signal for a `rebuild`. This changes
+   the quality of retrieval, not the operation of the server.
+
+The stemmer registry of §5.3 and §9's phase 5 is not on this list: it was discarded. Stemming
+was the way this specification proposed to make a query match a word it does not equal. That
+is now the work of the query pipeline of `TextSearch.jl`, which the engine exposes through the
+text profile and `QueryPolicy`: the profile carries lemma clusters and the expansion network,
+and the policy applies orthographic correction and expansion to each query. Passages below
+that describe `StemmerRegistry`, a `stemmer` field of `TextConfig`, or `Snowball` as a
+dependency describe a design that was not built and will not be.
 
 ## 1. System Overview & Application Architecture
 

@@ -117,10 +117,10 @@ using Dates
 
         data_path = joinpath(@__DIR__, "..", "..", "..", "test", "data", "frankenstein.jsonl")
         docs = [JSON3.read(line) for line in readlines(data_path)[1:10]]
-        resp = HTTP.post("$base_url/simsearch/admin_reload_ds/append", [], JSON3.write(Dict("items" => docs)))
+        resp = HTTP.post("$base_url/datasets/admin_reload_ds/append", [], JSON3.write(Dict("items" => docs)))
         @test resp.status == 200
 
-        resp = HTTP.post("$base_url/simsearch/admin_reload_ds/delete", [], JSON3.write(Dict("doc_id" => 4)))
+        resp = HTTP.post("$base_url/datasets/admin_reload_ds/delete", [], JSON3.write(Dict("doc_id" => 4)))
         @test resp.status == 200
 
         # Unload releases the RocksDB write lock (and drops the live engine)...

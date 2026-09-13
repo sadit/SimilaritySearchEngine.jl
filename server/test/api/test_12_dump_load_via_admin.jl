@@ -9,10 +9,10 @@ using JSON3
 
         data_path = joinpath(@__DIR__, "..", "..", "..", "test", "data", "frankenstein.jsonl")
         docs = [JSON3.read(line) for line in readlines(data_path)[1:10]]
-        resp = HTTP.post("$base_url/simsearch/dump_admin_ds/append", [], JSON3.write(Dict("items" => docs)))
+        resp = HTTP.post("$base_url/datasets/dump_admin_ds/append", [], JSON3.write(Dict("items" => docs)))
         @test resp.status == 200
 
-        resp = HTTP.post("$base_url/simsearch/dump_admin_ds/delete", [], JSON3.write(Dict("doc_id" => 6)))
+        resp = HTTP.post("$base_url/datasets/dump_admin_ds/delete", [], JSON3.write(Dict("doc_id" => 6)))
         @test resp.status == 200
 
         # dump/load need exclusive access to write a fresh target and (for the source) a
@@ -46,7 +46,7 @@ using JSON3
         # k covers every originally-appended item -- if the tombstone hadn't survived the
         # dump/load/reload round trip, doc_id 6 would show up here too.
         query_vec = docs[1].vector
-        resp = HTTP.post("$base_url/simsearch/dump_admin_ds_restored/search", [], JSON3.write(Dict("vector" => query_vec, "k" => 10)))
+        resp = HTTP.post("$base_url/datasets/dump_admin_ds_restored/search", [], JSON3.write(Dict("vector" => query_vec, "k" => 10)))
         @test resp.status == 200
         results = JSON3.read(String(resp.body)).results
         @test length(results) == 9

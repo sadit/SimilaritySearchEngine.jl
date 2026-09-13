@@ -18,9 +18,9 @@ using JSON3
         resp = HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "hybrid_lexical_ds", "index_type" => "bm25_invfile")))
         @test resp.status == 201
 
-        resp = HTTP.post("$base_url/simsearch/hybrid_dense_ds/append", [], append_body)
+        resp = HTTP.post("$base_url/datasets/hybrid_dense_ds/append", [], append_body)
         @test resp.status == 200
-        resp = HTTP.post("$base_url/simsearch/hybrid_lexical_ds/append", [], append_body)
+        resp = HTTP.post("$base_url/datasets/hybrid_lexical_ds/append", [], append_body)
         @test resp.status == 200
 
         # 1. Hybrid search, dense-only (omit "text" so the request never touches the
@@ -33,7 +33,7 @@ using JSON3
             "k" => 10
         ))
 
-        resp = HTTP.post("$base_url/simsearch/hybrid_search", [], hybrid_req)
+        resp = HTTP.post("$base_url/search/hybrid", [], hybrid_req)
         @test resp.status == 200
         parsed = JSON3.read(String(resp.body))
         @test haskey(parsed, :results)
@@ -48,7 +48,7 @@ using JSON3
             "text" => "Frankenstein",
             "k" => 10
         ))
-        resp_both = HTTP.post("$base_url/simsearch/hybrid_search", [], hybrid_req_both)
+        resp_both = HTTP.post("$base_url/search/hybrid", [], hybrid_req_both)
         @test resp_both.status == 200
         parsed_both = JSON3.read(String(resp_both.body))
         @test haskey(parsed_both, :results)
@@ -61,12 +61,12 @@ using JSON3
             "k" => 200,
             "filter" => Dict("word_count" => Dict("gte" => 10))
         ))
-        resp = HTTP.post("$base_url/simsearch/hybrid_dense_ds/search", [], filter_req)
+        resp = HTTP.post("$base_url/datasets/hybrid_dense_ds/search", [], filter_req)
         @test resp.status == 200
         parsed = JSON3.read(String(resp.body))
         @test length(parsed.results) > 0
         @test all(r -> begin
-            fetched = JSON3.read(String(HTTP.post("$base_url/simsearch/hybrid_dense_ds/fetch", [], JSON3.write(Dict("ids" => [r.doc_id]))).body)).results
+            fetched = JSON3.read(String(HTTP.post("$base_url/datasets/hybrid_dense_ds/fetch", [], JSON3.write(Dict("ids" => [r.doc_id]))).body)).results
             !isempty(fetched) && fetched[1].word_count >= 10
         end, parsed.results)
     end

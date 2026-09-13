@@ -216,6 +216,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <li><a href="#search-and-indexing" id="toc-search-and-indexing" class="nav-link" data-scroll-target="#search-and-indexing">Search and indexing</a></li>
   <li><a href="#telemetry" id="toc-telemetry" class="nav-link" data-scroll-target="#telemetry">Telemetry</a></li>
   <li><a href="#asynchronous-jobs" id="toc-asynchronous-jobs" class="nav-link" data-scroll-target="#asynchronous-jobs">Asynchronous jobs</a></li>
+  <li><a href="#authentication" id="toc-authentication" class="nav-link" data-scroll-target="#authentication">Authentication</a></li>
   </ul></li>
   <li><a href="#how-failures-are-reported" id="toc-how-failures-are-reported" class="nav-link" data-scroll-target="#how-failures-are-reported">5. How failures are reported</a></li>
   <li><a href="#configuration" id="toc-configuration" class="nav-link" data-scroll-target="#configuration">6. Configuration</a></li>
@@ -380,13 +381,15 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section id="search-and-indexing" class="level3">
 <h3 class="anchored" data-anchor-id="search-and-indexing">Search and indexing</h3>
 <ul>
-<li><code>POST /api/v1/simsearch/{id}/append</code> — inserts items. A dense item contains <code>vector</code>, a text item contains <code>text</code>, and a sparse item contains <code>indices</code> and <code>values</code>. The fields <code>doc_id</code>, <code>keywords</code> and <code>refs</code>, and any other field, become the metadata of the item.</li>
-<li><code>POST /api/v1/simsearch/{id}/search</code> — dense/sparse search, with optional <code>filter</code>, <code>page_size</code> and <code>beamsearch_overrides</code>.</li>
-<li><code>POST /api/v1/simsearch/{id}/ftsearch</code> — text search.</li>
-<li><code>POST /api/v1/simsearch/{id}/delete</code> — logical deletion.</li>
-<li><code>POST /api/v1/simsearch/{id}/calibrate</code> — recall calibration for a graph-backed project.</li>
-<li><code>POST /api/v1/simsearch/hybrid</code> and <code>/ftsearch_group</code> — reciprocal rank fusion over two datasets, and a text query sent to every dataset of a join group.</li>
+<li><code>POST /api/v1/datasets/{id}/append</code> — inserts items. A dense item contains <code>vector</code>, a text item contains <code>text</code>, and a sparse item contains <code>indices</code> and <code>values</code>. The fields <code>doc_id</code>, <code>keywords</code> and <code>refs</code>, and any other field, become the metadata of the item.</li>
+<li><code>POST /api/v1/datasets/{id}/search</code> — dense and sparse search, with optional <code>filter</code>, <code>page_size</code> and <code>beamsearch_overrides</code>.</li>
+<li><code>POST /api/v1/datasets/{id}/ftsearch</code> — text search.</li>
+<li><code>POST /api/v1/datasets/{id}/fetch</code> and <code>GET /api/v1/datasets/{id}/exists</code> — records by identifier, and whether an identifier exists.</li>
+<li><code>POST /api/v1/datasets/{id}/delete</code> — logical deletion.</li>
+<li><code>POST /api/v1/datasets/{id}/calibrate</code> — recall calibration for a graph-backed project.</li>
+<li><code>POST /api/v1/search/hybrid</code> and <code>POST /api/v1/search/group</code> — reciprocal rank fusion over two datasets, and a text query sent to every dataset of a join group.</li>
 </ul>
+<p>An operation on one dataset is addressed under that dataset. The two queries that read more than one are under <code>/api/v1/search/</code>, which is the only place where a route is not about a single dataset. The earlier prefix <code>/api/v1/simsearch/</code> was removed on 2026-09-13: it marked a distinction that the API stopped making.</p>
 </section>
 <section id="telemetry" class="level3">
 <h3 class="anchored" data-anchor-id="telemetry">Telemetry</h3>
@@ -401,6 +404,46 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <li><code>POST /api/v1/jobs/{kind}</code> — enqueues a job (<code>allknn</code>, <code>fft</code>, <code>neardup</code>, <code>hsp</code>, <code>searchbatch</code>, <code>closestpair</code>, <code>build</code>, <code>dump</code>, <code>load</code>). Returns <code>202</code> and a <code>job_id</code>.</li>
 <li><code>GET /api/v1/jobs/{job_id}</code> and <code>/result</code> — the state of the job, and its output.</li>
 </ul>
+</section>
+<section id="authentication" class="level3">
+<h3 class="anchored" data-anchor-id="authentication">Authentication</h3>
+<p>Every <code>/api/v1</code> endpoint requires a token when <code>[auth] enabled</code> is true in <code>config.toml</code>. <code>/healthz</code>, <code>/readyz</code> and <code>/metrics</code> answer without one, so a supervisor and a metrics collector work without credentials. The default is <code>false</code>, which is the behavior of a server that has never had authentication.</p>
+<p>The token travels in the <code>Authorization</code> header, as <code>Bearer &lt;token&gt;</code> or as the bare token. A permission is <code>operation:dataset</code>:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: left;">operation</th>
+<th style="text-align: left;">grants</th>
+<th style="text-align: left;">includes</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;"><code>read</code></td>
+<td style="text-align: left;">the queries and the <code>GET</code> endpoints</td>
+<td style="text-align: left;">—</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>write</code></td>
+<td style="text-align: left;">append, delete, calibrate, job submission</td>
+<td style="text-align: left;"><code>read</code></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>admin</code></td>
+<td style="text-align: left;">dataset creation and deletion, the token endpoints, job control, the operation log</td>
+<td style="text-align: left;"><code>write</code> and <code>read</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>dataset</code> is a dataset id or <code>*</code>. A route that is not about one dataset — listing datasets, the job endpoints, the token endpoints, <code>/api/v1/search/group</code> — requires the operation over <code>*</code>, so a token restricted to one dataset uses that dataset and cannot enumerate the rest. <code>admin:*</code> grants everything. A request without a valid token is answered <code>401</code>; a valid token without the permission is answered <code>403</code>, and the body names the permission that was required.</p>
+<p>The first token is created against the working directory, because a server with authentication enabled refuses to start while no token exists, and the endpoint that creates tokens is itself behind authentication:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">similarity-search</span> add-token <span class="at">--user</span> admin <span class="at">--permissions</span> <span class="st">"admin:*"</span> <span class="at">--workdir</span> ./workdir</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Later tokens are created with <code>POST /api/v1/admin/tokens</code> or with <code>similarity-search-ctl add-token</code>, which is the same endpoint. A token may carry an <code>expires_at</code>, an ISO 8601 timestamp that is verified when the token is created and again on every request.</p>
 </section>
 </section>
 <section id="how-failures-are-reported" class="level2">
@@ -442,21 +485,22 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </tr>
 </tbody>
 </table>
+<p>Two status codes come from this package rather than from the engine: <code>401</code> when a request carries no valid token, and <code>403</code> when its token lacks the permission the route requires.</p>
 <p>An error response contains two fields: <code>error</code>, the message, intended for a person, and <code>kind</code>, the concrete engine type, intended for a client that selects a behavior. Failures detected by a command line itself, such as a dataset directory that does not exist or an input file that cannot be read, return exit code <code>1</code>. They are detected before the engine is called.</p>
 </section>
 <section id="configuration" class="level2">
 <h2 class="anchored" data-anchor-id="configuration">6. Configuration</h2>
 <p><code>config.toml</code> (or <code>.similarity-search-server.toml</code>):</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode toml code-with-copy"><code class="sourceCode toml"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">[paths]</span></span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="dt">workdir</span> <span class="op">=</span> <span class="st">"./workdir"</span></span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="kw">[server]</span></span>
-<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="dt">host</span> <span class="op">=</span> <span class="st">"127.0.0.1"</span></span>
-<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="dt">port</span> <span class="op">=</span> <span class="dv">8080</span></span>
-<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="kw">[resources]</span></span>
-<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a><span class="dt">query_threads_pct</span> <span class="op">=</span> <span class="dv">80</span></span>
-<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a><span class="dt">batch_threads_pct</span> <span class="op">=</span> <span class="dv">20</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode toml code-with-copy"><code class="sourceCode toml"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">[paths]</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="dt">workdir</span> <span class="op">=</span> <span class="st">"./workdir"</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="kw">[server]</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="dt">host</span> <span class="op">=</span> <span class="st">"127.0.0.1"</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a><span class="dt">port</span> <span class="op">=</span> <span class="dv">8080</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a><span class="kw">[resources]</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a><span class="dt">query_threads_pct</span> <span class="op">=</span> <span class="dv">80</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a><span class="dt">batch_threads_pct</span> <span class="op">=</span> <span class="dv">20</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </section>
 <section id="tests" class="level2">
 <h2 class="anchored" data-anchor-id="tests">7. Tests</h2>
@@ -465,8 +509,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <li><strong>light</strong> (50 assertions, approximately 5 s): the interface with the engine. It verifies the mapping from the names used in requests to engine types, from engine errors to status codes and exit codes, and from the items of a request to engine items. No server is started and no subprocess is created. This level detects a change in the engine on the day it is made.</li>
 <li><strong>full</strong> (585 assertions, approximately 19 minutes): the end-to-end suites for the API, the jobs and the command lines. They start servers and execute subprocesses. Near the end, the run produces no output for about ten minutes, while the command-line suite waits for jobs to expire. The run has not stopped.</li>
 </ul>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">--project</span><span class="op">=</span>server <span class="at">-e</span> <span class="st">'using Pkg; Pkg.develop(path="."); Pkg.test()'</span></span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">--project</span><span class="op">=</span>server <span class="at">-e</span> <span class="st">'using Pkg; Pkg.test(test_args=["full"])'</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">--project</span><span class="op">=</span>server <span class="at">-e</span> <span class="st">'using Pkg; Pkg.develop(path="."); Pkg.test()'</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">--project</span><span class="op">=</span>server <span class="at">-e</span> <span class="st">'using Pkg; Pkg.test(test_args=["full"])'</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </section>
 <section id="where-to-go-next" class="level2">
 <h2 class="anchored" data-anchor-id="where-to-go-next">8. Where to go next</h2>

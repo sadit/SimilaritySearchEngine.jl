@@ -18,7 +18,7 @@ using JSON3
         docs = [JSON3.read(line) for line in lines]
         append_body = JSON3.write(Dict("items" => docs))
 
-        resp = HTTP.post("$base_url/simsearch/metric_ds/append", [], append_body)
+        resp = HTTP.post("$base_url/datasets/metric_ds/append", [], append_body)
         @test resp.status == 200
         @test JSON3.read(String(resp.body)).inserted == 200
 
@@ -30,7 +30,7 @@ using JSON3
             "k" => 5
         ))
 
-        resp = HTTP.post("$base_url/simsearch/metric_ds/search", [], search_req)
+        resp = HTTP.post("$base_url/datasets/metric_ds/search", [], search_req)
         @test resp.status == 200
         parsed = JSON3.read(String(resp.body))
         @test length(parsed.results) == 5
@@ -39,7 +39,7 @@ using JSON3
 
         # 4. Fetch by original id round-trips the appended vector/metadata.
         fetch_req = JSON3.write(Dict("ids" => [docs[1].doc_id]))
-        resp = HTTP.post("$base_url/simsearch/metric_ds/fetch", [], fetch_req)
+        resp = HTTP.post("$base_url/datasets/metric_ds/fetch", [], fetch_req)
         @test resp.status == 200
         fetched = JSON3.read(String(resp.body)).results
         @test length(fetched) == 1
@@ -47,10 +47,10 @@ using JSON3
 
         # 5. Soft delete: the deleted doc must no longer be returned by search.
         del_req = JSON3.write(Dict("doc_id" => 1))
-        resp = HTTP.post("$base_url/simsearch/metric_ds/delete", [], del_req)
+        resp = HTTP.post("$base_url/datasets/metric_ds/delete", [], del_req)
         @test resp.status == 200
 
-        resp = HTTP.post("$base_url/simsearch/metric_ds/search", [], search_req)
+        resp = HTTP.post("$base_url/datasets/metric_ds/search", [], search_req)
         @test resp.status == 200
         parsed = JSON3.read(String(resp.body))
         @test !any(r -> r.doc_id == 1, parsed.results)

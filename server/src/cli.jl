@@ -71,6 +71,9 @@ function build_settings()
         "load"
             help = "Import a dataset from a bundle directory produced by dump"
             action = :command
+        "add-token"
+            help = "Create an access token directly in the workdir, without a running server -- the way the first token is created when [auth] enabled is true"
+            action = :command
     end
 
     @add_arg_table! s["build"] begin
@@ -193,6 +196,20 @@ function build_settings()
         "--workdir"
             help = "Working directory for the database"
             default = "data"
+    end
+
+    @add_arg_table! s["add-token"] begin
+        "--user"
+            help = "User or identifier the token belongs to"
+            required = true
+        "--permissions"
+            help = "Comma-separated permissions, each `operation:dataset` with operation in read|write|admin and dataset an id or `*` (e.g. \"admin:*\" or \"read:*,write:corpus_es\")"
+            required = true
+        "--expires-at"
+            help = "Optional ISO 8601 expiry, e.g. 2027-01-01T00:00:00"
+        "--workdir"
+            help = "Working directory holding the token database"
+            default = "./workdir"
     end
 
     @add_arg_table! s["describe"] begin

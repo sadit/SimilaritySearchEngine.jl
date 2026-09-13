@@ -81,10 +81,10 @@ def get_log(id, offset=0, limit=None):
     return "GET", f"/api/v1/datasets/{id}/log", None, params
 
 
-# --- simsearch --------------------------------------------------------------------
+# --- dataset operations --------------------------------------------------------------------
 
 def append(index, items):
-    return "POST", f"/api/v1/simsearch/{index}/append", {"items": items}, None
+    return "POST", f"/api/v1/datasets/{index}/append", {"items": items}, None
 
 
 def search(index, vector, k=10, filter=None, beamsearch_overrides=None, page_size=None):
@@ -92,16 +92,16 @@ def search(index, vector, k=10, filter=None, beamsearch_overrides=None, page_siz
         "vector": _as_vector(vector), "k": k, "filter": filter,
         "beamsearch_overrides": beamsearch_overrides, "page_size": page_size,
     })
-    return "POST", f"/api/v1/simsearch/{index}/search", body, None
+    return "POST", f"/api/v1/datasets/{index}/search", body, None
 
 
 def ftsearch(index, text, k=10):
-    return "POST", f"/api/v1/simsearch/{index}/ftsearch", {"text": text, "k": k}, None
+    return "POST", f"/api/v1/datasets/{index}/ftsearch", {"text": text, "k": k}, None
 
 
 def ftsearch_group(join_group, key, text, k=10):
     body = {"join_group": join_group, "key": key, "text": text, "k": k}
-    return "POST", "/api/v1/simsearch/ftsearch", body, None
+    return "POST", "/api/v1/search/group", body, None
 
 
 def hybrid_search(dense_index, lexical_index, vector=None, text=None, k=10, alpha=None, filter=None):
@@ -109,27 +109,27 @@ def hybrid_search(dense_index, lexical_index, vector=None, text=None, k=10, alph
         "dense_index": dense_index, "lexical_index": lexical_index,
         "vector": _as_vector(vector), "text": text, "k": k, "alpha": alpha, "filter": filter,
     })
-    return "POST", "/api/v1/simsearch/hybrid_search", body, None
+    return "POST", "/api/v1/search/hybrid", body, None
 
 
 def delete_item(index, doc_id):
-    return "POST", f"/api/v1/simsearch/{index}/delete", {"doc_id": doc_id}, None
+    return "POST", f"/api/v1/datasets/{index}/delete", {"doc_id": doc_id}, None
 
 
 def fetch(index, ids):
-    return "POST", f"/api/v1/simsearch/{index}/fetch", {"ids": ids}, None
+    return "POST", f"/api/v1/datasets/{index}/fetch", {"ids": ids}, None
 
 
 def exists(index, ids):
     params = {"ids": ",".join(str(i) for i in ids)}
-    return "GET", f"/api/v1/simsearch/{index}/exists", None, params
+    return "GET", f"/api/v1/datasets/{index}/exists", None, params
 
 
 def calibrate(index, minrecall=None, numqueries=None, ksearch=None, queries=None):
     body = _compact({
         "minrecall": minrecall, "numqueries": numqueries, "ksearch": ksearch, "queries": queries,
     })
-    return "POST", f"/api/v1/simsearch/{index}/calibrate", body, None
+    return "POST", f"/api/v1/datasets/{index}/calibrate", body, None
 
 
 # --- jobs -------------------------------------------------------------------------

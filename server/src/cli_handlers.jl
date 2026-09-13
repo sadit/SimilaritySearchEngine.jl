@@ -685,6 +685,58 @@ function execute_dump(cmd_args::Dict)
 end
 
 """
+    execute_add_token(cmd_args::Dict) -> Int
+
+`add-token`: writes one access token straight into the token database of a working
+directory. This is how the first token is created, because a server started with
+`[auth] enabled` refuses to run while no token exists, and the administrative endpoint that
+creates tokens is itself behind authentication.
+
+It opens the token database for writing, so it cannot run while a server holds that working
+directory open. Later tokens are created through `POST /api/v1/admin/tokens`, or with
+`similarity-search-ctl add-token`, which is the same endpoint.
+"""
+function execute_add_token(cmd_args::Dict)
+    workdir = cmd_args["workdir"]
+    user = cmd_args["user"]
+    raw = split(cmd_args["permissions"], ','; keepempty=false)
+    permissions = String[strip(p) for p in raw]
+    expires_at = get(cmd_args, "expires-at", nothing)
+
+    given = Tokens.normalize_permissions(permissions)
+    if isempty(given)
+        println("Error: no valid permission in $(repr(cmd_args["permissions"])). Each one is `operation:dataset`, ",
+                "with operation in read|write|admin and dataset an id or `*`.")
+        return 1
+    end
+    dropped = length(permissions) - length(given)
+    dropped > 0 && println("Ignored $dropped permission(s) that are not `operation:dataset`.")
+
+    isdir(workdir) || mkpath(workdir)
+    mgr = try
+        Tokens.open_token_manager(workdir)
+    catch e
+        println("Error: cannot open the token database in $workdir. A running server holds it open; stop it first.")
+        println("  ", sprint(showerror, e))
+        return 1
+    end
+    token = try
+        Tokens.create_token!(mgr, user, permissions; expires_at=expires_at)
+    catch e
+        e isa ArgumentError || rethrow()
+        println("Error: ", e.msg)
+        Tokens.close_token_manager(mgr)
+        return 2
+    end
+    Tokens.close_token_manager(mgr)
+
+    println("Token created for user $(repr(user)) with permissions $(join(given, ", ")):")
+    println(token)
+    println("This is the only time it is printed.")
+    return 0
+end
+
+"""
     execute_load(cmd_args::Dict) -> Int
 
 `load` (PLAN.md §4.4/§1): the inverse of `execute_dump` -- always targets the HTTP-layout
@@ -770,5 +822,6 @@ function dispatch_command(cmd_name::String, cmd_args::AbstractDict)
     cmd_name == "rebuild" && return execute_rebuild(cmd_args)
     cmd_name == "dump" && return execute_dump(cmd_args)
     cmd_name == "load" && return execute_load(cmd_args)
+    cmd_name == "add-token" && return execute_add_token(cmd_args)
     error("dispatch_command: unknown command '$cmd_name'")
 end

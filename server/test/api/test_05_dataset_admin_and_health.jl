@@ -22,10 +22,10 @@ using JSON3
 
         data_path = joinpath(@__DIR__, "..", "..", "..", "test", "data", "frankenstein.jsonl")
         docs = [JSON3.read(line) for line in readlines(data_path)[1:5]]
-        resp = HTTP.post("$base_url/simsearch/admin_test_ds/append", [], JSON3.write(Dict("items" => docs)))
+        resp = HTTP.post("$base_url/datasets/admin_test_ds/append", [], JSON3.write(Dict("items" => docs)))
         @test resp.status == 200
 
-        resp = HTTP.post("$base_url/simsearch/admin_test_ds/delete", [], JSON3.write(Dict("doc_id" => 1)))
+        resp = HTTP.post("$base_url/datasets/admin_test_ds/delete", [], JSON3.write(Dict("doc_id" => 1)))
         @test resp.status == 200
 
         # 3. GET /api/v1/datasets lists it with live stats merged in.
@@ -64,7 +64,7 @@ using JSON3
         @test resp.status == 400
 
         # 6. /exists reports existence + tombstone status without a full metadata fetch.
-        resp = HTTP.get("$base_url/simsearch/admin_test_ds/exists?ids=1,2,999,frankenstein_2")
+        resp = HTTP.get("$base_url/datasets/admin_test_ds/exists?ids=1,2,999,frankenstein_2")
         @test resp.status == 200
         results = JSON3.read(String(resp.body)).results
         by_id = Dict(r.id => r for r in results)
@@ -77,7 +77,7 @@ using JSON3
         # log`): Telemetry.log_operation is now wired into search/append/ftsearch/delete,
         # so this dataset's append+delete above (plus a search here) already left real
         # op_log entries -- newest first, real distance-evaluation/timing/token fields.
-        resp = HTTP.post("$base_url/simsearch/admin_test_ds/search", ["Authorization" => "Bearer admin-log-test-token"], JSON3.write(Dict("vector" => docs[1].vector, "k" => 3)))
+        resp = HTTP.post("$base_url/datasets/admin_test_ds/search", ["Authorization" => "Bearer admin-log-test-token"], JSON3.write(Dict("vector" => docs[1].vector, "k" => 3)))
         @test resp.status == 200
 
         resp = HTTP.get("$base_url/datasets/admin_test_ds/log")

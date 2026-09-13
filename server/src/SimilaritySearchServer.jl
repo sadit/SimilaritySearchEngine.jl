@@ -60,11 +60,23 @@ plain non-interactive CLI path and `run_interactive_serve`'s confirm-then-run st
 handler mapping regardless of how the arguments were collected" principle
 `dispatch_command`/`dispatch_ctl_command` already apply to their own binaries.
 """
-function run_serve(host::String, port::Int, workdir::String)::Cint
+function run_serve(host::String, port::Int, workdir::String; auth_enabled::Bool=false)::Cint
     job_mgr = Jobs.init_job_manager(workdir)
     cursor_mgr = Cursors.init_cursor_manager(workdir)
     executor = Executors.LocalCLIExecutor()
     token_mgr = Tokens.open_token_manager(workdir)
+
+    # Refused here rather than at the first request: with authentication enabled and no token
+    # defined, every endpoint would answer 401 and the server would serve nothing.
+    if auth_enabled && !Tokens.any_token_exists(token_mgr)
+        println(stderr, "Error: [auth] enabled is true and this workdir holds no token, so no request could be answered.")
+        println(stderr, "Create the first one against the workdir, then start the server again:")
+        println(stderr, "    similarity-search add-token --user admin --permissions \"admin:*\" --workdir ", workdir)
+        println(stderr, "(`similarity-search-ctl add-token` talks to a running server, so it cannot create this one.)")
+        Tokens.close_token_manager(token_mgr)
+        return 1
+    end
+    auth_enabled || println("Authentication is disabled: every /api/v1 endpoint answers without a token ([auth] enabled in config.toml).")
 
     app = Server.AppState(
         workdir,
@@ -73,7 +85,8 @@ function run_serve(host::String, port::Int, workdir::String)::Cint
         executor,
         token_mgr,
         Dict{String, SimilaritySearchEngine.EmbeddedEngine}(),
-        ReentrantLock()
+        ReentrantLock(),
+        auth_enabled
     )
 
     # Reopen every dataset already on disk (from a previous run of this same server)
@@ -168,11 +181,14 @@ function main_serve(args::Vector{String})::Cint
     paths_cfg = get(config, "paths", Dict{String, Any}())
     serve_args = parsed_args["serve"]
 
+    auth_cfg = get(config, "auth", Dict{String, Any}())
+
     host = something(get(serve_args, "host", nothing), get(server_cfg, "host", "127.0.0.1"))
     port = something(get(serve_args, "port", nothing), get(server_cfg, "port", 8080))
     workdir = something(get(serve_args, "workdir", nothing), get(paths_cfg, "workdir", "data"))
+    auth_enabled = get(auth_cfg, "enabled", false) === true
 
-    return run_serve(host, port, workdir)
+    return run_serve(host, port, workdir; auth_enabled)
 end
 
 end # module

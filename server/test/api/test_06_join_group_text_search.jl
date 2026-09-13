@@ -51,13 +51,13 @@ using JSON3
 
         # 3. Append the same shared doc_id sequence to each member (same order, same
         # count -> aligned doc_ids across datasets, the join-group precondition).
-        resp = HTTP.post("$base_url/simsearch/jg_dense/append", [], JSON3.write(Dict("items" => docs)))
+        resp = HTTP.post("$base_url/datasets/jg_dense/append", [], JSON3.write(Dict("items" => docs)))
         @test resp.status == 200
         title_docs = [Dict("doc_id" => d.doc_id, "text" => d.text) for d in docs]
         body_docs = [Dict("doc_id" => d.doc_id, "text" => d.text * " extra body content") for d in docs]
-        resp = HTTP.post("$base_url/simsearch/jg_title/append", [], JSON3.write(Dict("items" => title_docs)))
+        resp = HTTP.post("$base_url/datasets/jg_title/append", [], JSON3.write(Dict("items" => title_docs)))
         @test resp.status == 200
-        resp = HTTP.post("$base_url/simsearch/jg_body/append", [], JSON3.write(Dict("items" => body_docs)))
+        resp = HTTP.post("$base_url/datasets/jg_body/append", [], JSON3.write(Dict("items" => body_docs)))
         @test resp.status == 200
 
         # 4. GET .../join_group returns all 3 members with their key/holds_metadata tags.
@@ -87,7 +87,7 @@ using JSON3
 
         # 6. ftsearch with a specific key routes to exactly that member.
         resp = try
-            HTTP.post("$base_url/simsearch/ftsearch", [], JSON3.write(Dict("join_group" => "jg_books", "key" => "title", "text" => docs[1].text, "k" => 3)))
+            HTTP.post("$base_url/search/group", [], JSON3.write(Dict("join_group" => "jg_books", "key" => "title", "text" => docs[1].text, "k" => 3)))
         catch e
             e.response
         end
@@ -99,7 +99,7 @@ using JSON3
             @test parsed.results.title[1].id == docs[1].doc_id
 
             # 7. ftsearch key="*" fans out to every text member, grouped by key (not fused).
-            resp2 = HTTP.post("$base_url/simsearch/ftsearch", [], JSON3.write(Dict("join_group" => "jg_books", "key" => "*", "text" => docs[1].text, "k" => 3)))
+            resp2 = HTTP.post("$base_url/search/group", [], JSON3.write(Dict("join_group" => "jg_books", "key" => "*", "text" => docs[1].text, "k" => 3)))
             @test resp2.status == 200
             parsed2 = JSON3.read(String(resp2.body))
             @test haskey(parsed2.results, :title) && haskey(parsed2.results, :body)
@@ -115,14 +115,14 @@ using JSON3
 
         # 8. Unknown key / unknown join_group -> 404, not a silent empty result.
         resp = try
-            HTTP.post("$base_url/simsearch/ftsearch", [], JSON3.write(Dict("join_group" => "jg_books", "key" => "tags", "text" => "x", "k" => 3)))
+            HTTP.post("$base_url/search/group", [], JSON3.write(Dict("join_group" => "jg_books", "key" => "tags", "text" => "x", "k" => 3)))
         catch e
             e.response
         end
         @test resp.status == 404
 
         resp = try
-            HTTP.post("$base_url/simsearch/ftsearch", [], JSON3.write(Dict("join_group" => "no_such_group", "key" => "*", "text" => "x", "k" => 3)))
+            HTTP.post("$base_url/search/group", [], JSON3.write(Dict("join_group" => "no_such_group", "key" => "*", "text" => "x", "k" => 3)))
         catch e
             e.response
         end
@@ -130,7 +130,7 @@ using JSON3
 
         # 9. Missing required fields -> 400.
         resp = try
-            HTTP.post("$base_url/simsearch/ftsearch", [], JSON3.write(Dict("join_group" => "jg_books", "text" => "x")))
+            HTTP.post("$base_url/search/group", [], JSON3.write(Dict("join_group" => "jg_books", "text" => "x")))
         catch e
             e.response
         end

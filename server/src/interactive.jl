@@ -422,5 +422,6 @@ function run_interactive_serve(config_path::String)
         return 0
     end
 
-    return run_serve(host, port, workdir)
+    auth_enabled = get(get(config, "auth", Dict{String, Any}()), "enabled", false) === true
+    return run_serve(host, port, workdir; auth_enabled)
 end

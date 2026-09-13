@@ -9,7 +9,7 @@ using JSON3
 
         data_path = joinpath(@__DIR__, "..", "..", "..", "test", "data", "frankenstein.jsonl")
         docs = [JSON3.read(line) for line in readlines(data_path)[1:20]]
-        resp = HTTP.post("$base_url/simsearch/rebuild_http_ds/append", [], JSON3.write(Dict("items" => docs)))
+        resp = HTTP.post("$base_url/datasets/rebuild_http_ds/append", [], JSON3.write(Dict("items" => docs)))
         @test resp.status == 200
         @test JSON3.read(String(resp.body)).inserted == 20
 
@@ -17,7 +17,7 @@ using JSON3
         # tombstone at all (there's no CLI delete command). handle_delete_item now resaves
         # the snapshot precisely so a separate CLI process (describe/rebuild below) can see it.
         for doc_id in (2, 5, 11)
-            resp = HTTP.post("$base_url/simsearch/rebuild_http_ds/delete", [], JSON3.write(Dict("doc_id" => doc_id)))
+            resp = HTTP.post("$base_url/datasets/rebuild_http_ds/delete", [], JSON3.write(Dict("doc_id" => doc_id)))
             @test resp.status == 200
         end
 

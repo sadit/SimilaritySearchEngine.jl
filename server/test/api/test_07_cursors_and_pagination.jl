@@ -10,18 +10,18 @@ using JSON3
 
         resp = HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "cursor_ds", "index_type" => "searchgraph", "distance" => "L2")))
         @test resp.status == 201
-        resp = HTTP.post("$base_url/simsearch/cursor_ds/append", [], JSON3.write(Dict("items" => docs)))
+        resp = HTTP.post("$base_url/datasets/cursor_ds/append", [], JSON3.write(Dict("items" => docs)))
         @test resp.status == 200
 
         # 1. Search without `page_size` is unchanged: no cursor_id, full results inline.
-        resp = HTTP.post("$base_url/simsearch/cursor_ds/search", [], JSON3.write(Dict("vector" => docs[1].vector, "k" => 5)))
+        resp = HTTP.post("$base_url/datasets/cursor_ds/search", [], JSON3.write(Dict("vector" => docs[1].vector, "k" => 5)))
         @test resp.status == 200
         plain = JSON3.read(String(resp.body))
         @test length(plain.results) == 5
         @test !haskey(plain, :cursor_id)
 
         # 2. Search with `page_size` materializes a cursor and returns its first page.
-        resp = HTTP.post("$base_url/simsearch/cursor_ds/search", [], JSON3.write(Dict("vector" => docs[1].vector, "k" => 13, "page_size" => 5)))
+        resp = HTTP.post("$base_url/datasets/cursor_ds/search", [], JSON3.write(Dict("vector" => docs[1].vector, "k" => 13, "page_size" => 5)))
         @test resp.status == 200
         first_page = JSON3.read(String(resp.body))
         @test length(first_page.results) == 5
@@ -66,7 +66,7 @@ using JSON3
         @test resp.status == 404
 
         # 6. `?limit=` on a poll overrides the cursor's own page_size for that call.
-        resp = HTTP.post("$base_url/simsearch/cursor_ds/search", [], JSON3.write(Dict("vector" => docs[1].vector, "k" => 10, "page_size" => 2)))
+        resp = HTTP.post("$base_url/datasets/cursor_ds/search", [], JSON3.write(Dict("vector" => docs[1].vector, "k" => 10, "page_size" => 2)))
         cursor_id2 = JSON3.read(String(resp.body)).cursor_id
         resp = HTTP.get("$base_url/cursors/$cursor_id2?limit=100")
         @test resp.status == 200

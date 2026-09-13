@@ -78,7 +78,7 @@ class SimilaritySearchClient:
     def get_log(self, id, offset=0, limit=None):
         return self._call(*p.get_log(id, offset, limit))
 
-    # --- simsearch ----------------------------------------------------------------
+    # --- dataset operations ----------------------------------------------------------------
 
     def append(self, index, items):
         return self._call(*p.append(index, items))

@@ -69,7 +69,7 @@ class AsyncSimilaritySearchClient:
     async def get_log(self, id, offset=0, limit=None):
         return await self._call(*p.get_log(id, offset, limit))
 
-    # --- simsearch ----------------------------------------------------------------
+    # --- dataset operations ----------------------------------------------------------------
 
     async def append(self, index, items):
         return await self._call(*p.append(index, items))

@@ -5,7 +5,8 @@ using JSON3
 using Random
 using Dates
 
-export TokenManager, TokenRecord, open_token_manager, close_token_manager, create_token!, get_token, revoke_token!, list_tokens, prune_expired!
+export TokenManager, TokenRecord, open_token_manager, close_token_manager, create_token!, get_token, revoke_token!, list_tokens, prune_expired!,
+       validate_token, has_permission, parse_permission, normalize_permissions, is_expired, any_token_exists
 
 """
     TokenRecord
@@ -80,7 +81,17 @@ Creates a new token and stores it in the database.
 """
 function create_token!(manager::TokenManager, user::String, permissions::Vector{String}; expires_at::Union{String, Nothing}=nothing)
     token_str = generate_token_string()
-    
+
+    # Rejected here rather than at validation time: a timestamp that does not parse would
+    # otherwise produce a token that is refused on every request, with no indication of why at
+    # the moment it was created.
+    expires_at === nothing || try
+        DateTime(expires_at)
+    catch
+        throw(ArgumentError("expires_at must be an ISO 8601 timestamp, e.g. 2027-01-01T00:00:00; got $(repr(expires_at))"))
+    end
+    permissions = normalize_permissions(permissions)
+
     record = Dict(
         "token_str" => token_str,
         "user" => user,
@@ -188,5 +199,123 @@ function prune_expired!(manager::TokenManager)
     end
     return pruned
 end
+
+# ==========================================
+# Authorization (PLAN.md §4.1)
+# ==========================================
+
+"""
+    PERMISSION_OPS
+
+The three operations a permission can grant, ordered from least to most: `:read` covers the
+queries (`search`, `ftsearch`, `fetch`, `exists`) and the `GET` endpoints, `:write` covers
+insertion, deletion, calibration and job submission, and `:admin` covers the creation and
+deletion of datasets, the token endpoints, and the control of jobs.
+
+An operation includes the ones before it for the same dataset: a token with `write:corpus`
+may also read `corpus`, and `admin:*` grants everything.
+"""
+const PERMISSION_OPS = (:read, :write, :admin)
+
+_op_rank(op::Symbol) = op === :read ? 1 : op === :write ? 2 : op === :admin ? 3 : 0
+
+"""
+    parse_permission(s::AbstractString) -> Union{Nothing, Tuple{Symbol, String}}
+
+One permission string as the pair it means: `"write:corpus_es"` is `(:write, "corpus_es")`,
+and the bare form `"read"` is `(:read, "*")`, which is how a permission that names no dataset
+applies to every dataset. `nothing` for a string that is not a permission, so that a token
+carrying one is not thereby granted something.
+"""
+function parse_permission(s::AbstractString)
+    parts = split(s, ':'; limit=2)
+    op = Symbol(strip(parts[1]))
+    op in PERMISSION_OPS || return nothing
+    scope = length(parts) == 2 ? strip(parts[2]) : "*"
+    isempty(scope) && (scope = "*")
+    return (op, String(scope))
+end
+
+"""
+    normalize_permissions(permissions) -> Vector{String}
+
+The same permissions in the canonical `operation:dataset` form, with unrecognized entries
+removed. Applied when a token is created, so that what is stored is what will be compared.
+"""
+function normalize_permissions(permissions)
+    out = String[]
+    for p in permissions
+        parsed = parse_permission(String(p))
+        parsed === nothing && continue
+        push!(out, string(parsed[1], ':', parsed[2]))
+    end
+    return out
+end
+
+"""
+    has_permission(record::TokenRecord, op::Symbol, dataset::AbstractString) -> Bool
+
+Whether `record` grants `op` on `dataset`. A permission matches when its operation is at
+least `op` (see [`PERMISSION_OPS`](@ref)) and its scope is either `dataset` itself or `*`.
+
+`dataset` is `"*"` for an endpoint that is not about one dataset -- listing datasets, the
+job endpoints, the token endpoints -- and only a permission scoped to `*` matches it. A
+token restricted to one dataset therefore uses that dataset's endpoints and cannot list what
+else the server holds.
+"""
+function has_permission(record::TokenRecord, op::Symbol, dataset::AbstractString)
+    want = _op_rank(op)
+    want == 0 && return false
+    for p in record.permissions
+        parsed = parse_permission(p)
+        parsed === nothing && continue
+        granted_op, scope = parsed
+        _op_rank(granted_op) >= want || continue
+        (scope == "*" || scope == dataset) && return true
+    end
+    return false
+end
+
+"""
+    is_expired(record::TokenRecord, at::DateTime=now(UTC)) -> Bool
+
+Whether the token's `expires_at` is in the past. A token with no `expires_at` does not
+expire. A timestamp that does not parse counts as expired: `create_token!` rejects such a
+value, so a stored one is either damaged or was written by an older version, and refusing it
+is the safe reading.
+"""
+function is_expired(record::TokenRecord, at::DateTime=now(UTC))
+    record.expires_at === nothing && return false
+    expiry = try
+        DateTime(record.expires_at)
+    catch
+        return true
+    end
+    return expiry < at
+end
+
+"""
+    validate_token(manager::TokenManager, token_str) -> Union{Nothing, TokenRecord}
+
+The record for `token_str` if the token exists and has not expired, and `nothing` otherwise.
+This is the function a request handler calls; [`get_token`](@ref) is the plain lookup and
+does not consider expiry.
+"""
+function validate_token(manager::TokenManager, token_str::Union{Nothing, AbstractString})
+    token_str === nothing && return nothing
+    isempty(token_str) && return nothing
+    record = get_token(manager, String(token_str))
+    record === nothing && return nothing
+    is_expired(record) && return nothing
+    return record
+end
+
+"""
+    any_token_exists(manager::TokenManager) -> Bool
+
+Whether the database holds at least one token. `serve` uses it to refuse to start with
+authentication enabled and no token defined, a state in which no request could be answered.
+"""
+any_token_exists(manager::TokenManager) = !isempty(list_tokens(manager))
 
 end # module

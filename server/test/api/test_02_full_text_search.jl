@@ -29,7 +29,7 @@ using JSON3
         docs = [JSON3.read(line) for line in lines]
 
         append_body = JSON3.write(Dict("items" => docs))
-        resp = HTTP.post("$base_url/simsearch/lexical_ds/append", [], append_body)
+        resp = HTTP.post("$base_url/datasets/lexical_ds/append", [], append_body)
         @test resp.status == 200
 
         # 3. Full Text Search
@@ -37,7 +37,7 @@ using JSON3
             "text" => "Frankenstein",
             "k" => 10
         ))
-        resp = HTTP.post("$base_url/simsearch/lexical_ds/ftsearch", [], ftsearch_req)
+        resp = HTTP.post("$base_url/datasets/lexical_ds/ftsearch", [], ftsearch_req)
         @test resp.status == 200
         results = JSON3.read(resp.body).results
         @test !isempty(results)
@@ -47,14 +47,14 @@ using JSON3
         resp2 = HTTP.post("$base_url/datasets", [], req_body2)
         @test resp2.status == 201
 
-        resp2 = HTTP.post("$base_url/simsearch/lexical_ds_inv/append", [], append_body)
+        resp2 = HTTP.post("$base_url/datasets/lexical_ds_inv/append", [], append_body)
         @test resp2.status == 200
 
         ftsearch_req2 = JSON3.write(Dict(
             "text" => "Frankenstein",
             "k" => 10
         ))
-        resp3 = HTTP.post("$base_url/simsearch/lexical_ds_inv/ftsearch", [], ftsearch_req2)
+        resp3 = HTTP.post("$base_url/datasets/lexical_ds_inv/ftsearch", [], ftsearch_req2)
         @test resp3.status == 200
         results = JSON3.read(resp3.body).results
         @test !isempty(results)

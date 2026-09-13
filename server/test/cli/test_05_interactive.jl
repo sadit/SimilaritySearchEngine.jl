@@ -27,7 +27,10 @@ using JSON3
     settings = SimilaritySearchServer.build_settings()
 
     names = SimilaritySearchServer._command_menu_names(settings)
-    @test names == ["build", "searchbatch", "allknn", "fft", "neardup", "hsp", "closestpair", "describe", "rebuild", "dump", "load"]
+    # `add-token` is here because it is a data-plane command like the rest: it acts on a
+    # working directory, not on a running server, which is what the guided menu offers.
+    @test names == ["build", "searchbatch", "allknn", "fft", "neardup", "hsp", "closestpair",
+                    "describe", "rebuild", "dump", "load", "add-token"]
     @test "interactive" ∉ names
     @test "serve" ∉ names
 

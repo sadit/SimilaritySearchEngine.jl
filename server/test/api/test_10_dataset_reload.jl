@@ -14,11 +14,11 @@ using JSON3
 
         data_path = joinpath(@__DIR__, "..", "..", "..", "test", "data", "frankenstein.jsonl")
         docs = [JSON3.read(line) for line in readlines(data_path)[1:10]]
-        resp = HTTP.post("$base_url/simsearch/reload_ds1/append", [], JSON3.write(Dict("items" => docs)))
+        resp = HTTP.post("$base_url/datasets/reload_ds1/append", [], JSON3.write(Dict("items" => docs)))
         @test resp.status == 200
         @test JSON3.read(String(resp.body)).inserted == 10
 
-        resp = HTTP.post("$base_url/simsearch/reload_ds1/delete", [], JSON3.write(Dict("doc_id" => 3)))
+        resp = HTTP.post("$base_url/datasets/reload_ds1/delete", [], JSON3.write(Dict("doc_id" => 3)))
         @test resp.status == 200
 
         # --- Dataset 2: text (bm25_invfile), created but never appended to -- no snapshot exists yet ---
@@ -64,17 +64,17 @@ using JSON3
         # k=10 covers every one of the 10 originally-appended items -- if the tombstone
         # hadn't survived the reload, doc_id 3 would show up here too.
         query_vec = docs[1].vector
-        resp = HTTP.post("$base_url/simsearch/reload_ds1/search", [], JSON3.write(Dict("vector" => query_vec, "k" => 10)))
+        resp = HTTP.post("$base_url/datasets/reload_ds1/search", [], JSON3.write(Dict("vector" => query_vec, "k" => 10)))
         @test resp.status == 200
         results = JSON3.read(String(resp.body)).results
         @test length(results) == 9
         @test !any(r -> r.doc_id == 3, results)
 
-        resp = HTTP.post("$base_url/simsearch/reload_ds2/append", [], JSON3.write(Dict("items" => docs[1:3])))
+        resp = HTTP.post("$base_url/datasets/reload_ds2/append", [], JSON3.write(Dict("items" => docs[1:3])))
         @test resp.status == 200
         @test JSON3.read(String(resp.body)).inserted == 3
 
-        resp = HTTP.post("$base_url/simsearch/reload_ds2/ftsearch", [], JSON3.write(Dict("text" => "letter", "k" => 3)))
+        resp = HTTP.post("$base_url/datasets/reload_ds2/ftsearch", [], JSON3.write(Dict("text" => "letter", "k" => 3)))
         @test resp.status == 200
 
         # Descriptor-level view is consistent post-reload too (doc_count/tombstone now come
