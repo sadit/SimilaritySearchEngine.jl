@@ -28,6 +28,14 @@ using JSON3
         resp = HTTP.post("$base_url/datasets/admin_test_ds/delete", [], JSON3.write(Dict("doc_id" => 1)))
         @test resp.status == 200
 
+        # 2b. /metrics now carries the counters the operation log feeds (PLAN.md §5.8): the
+        # append and the delete above are in it, with their dataset and their operation.
+        metrics_body = String(HTTP.get("$root_url/metrics").body)
+        @test occursin("simsearch_requests_total{dataset=\"admin_test_ds\",operation=\"append\"} 1", metrics_body)
+        @test occursin("simsearch_requests_total{dataset=\"admin_test_ds\",operation=\"delete\"} 1", metrics_body)
+        @test occursin("simsearch_items_inserted_total{dataset=\"admin_test_ds\"} 5", metrics_body)
+        @test occursin("simsearch_request_duration_seconds_count{dataset=\"admin_test_ds\",operation=\"append\"} 1", metrics_body)
+
         # 3. GET /api/v1/datasets lists it with live stats merged in.
         resp = HTTP.get("$base_url/datasets")
         @test resp.status == 200
@@ -97,6 +105,14 @@ using JSON3
         append_entry = log_body.entries[3]
         @test append_entry.details.items_inserted == 5
         @test append_entry.details.token === nothing # no Authorization header on that original request
+
+        # The same search is in /metrics, with the distance computations it performed: the
+        # figure §5.8 asked for, which the engine reports through SearchStats.
+        metrics_body = String(HTTP.get("$root_url/metrics").body)
+        @test occursin("simsearch_requests_total{dataset=\"admin_test_ds\",operation=\"search\"} 1", metrics_body)
+        evals = match(r"simsearch_distance_evaluations_total\{dataset=\"admin_test_ds\"\} (\d+)", metrics_body)
+        @test evals !== nothing && parse(Int, evals.captures[1]) > 0
+        @test occursin("simsearch_request_duration_seconds_count{dataset=\"admin_test_ds\",operation=\"search\"} 1", metrics_body)
 
         resp = HTTP.get("$base_url/datasets/admin_test_ds/log?offset=1&limit=1")
         @test resp.status == 200

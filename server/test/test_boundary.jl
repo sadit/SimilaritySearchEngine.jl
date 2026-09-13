@@ -11,6 +11,7 @@ using SimilaritySearchServer.Server: parse_index_kind, parse_distance, default_t
 using SimilaritySearchServer: cli_exit_code, wire_kind
 import SimilaritySearchServer.Tokens as Tokens
 import SimilaritySearchServer.Executors as Executors
+import SimilaritySearchServer.Telemetry as Telemetry
 using SimilaritySearchServer: resolve_batch_threads_pct
 using HTTP
 using JSON3
@@ -236,4 +237,67 @@ end
     @test resolve_batch_threads_pct(Dict{String, Any}()) == 20
     @test resolve_batch_threads_pct(Dict("batch_threads_pct" => 150)) == 20
     @test resolve_batch_threads_pct(Dict("batch_threads_pct" => "half")) == 20
+end
+
+
+# ---------------------------------------------------------------------------------------
+# The counters of /metrics (PLAN.md §5.8), without a server: they are an aggregate of the
+# same values that go into the operation log.
+# ---------------------------------------------------------------------------------------
+
+@testset "request counters accumulate what the operation log records" begin
+    reg = Telemetry.MetricsRegistry()
+    Telemetry.record_metric!(reg, "ds", "search", 0.004; distance_evaluations=120)
+    Telemetry.record_metric!(reg, "ds", "search", 0.9; distance_evaluations=300)
+    Telemetry.record_metric!(reg, "ds", "append", 0.2; items_inserted=5)
+    Telemetry.record_metric!(reg, "other", "search", 0.002)
+
+    @test reg.requests[("ds", "search")] == 2
+    @test reg.requests[("ds", "append")] == 1
+    @test reg.evaluations["ds"] == 420
+    @test reg.items_inserted["ds"] == 5
+    @test reg.duration_sum[("ds", "search")] ≈ 0.904
+    # A dataset that only served searches reports no inserted items rather than zero
+    @test !haskey(reg.items_inserted, "other")
+    # A search with no distance computations (an empty index) adds no counter entry
+    @test !haskey(reg.evaluations, "other")
+
+    # Histogram buckets are cumulative: each one counts every request at most that slow
+    buckets = reg.duration_buckets[("ds", "search")]
+    @test buckets == [0, 1, 1, 1, 1, 1, 2, 2]
+    @test issorted(buckets)
+
+    # No registry, no record: the command lines log operations without reporting metrics
+    @test Telemetry.record_metric!(nothing, "ds", "search", 1.0) === nothing
+end
+
+@testset "the counters render as a Prometheus exposition" begin
+    reg = Telemetry.MetricsRegistry()
+    Telemetry.record_metric!(reg, "ds", "search", 0.004; distance_evaluations=120)
+    text = join(Telemetry.prometheus_lines(reg), "\n")
+
+    @test occursin("# TYPE simsearch_requests_total counter", text)
+    @test occursin("simsearch_requests_total{dataset=\"ds\",operation=\"search\"} 1", text)
+    @test occursin("simsearch_distance_evaluations_total{dataset=\"ds\"} 120", text)
+    @test occursin("# TYPE simsearch_request_duration_seconds histogram", text)
+    @test occursin("simsearch_request_duration_seconds_count{dataset=\"ds\",operation=\"search\"} 1", text)
+    @test occursin("le=\"+Inf\"", text)
+    # A restart is visible to a collector, which is what a counter that starts at zero needs
+    @test occursin("simsearch_process_start_time_seconds", text)
+
+    # Every sample line carries a metric name and a value, and no line is left half-formatted
+    for line in Telemetry.prometheus_lines(reg)
+        startswith(line, "#") && continue
+        @test occursin(r"^simsearch_[a-z_]+(\{[^}]*\})? -?[0-9.e+]+$", line)
+    end
+
+    # A dataset id with a quote in it cannot break the exposition
+    reg2 = Telemetry.MetricsRegistry()
+    Telemetry.record_metric!(reg2, "we\"ird", "search", 0.1)
+    @test occursin("dataset=\"we\\\"ird\"", join(Telemetry.prometheus_lines(reg2), "\n"))
+
+    # Nothing recorded: the declarations stand and there are no samples
+    empty_text = join(Telemetry.prometheus_lines(Telemetry.MetricsRegistry()), "\n")
+    @test occursin("# TYPE simsearch_requests_total counter", empty_text)
+    @test !occursin("simsearch_requests_total{", empty_text)
 end

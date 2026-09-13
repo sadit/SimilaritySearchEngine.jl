@@ -37,7 +37,7 @@ of it exist.
 | 2. Concurrency | complete, minus the request collector | The engine provides the reader-writer lock and the context pool, and a job runs as a subprocess, which is what keeps queries answerable while it runs. The reserved share is applied since 2026-09-13: `batch_threads_pct` bounds job execution as a number of concurrent processes and a number of threads each (`Executors.job_thread_budget`), and `serve` reports the result at startup. The query side is not bounded by a collector: requests are answered on the server's own thread pool, as Julia schedules them, and §2's `Channel` of pending requests was not built. |
 | 3. Persistence and telemetry | complete except §4.5 | RocksDB, and an `op_log` with elapsed time and a real distance-computation count per request. The declared metadata schema (typed fields plus an `extra` blob) and the `meta_idx_<field>` column families do not exist: `meta` is free-form, and the indexed fields are `doc_id`, `keywords` and `refs`. |
 | 3.5. Job model and cursors | complete, with a deliberate change of persistence | Job registry with `queued`, `running`, `blocked`, `completed` and `failed`, `kill`, `gc`, `LocalCLIExecutor`, and result cursors. JLD2 snapshots were removed, because the engine persists its own index; Avro remains for `dump` and `load`. |
-| 4. Web layer | complete except `/metrics` | 34 routes, `/healthz`, `/readyz`, `/metrics`, join groups, and authentication (below). `/metrics` does not derive counters from the `op_log` (§5.8). The routes were reorganized on 2026-09-13: the operations of a dataset are under `/api/v1/datasets/{id}/`, the two queries that read more than one dataset are under `/api/v1/search/`, and the prefix `/api/v1/simsearch/` that §5.1 to §5.3 below describe no longer exists. |
+| 4. Web layer | complete | 34 routes, `/healthz`, `/readyz`, `/metrics`, join groups, and authentication (below). `/metrics` reports the counters of §5.8 since 2026-09-13. The routes were reorganized on 2026-09-13: the operations of a dataset are under `/api/v1/datasets/{id}/`, the two queries that read more than one dataset are under `/api/v1/search/`, and the prefix `/api/v1/simsearch/` that §5.1 to §5.3 below describe no longer exists. |
 | 5. Full text and hybrid | complete, minus one item | `ftsearch`, fan-out over a join group, `hybrid_search` with reciprocal rank fusion, and `QueryPolicy` for correction and expansion. The stemmer registry of §5.3 was **discarded on 2026-09-13**: what it was for is done by the query pipeline of `TextSearch.jl` — the text profile carries the lemma clusters, and `QueryPolicy` performs the orthographic correction and the expansion at query time — so neither `Snowball` nor `Languages` is a dependency and no stemmer is configured. Vocabulary-drift detection by out-of-vocabulary rate is absent; `rebuild` is the manual procedure. |
 | 6. Scripting packages | one of three | The Python client exists (`client`, `async_client`, `jobs.run_job`, `cursors`, `stress_client.py`). There is no Julia scripting package (§8.3), although §8.5, access without HTTP, is provided by the engine itself. The Node package (§8.4) was never started. |
 | §3. Long-lived search policy | not implemented | `long_query_policy = "deny"` is in `config.toml` and no code reads it. No request is answered with 429, and no search is converted into a job. |
@@ -62,16 +62,28 @@ of it exist.
    subprocesses ran on one thread each, because `Base.julia_cmd()` does not carry the
    `--threads` of the process that spawns them. `batch_threads_pct` now yields a pair,
    how many jobs at once and how many threads each, and each subprocess is started with
-   that budget in `JULIA_NUM_THREADS`. **Still open:** the query side of §2, a collector
-   that would hold requests when the pool is saturated. Nothing has measured that a
-   collector would improve anything, and it puts a queue in front of every search.
-4. **§5.8**, counters derived from the `op_log`, now that `distance_evaluations` carries a
-   real value per request.
+   that budget in `JULIA_NUM_THREADS`.
+4. ~~**§5.8**, counters derived from the `op_log`~~ Done on 2026-09-13. `/metrics` reports
+   requests per dataset and operation, distance computations, items inserted, and a
+   histogram of request durations, alongside the gauges it already had. The values are
+   accumulated in memory as each request is recorded, by the same call that writes the log
+   record, rather than read back from the log: a collector polls every few seconds, and the
+   log grows with every request. They therefore cover the running process and reset when it
+   restarts, which is what a Prometheus counter does;
+   `simsearch_process_start_time_seconds` reports when that was.
 5. **§4.5**, the declared metadata schema with an index per field. This is the item that
    requires work in the engine, not only in this package.
 6. **Out-of-vocabulary tracking** (§5), so that a text project reports when its vocabulary no
    longer matches what it is being asked, which is the signal for a `rebuild`. This changes
    the quality of retrieval, not the operation of the server.
+7. **The request collector of §2**, the query side of the concurrency model: a `Channel` that
+   holds incoming requests and releases them as the pool frees up, instead of answering each
+   one on the thread pool as Julia schedules it. It is written here as a decision still to be
+   taken, not as work waiting to start. What it would prevent is a server accepting more
+   concurrent searches than it can serve, and nothing has measured that this happens; what it
+   costs is certain, a queue in the path of every search. Measure first: the operation log
+   now carries the elapsed time of every request, so the question "does latency degrade with
+   concurrency, and from which point" can be answered with data before anything is built.
 
 The stemmer registry of §5.3 and §9's phase 5 is not on this list: it was discarded. Stemming
 was the way this specification proposed to make a query match a word it does not equal. That

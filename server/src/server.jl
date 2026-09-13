@@ -150,15 +150,20 @@ struct AppState
     # enables authentication on the server it already started. No endpoint writes it: the value
     # comes from the configuration file, once, at startup.
     auth_enabled::Base.RefValue{Bool}
+
+    # What `/metrics` reports, accumulated as requests are recorded in the operation log.
+    metrics::Telemetry.MetricsRegistry
 end
 
 AppState(workdir, job_mgr, cursor_mgr, executor, token_mgr, handles, lock, auth_enabled::Bool) =
-    AppState(workdir, job_mgr, cursor_mgr, executor, token_mgr, handles, lock, Ref(auth_enabled))
+    AppState(workdir, job_mgr, cursor_mgr, executor, token_mgr, handles, lock, Ref(auth_enabled),
+             Telemetry.MetricsRegistry())
 
 # The seven-argument form is the one every existing caller uses, and it leaves authentication
 # off, which is the default of `[auth] enabled`.
 AppState(workdir, job_mgr, cursor_mgr, executor, token_mgr, handles, lock) =
-    AppState(workdir, job_mgr, cursor_mgr, executor, token_mgr, handles, lock, Ref(false))
+    AppState(workdir, job_mgr, cursor_mgr, executor, token_mgr, handles, lock, Ref(false),
+             Telemetry.MetricsRegistry())
 
 """
     _guard(handler, req, app, op::Symbol, dataset::AbstractString) -> HTTP.Response
@@ -275,6 +280,11 @@ function handle_metrics(req::HTTP.Request, app::AppState)
         push!(lines, "simsearch_dataset_doc_count{dataset=\"$id\"} $doc_count")
         push!(lines, "simsearch_dataset_tombstone_ratio{dataset=\"$id\"} $ratio")
     end
+
+    # The counters the operation log's own records feed, accumulated in memory as each request
+    # is recorded (PLAN.md §5.8). Reading them from the log itself would make a poll every few
+    # seconds more expensive than the requests it measures, and the log grows with every one.
+    append!(lines, Telemetry.prometheus_lines(app.metrics))
 
     body = join(lines, "\n") * "\n"
     return HTTP.Response(200, ["Content-Type" => "text/plain; version=0.0.4"], body)
@@ -774,7 +784,7 @@ function handle_append(req::HTTP.Request, app::AppState, index::String)
         return engine_error_response(e)
     end
 
-    Telemetry.log_request!(dataset, engine.backend.ctx, "append", index, t0, snapshot;
+    Telemetry.log_request!(dataset, engine.backend.ctx, "append", index, t0, snapshot; metrics=app.metrics,
         token=_request_token(req), distance_name=_engine_distance_name(engine), dimension=_engine_dimension(engine),
         extra=Dict{String, Any}("items_inserted" => inserted))
 
@@ -893,7 +903,7 @@ function _hydrate_raw(handle, raw)
 end
 
 """
-    _run_search(handle, index, req, query, k; filter_spec, bs_override, text) -> Vector{SSE.SearchResult}
+    _run_search(handle, index, req, query, k; filter_spec, bs_override, text, metrics) -> Vector{SSE.SearchResult}
 
 Shared search call site for `handle_search` (dense, optionally post-filtered) and
 `handle_ftsearch` (single-index text): runs the search and logs exactly one `op_log`
@@ -908,7 +918,7 @@ calibrated target, rather than raw beam parameters). That one path still calls
 `IndexEngine.search_live`; it is the last search-side internal this module reaches for.
 """
 function _run_search(handle, index::String, req::HTTP.Request, query, k::Int;
-                     filter_spec=nothing, bs_override=nothing, text::Bool=false)
+                     filter_spec=nothing, bs_override=nothing, text::Bool=false, metrics=nothing)
     engine = handle.engine
     dataset = handle.project
     # The cost of this one search, reported by the engine itself. It cannot be recovered by
@@ -931,7 +941,7 @@ function _run_search(handle, index::String, req::HTTP.Request, query, k::Int;
     end
     Telemetry.log_request!(dataset, nothing, "search", index, t0, nothing;
         token=_request_token(req), distance_name=_engine_distance_name(engine), dimension=_engine_dimension(engine),
-        distance_evaluations=stats.distance_evaluations)
+        distance_evaluations=stats.distance_evaluations, metrics)
     return hits
 end
 
@@ -977,7 +987,7 @@ function handle_search(req::HTTP.Request, app::AppState, index::String)
     end
 
     hits = try
-        _run_search(app.handles[index], index, req, query, k; filter_spec, bs_override)
+        _run_search(app.handles[index], index, req, query, k; filter_spec, bs_override, metrics=app.metrics)
     catch e
         e isa SSE.EngineError || rethrow()
         return engine_error_response(e)
@@ -1053,7 +1063,7 @@ function handle_ftsearch(req::HTTP.Request, app::AppState, index::String)
     k = get(data, "k", 10)
 
     hits = try
-        _run_search(app.handles[index], index, req, data["text"], k; text=true)
+        _run_search(app.handles[index], index, req, data["text"], k; text=true, metrics=app.metrics)
     catch e
         e isa SSE.EngineError || rethrow()
         return engine_error_response(e)
@@ -1091,7 +1101,9 @@ function handle_delete_item(req::HTTP.Request, app::AppState, index::String)
 
     # No ctx/timing ceremony here (unlike search/append) -- a soft-delete doesn't evaluate
     # any distances, so log_operation directly rather than through log_request!.
-    Telemetry.log_operation(app.handles[index].project, "delete", Dict{String, Any}("index_uuid" => index, "doc_id" => doc_id, "token" => _request_token(req)))
+    Telemetry.log_operation(app.handles[index].project, "delete",
+                            Dict{String, Any}("index_uuid" => index, "doc_id" => doc_id, "token" => _request_token(req));
+                            metrics=app.metrics)
 
     return json_response(200, Dict("status" => "soft_deleted", "id" => index, "doc_id" => doc_id))
 end

@@ -367,8 +367,9 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="control">Control</h3>
 <ul>
 <li><code>GET /readyz</code> — health.</li>
-<li><code>GET /metrics</code> — metrics in Prometheus format, including the number of documents and the number of deleted records per dataset.</li>
+<li><code>GET /metrics</code> — metrics in Prometheus format: the number of documents and of deleted records per dataset, the jobs in progress, and the counters the operation log feeds — requests per dataset and operation, distance computations, items inserted, and a histogram of request durations.</li>
 </ul>
+<p>The counters cover the running process and start at zero when it starts, which is what a Prometheus counter is expected to do; <code>simsearch_process_start_time_seconds</code> reports when that was. They are accumulated as each request is recorded, not read back from the operation log: a collector polls every few seconds, and reading a column family that grows with every request would cost more than the requests it measures. The log remains the durable record and is read through <code>GET /api/v1/datasets/{id}/log</code>.</p>
 </section>
 <section id="datasets" class="level3">
 <h3 class="anchored" data-anchor-id="datasets">Datasets</h3>
