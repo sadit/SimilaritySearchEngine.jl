@@ -52,6 +52,31 @@ using .Cursors
 using .Executors
 
 """
+    resolve_batch_threads_pct(resources_cfg::AbstractDict) -> Float64
+
+The share of threads reserved for job execution, from the `[resources]` section of the
+configuration file (PLAN.md §2). `batch_threads_pct` states it directly;
+`query_threads_pct` states its complement, and is used when the first is absent. When both
+are present and they do not add up to 100, `batch_threads_pct` is the one that applies, and
+the discrepancy is reported rather than resolved silently.
+
+Out-of-range or non-numeric values fall back to 20, which is the default of the generated
+configuration file.
+"""
+function resolve_batch_threads_pct(resources_cfg::AbstractDict)
+    as_pct(v) = v isa Real && 0 <= v <= 100 ? Float64(v) : nothing
+    batch = as_pct(get(resources_cfg, "batch_threads_pct", nothing))
+    query = as_pct(get(resources_cfg, "query_threads_pct", nothing))
+
+    if batch !== nothing && query !== nothing && batch + query != 100
+        println(stderr, "Warning: [resources] query_threads_pct ($query) and batch_threads_pct ($batch) do not add up to 100; using batch_threads_pct.")
+    end
+    batch !== nothing && return batch
+    query !== nothing && return 100 - query
+    return 20.0
+end
+
+"""
     run_serve(host::String, port::Int, workdir::String) -> Cint
 
 The actual "start serving" body -- extracted out of `main`'s `serve` branch so both the
@@ -60,7 +85,8 @@ plain non-interactive CLI path and `run_interactive_serve`'s confirm-then-run st
 handler mapping regardless of how the arguments were collected" principle
 `dispatch_command`/`dispatch_ctl_command` already apply to their own binaries.
 """
-function run_serve(host::String, port::Int, workdir::String; auth_enabled::Bool=false)::Cint
+function run_serve(host::String, port::Int, workdir::String;
+                   auth_enabled::Bool=false, batch_threads_pct::Real=20)::Cint
     job_mgr = Jobs.init_job_manager(workdir)
     cursor_mgr = Cursors.init_cursor_manager(workdir)
     executor = Executors.LocalCLIExecutor()
@@ -100,7 +126,14 @@ function run_serve(host::String, port::Int, workdir::String; auth_enabled::Bool=
     requeued = Jobs.requeue_stale_running!(job_mgr)
     isempty(requeued) || println("Requeued $(length(requeued)) job(s) orphaned by a previous run: ", requeued)
 
-    @async Executors.run_dispatcher!(job_mgr, executor)
+    # What job execution may use, from the share reserved for it (PLAN.md §2). A job runs as
+    # its own process, so the share is spent as a number of processes and a number of threads
+    # each; `Base.julia_cmd()` does not carry this process's `--threads`, so without this every
+    # job would run on one thread whatever the machine has.
+    max_concurrent, threads_per_job = Executors.job_thread_budget(Threads.nthreads(), batch_threads_pct)
+    println("Job execution: at most $max_concurrent concurrent job(s), $threads_per_job thread(s) each ",
+            "($(batch_threads_pct)% of this server's $(Threads.nthreads()) thread(s)). Queries use the rest.")
+    @async Executors.run_dispatcher!(job_mgr, executor; max_concurrent, threads_per_job)
 
     Server.run_server(host, port, app)
     return 0
@@ -182,13 +215,15 @@ function main_serve(args::Vector{String})::Cint
     serve_args = parsed_args["serve"]
 
     auth_cfg = get(config, "auth", Dict{String, Any}())
+    resources_cfg = get(config, "resources", Dict{String, Any}())
 
     host = something(get(serve_args, "host", nothing), get(server_cfg, "host", "127.0.0.1"))
     port = something(get(serve_args, "port", nothing), get(server_cfg, "port", 8080))
     workdir = something(get(serve_args, "workdir", nothing), get(paths_cfg, "workdir", "data"))
     auth_enabled = get(auth_cfg, "enabled", false) === true
+    batch_threads_pct = resolve_batch_threads_pct(resources_cfg)
 
-    return run_serve(host, port, workdir; auth_enabled)
+    return run_serve(host, port, workdir; auth_enabled, batch_threads_pct)
 end
 
 end # module

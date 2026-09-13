@@ -501,6 +501,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a><span class="kw">[resources]</span></span>
 <span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a><span class="dt">query_threads_pct</span> <span class="op">=</span> <span class="dv">80</span></span>
 <span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a><span class="dt">batch_threads_pct</span> <span class="op">=</span> <span class="dv">20</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><code>[resources]</code> divides this server’s threads between answering queries and executing jobs. A job runs as its own process, so the reserved share is spent as a number of processes and a number of threads each: at most four jobs at once, each with its part of <code>floor(threads × batch_threads_pct / 100)</code>, and never more than that share in total. The remaining threads stay with the server. <code>serve</code> prints the resulting numbers when it starts, for example <code>at most 4 concurrent job(s), 3 thread(s) each (20.0% of this server's 64 thread(s))</code>.</p>
+<p>The number of threads the server itself has is the one given to Julia when it starts (<code>julia -t auto</code>), not a value in this file.</p>
 </section>
 <section id="tests" class="level2">
 <h2 class="anchored" data-anchor-id="tests">7. Tests</h2>

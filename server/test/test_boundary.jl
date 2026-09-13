@@ -10,6 +10,8 @@ using SimilaritySearchServer.Server: parse_index_kind, parse_distance, default_t
                                      json_response
 using SimilaritySearchServer: cli_exit_code, wire_kind
 import SimilaritySearchServer.Tokens as Tokens
+import SimilaritySearchServer.Executors as Executors
+using SimilaritySearchServer: resolve_batch_threads_pct
 using HTTP
 using JSON3
 
@@ -186,4 +188,52 @@ end
     # token, and refusing them would report a healthy server as down.
     @test sort([match(r"\"([^\"]+)\"", r).captures[1] for r in open_routes]) ==
           ["/healthz", "/metrics", "/readyz"]
+end
+
+
+# ---------------------------------------------------------------------------------------
+# The thread budget of job execution (PLAN.md §2). Arithmetic and a command, no processes.
+# ---------------------------------------------------------------------------------------
+
+@testset "the reserved share becomes processes and threads" begin
+    # The product never exceeds the share, and a few jobs with several threads each is
+    # preferred over many jobs with one: the work inside a job is parallel already.
+    @test Executors.job_thread_budget(64, 20) == (4, 3)    # 12 threads of the 12.8 reserved
+    @test Executors.job_thread_budget(32, 50) == (4, 4)
+    @test Executors.job_thread_budget(16, 25) == (4, 1)
+    @test Executors.job_thread_budget(8, 20) == (1, 1)
+
+    # Degenerate shares still execute jobs, one at a time on one thread
+    @test Executors.job_thread_budget(1, 20) == (1, 1)
+    @test Executors.job_thread_budget(64, 0) == (1, 1)
+    @test Executors.job_thread_budget(0, 20) == (1, 1)
+
+    # The whole machine, for a server that is only a job runner
+    @test Executors.job_thread_budget(64, 100) == (4, 16)
+
+    for (n, pct) in ((64, 20), (32, 50), (12, 33), (7, 20), (1, 100))
+        c, t = Executors.job_thread_budget(n, pct)
+        @test c * t <= max(1, floor(Int, n * pct / 100)) || (c, t) == (1, 1)
+    end
+end
+
+@testset "a job carries its thread budget in the environment" begin
+    # `Base.julia_cmd()` does not propagate `--threads`, so a job would otherwise run on one
+    # thread whatever the server was given.
+    cmd = Executors._job_command(["describe", "--dataset", "x"], 3)
+    @test any(e -> e == "JULIA_NUM_THREADS=3", cmd.env)
+    @test occursin("similarity-search.jl", join(cmd.exec, " "))
+    @test Executors._job_command(String[], 0).env |> env -> any(e -> e == "JULIA_NUM_THREADS=1", env)
+end
+
+@testset "the reserved share is read from the configuration" begin
+    @test resolve_batch_threads_pct(Dict("batch_threads_pct" => 20)) == 20
+    @test resolve_batch_threads_pct(Dict("query_threads_pct" => 80)) == 20
+    @test resolve_batch_threads_pct(Dict("query_threads_pct" => 90)) == 10
+    # Stated twice and inconsistently: the batch share applies
+    @test resolve_batch_threads_pct(Dict("query_threads_pct" => 50, "batch_threads_pct" => 20)) == 20
+    # Absent, out of range, or not a number: the default of the generated file
+    @test resolve_batch_threads_pct(Dict{String, Any}()) == 20
+    @test resolve_batch_threads_pct(Dict("batch_threads_pct" => 150)) == 20
+    @test resolve_batch_threads_pct(Dict("batch_threads_pct" => "half")) == 20
 end

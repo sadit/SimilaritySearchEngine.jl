@@ -480,7 +480,7 @@
     "href": "server/manual.html#configuration",
     "title": "Server Manual",
     "section": "6. Configuration",
-    "text": "6. Configuration\nconfig.toml (or .similarity-search-server.toml):\n[paths]\nworkdir = \"./workdir\"\n\n[server]\nhost = \"127.0.0.1\"\nport = 8080\n\n[resources]\nquery_threads_pct = 80\nbatch_threads_pct = 20"
+    "text": "6. Configuration\nconfig.toml (or .similarity-search-server.toml):\n[paths]\nworkdir = \"./workdir\"\n\n[server]\nhost = \"127.0.0.1\"\nport = 8080\n\n[resources]\nquery_threads_pct = 80\nbatch_threads_pct = 20\n[resources] divides this server’s threads between answering queries and executing jobs. A job runs as its own process, so the reserved share is spent as a number of processes and a number of threads each: at most four jobs at once, each with its part of floor(threads × batch_threads_pct / 100), and never more than that share in total. The remaining threads stay with the server. serve prints the resulting numbers when it starts, for example at most 4 concurrent job(s), 3 thread(s) each (20.0% of this server's 64 thread(s)).\nThe number of threads the server itself has is the one given to Julia when it starts (julia -t auto), not a value in this file."
   },
   {
     "objectID": "server/manual.html#tests",

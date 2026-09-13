@@ -34,7 +34,7 @@ of it exist.
 | :--- | :--- | :--- |
 | 1. Foundation | complete | Three applications under `src/apps/`, one `ArgParseSettings` per command line, `parse_distance` in the place of the proposed `DistanceRegistry`. One index per dataset holds by construction: a project of the engine has one index. |
 | 1.5. Interactive mode | complete, with one deviation | `interactive.jl` introspects the same settings object. `Term.jl` is not a dependency, so the forms are plain `REPL.TerminalMenus`. It is reached through the `interactive` subcommand, not by an `isatty` test, so it also cannot engage inside a job subprocess. |
-| 2. Concurrency | partial | The engine provides the reader-writer lock and the context pool, and a job that reads the whole dataset runs as a subprocess, which is what keeps queries answerable while it runs. The 80/20 split is **not implemented**: `query_threads_pct` and `batch_threads_pct` exist in `config.toml` and no code reads them. There is no request collector and no `:dynamic` queue. |
+| 2. Concurrency | complete, minus the request collector | The engine provides the reader-writer lock and the context pool, and a job runs as a subprocess, which is what keeps queries answerable while it runs. The reserved share is applied since 2026-09-13: `batch_threads_pct` bounds job execution as a number of concurrent processes and a number of threads each (`Executors.job_thread_budget`), and `serve` reports the result at startup. The query side is not bounded by a collector: requests are answered on the server's own thread pool, as Julia schedules them, and §2's `Channel` of pending requests was not built. |
 | 3. Persistence and telemetry | complete except §4.5 | RocksDB, and an `op_log` with elapsed time and a real distance-computation count per request. The declared metadata schema (typed fields plus an `extra` blob) and the `meta_idx_<field>` column families do not exist: `meta` is free-form, and the indexed fields are `doc_id`, `keywords` and `refs`. |
 | 3.5. Job model and cursors | complete, with a deliberate change of persistence | Job registry with `queued`, `running`, `blocked`, `completed` and `failed`, `kill`, `gc`, `LocalCLIExecutor`, and result cursors. JLD2 snapshots were removed, because the engine persists its own index; Avro remains for `dump` and `load`. |
 | 4. Web layer | complete except `/metrics` | 34 routes, `/healthz`, `/readyz`, `/metrics`, join groups, and authentication (below). `/metrics` does not derive counters from the `op_log` (§5.8). The routes were reorganized on 2026-09-13: the operations of a dataset are under `/api/v1/datasets/{id}/`, the two queries that read more than one dataset are under `/api/v1/search/`, and the prefix `/api/v1/simsearch/` that §5.1 to §5.3 below describe no longer exists. |
@@ -58,8 +58,13 @@ of it exist.
    and the passages that described a snapshot file as current behavior. Still pending: two
    docstrings in `server.jl` that document `parse_meta_schema` and `serialize_meta_schema`,
    functions that do not exist, and that describe the §4.5 schema that was never built.
-3. **The 80/20 split**: implement it, or remove the two keys from `config.toml`. A
-   configuration key that does nothing states something the program does not do.
+3. ~~**The 80/20 split**~~ Done on 2026-09-13. The keys were read by nothing, and job
+   subprocesses ran on one thread each, because `Base.julia_cmd()` does not carry the
+   `--threads` of the process that spawns them. `batch_threads_pct` now yields a pair,
+   how many jobs at once and how many threads each, and each subprocess is started with
+   that budget in `JULIA_NUM_THREADS`. **Still open:** the query side of §2, a collector
+   that would hold requests when the pool is saturated. Nothing has measured that a
+   collector would improve anything, and it puts a queue in front of every search.
 4. **§5.8**, counters derived from the `op_log`, now that `distance_evaluations` carries a
    real value per request.
 5. **§4.5**, the declared metadata schema with an index per field. This is the item that

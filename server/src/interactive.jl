@@ -423,5 +423,6 @@ function run_interactive_serve(config_path::String)
     end
 
     auth_enabled = get(get(config, "auth", Dict{String, Any}()), "enabled", false) === true
-    return run_serve(host, port, workdir; auth_enabled)
+    batch_threads_pct = resolve_batch_threads_pct(get(config, "resources", Dict{String, Any}()))
+    return run_serve(host, port, workdir; auth_enabled, batch_threads_pct)
 end

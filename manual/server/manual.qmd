@@ -174,6 +174,17 @@ query_threads_pct = 80
 batch_threads_pct = 20
 ```
 
+`[resources]` divides this server's threads between answering queries and executing jobs. A
+job runs as its own process, so the reserved share is spent as a number of processes and a
+number of threads each: at most four jobs at once, each with its part of
+`floor(threads × batch_threads_pct / 100)`, and never more than that share in total. The
+remaining threads stay with the server. `serve` prints the resulting numbers when it starts,
+for example `at most 4 concurrent job(s), 3 thread(s) each (20.0% of this server's 64
+thread(s))`.
+
+The number of threads the server itself has is the one given to Julia when it starts
+(`julia -t auto`), not a value in this file.
+
 ## 7. Tests
 
 Two levels, selected with `test_args=["full"]` or `SSE_TEST_LEVEL=full`:

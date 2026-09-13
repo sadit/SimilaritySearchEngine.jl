@@ -24,9 +24,18 @@ indices = "indices"
 spool = "jobs_spool"
 
 [resources]
+# How this server's threads are divided between answering queries and executing jobs.
+#
+# A job (allknn, fft, neardup, hsp, searchbatch, closestpair, build, dump, load) runs as its
+# own process, so the reserved share is spent as a number of processes and a number of threads
+# each: at most 4 jobs at once, each with `floor(threads * batch_threads_pct / 100) / 4`
+# threads, and never more than the share in total. The rest of the threads stay with the
+# server, which answers queries on them. `serve` prints the resulting numbers when it starts.
+#
 # Percentage of threads dedicated to live queries (0-100)
 query_threads_pct = 80
-# Percentage of threads dedicated to batch or heavy jobs
+# Percentage of threads dedicated to batch or heavy jobs. This is the one that applies when
+# both are present and they do not add up to 100.
 batch_threads_pct = 20
 
 [server]
