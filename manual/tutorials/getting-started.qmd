@@ -109,7 +109,7 @@ append_items!(h, batch)  # Stages 362 vectors into dense_vectors.mmapdb
 
 ### 4. Constructing the Proximity Graph
 
-For a `SearchGraph` backend, `append_items!` writes vectors to disk immediately but does not construct graph edges. To build graph connectivity across the staged backlog, invoke [`index!`](@ref):
+For a `SearchGraph` backend, `append_items!` writes vectors to disk immediately but does not construct graph edges. To build graph connectivity across the staged backlog, invoke [`index!`](https://sadit.github.io/SimilaritySearchEngine.jl/dev/api.html#SimilaritySearchEngine.index!-Tuple{EmbeddedEngine}):
 
 ```julia
 index!(h)  # Builds graph connections over the 362 staged items
@@ -117,7 +117,7 @@ index!(h)  # Builds graph connections over the 362 staged items
 
 ### 5. Executing Queries and Metadata Filtering
 
-Once indexed, queries are evaluated using [`search`](@ref):
+Once indexed, queries are evaluated using [`search`](https://sadit.github.io/SimilaritySearchEngine.jl/dev/api.html#SimilaritySearchEngine.search):
 
 ```julia
 query = vectorize(lsi, "the monster and its creator")
@@ -147,7 +147,7 @@ enough = search(h, query, 10; filter = (record, meta) -> meta["year"] == 2005, c
 
 ### 6. Batch Queries
 
-A set of queries is answered in a single parallel pass rather than one call at a time. Passing a vector of query vectors to [`search`](@ref) returns one result list per query, in the same order:
+A set of queries is answered in a single parallel pass rather than one call at a time. Passing a vector of query vectors to [`search`](https://sadit.github.io/SimilaritySearchEngine.jl/dev/api.html#SimilaritySearchEngine.search) returns one result list per query, in the same order:
 
 ```julia
 queries = [vectorize(lsi, t) for t in ["the monster and its creator",
@@ -157,7 +157,7 @@ batched = search(h, queries, 5)     # Vector{Vector{SearchResult}}
 batched[2][1].doc_id
 ```
 
-[`searchbatch`](@ref) returns the same neighbourhoods in raw form -- two `(k, length(queries))` matrices of internal ids and distances, with no metadata reads at all -- which is the appropriate input for evaluation loops, offline scoring, or feeding another index:
+[`searchbatch`](https://sadit.github.io/SimilaritySearchEngine.jl/dev/api.html#SimilaritySearchEngine.searchbatch) returns the same neighbourhoods in raw form -- two `(k, length(queries))` matrices of internal ids and distances, with no metadata reads at all -- which is the appropriate input for evaluation loops, offline scoring, or feeding another index:
 
 ```julia
 ids, dists = searchbatch(h, queries, 5)
@@ -192,7 +192,7 @@ calibrate!(h; levels=[0.8, 0.9, 0.95, 0.97])
 precise_results = search(h, query, 5; minrecall=0.95)
 ```
 
-What a recall target buys is paid for in distance computations, and the price is measurable. Pass a [`SearchStats`](@ref) instance and the engine records what that specific call cost:
+What a recall target buys is paid for in distance computations, and the price is measurable. Pass a [`SearchStats`](https://sadit.github.io/SimilaritySearchEngine.jl/dev/api.html#SimilaritySearchEngine.SearchStats) instance and the engine records what that specific call cost:
 
 ```julia
 stats = SearchStats()
@@ -205,7 +205,7 @@ precise = stats.distance_evaluations     # larger: a wider beam visits more of t
 
 The gap is the entire point of calibration. Over 20,000 random 32-dimensional vectors, a 5-nearest-neighbour query costs 242 distance computations at `minrecall=0.8` and 927 at `minrecall=0.95` -- which, on that collection, is also what the uncalibrated default beam costs, out of 20,000 an exhaustive scan would perform.
 
-The field is overwritten by each call rather than accumulated, so read it before issuing the next query. [`ftsearch`](@ref) and the filtered form of [`search`](@ref) accept `stats` as well, the latter reporting the cost of the candidate search it ran underneath rather than of the `k` results that survived the predicate. An exhaustive backend reports the size of the collection, by definition.
+The field is overwritten by each call rather than accumulated, so read it before issuing the next query. [`ftsearch`](https://sadit.github.io/SimilaritySearchEngine.jl/dev/api.html#SimilaritySearchEngine.ftsearch) and the filtered form of [`search`](https://sadit.github.io/SimilaritySearchEngine.jl/dev/api.html#SimilaritySearchEngine.search) accept `stats` as well, the latter reporting the cost of the candidate search it ran underneath rather than of the `k` results that survived the predicate. An exhaustive backend reports the size of the collection, by definition.
 
 The count cannot be obtained any other way: a query runs on a context borrowed from the engine's pool and returned when the call ends, so the counters reachable from outside afterwards belong to whatever has searched since. This is also how the server fills the `distance_evaluations` field of its operation log.
 
@@ -217,7 +217,7 @@ To close all active RocksDB handles and memory-mapped files:
 close_project!(h)
 ```
 
-Closing a session that performed writes also compacts the project's storage. This is not housekeeping: what a bulk ingestion leaves behind is a write-ahead log that the *next* open must replay, so the cost appears as open latency. On a 50,000-vector project, reopening costs 2.97 s without compaction and 0.48 s with it, for a compaction of 0.16 s. Pass `close_project!(h; compact=false)` when closing sits on a latency path, or call [`compact_project!`](@ref) mid-session after a large ingestion the same process will continue to serve.
+Closing a session that performed writes also compacts the project's storage. This is not housekeeping: what a bulk ingestion leaves behind is a write-ahead log that the *next* open must replay, so the cost appears as open latency. On a 50,000-vector project, reopening costs 2.97 s without compaction and 0.48 s with it, for a compaction of 0.16 s. Pass `close_project!(h; compact=false)` when closing sits on a latency path, or call [`compact_project!`](https://sadit.github.io/SimilaritySearchEngine.jl/dev/api.html#SimilaritySearchEngine.compact_project!-Tuple{EmbeddedEngine}) mid-session after a large ingestion the same process will continue to serve.
 
 Reopening the project restores both the stored vectors and graph connectivity:
 
@@ -231,7 +231,7 @@ close_project!(h2)
 
 ## Sparse Vector Search (`SparseEngine`)
 
-[`SparseEngine`](@ref) indexes user-provided sparse representations (`SparseItem`) of fixed dimensionality using an [`InvertedFile`](@ref) backend.
+[`SparseEngine`](https://sadit.github.io/SimilaritySearchEngine.jl/dev/api.html#SimilaritySearchEngine.IndexEngine.SparseEngine) indexes user-provided sparse representations (`SparseItem`) of fixed dimensionality using an [`InvertedFile`](https://sadit.github.io/SimilaritySearch.jl/dev/api/) backend.
 
 ### Indexing Pre-Encoded Sparse Vectors
 
@@ -272,13 +272,13 @@ end
 
 - **Fixed Dimension Requirement**: The `dimension` parameter must be specified at project creation and must match the coordinate dimension of all appended `SparseVector` objects.
 - **Strict Query Typing**: Queries must be provided as `SparseVector{Float32, Int32}` matching the configured dimension.
-- **Supported Distance Metrics**: Supports [`Dist.NormCosine`](@ref) over vector weights or discrete set distances ([`Dist.Sets.Jaccard`](@ref), [`Dist.Sets.Dice`](@ref)) over non-zero coordinate supports.
+- **Supported Distance Metrics**: Supports [`Dist.NormCosine`](https://sadit.github.io/SimilaritySearch.jl/dev/api/) over vector weights or discrete set distances ([`Dist.Sets.Jaccard`](https://sadit.github.io/SimilaritySearch.jl/dev/api/), [`Dist.Sets.Dice`](https://sadit.github.io/SimilaritySearch.jl/dev/api/)) over non-zero coordinate supports.
 
 ---
 
 ## Full-Text Retrieval with BM25 (`FullTextEngine`)
 
-For text retrieval without manual vector encoding, [`FullTextEngine`](@ref) integrates text normalization, vocabulary management, and inverted file scoring.
+For text retrieval without manual vector encoding, [`FullTextEngine`](https://sadit.github.io/SimilaritySearchEngine.jl/dev/api.html#SimilaritySearchEngine.IndexEngine.FullTextEngine) integrates text normalization, vocabulary management, and inverted file scoring.
 
 ```julia
 using TextSearch: BM25InvertedFile
@@ -317,7 +317,7 @@ Posting lists are read from storage as queries ask for them, behind a cache of t
 
 A project written by an earlier version, which stored the indexed objects instead of the index, opens with no index at all and says so when searched; `index!(h)` rebuilds it from the staged text, which was always persisted separately. That is the whole migration procedure, and it is explicit on purpose.
 
-Appending after the first `index!` writes only what the new block changes, so a project can keep growing without ever being rebuilt. The vocabulary, however, is fixed at the first `index!` under `FitFromCorpus`: words absent from the text staged by then stay out of vocabulary no matter how many blocks follow. Stage the corpus you intend to fit before calling `index!` the first time, or start from a [`BaseProfile`](@ref).
+Appending after the first `index!` writes only what the new block changes, so a project can keep growing without ever being rebuilt. The vocabulary, however, is fixed at the first `index!` under `FitFromCorpus`: words absent from the text staged by then stay out of vocabulary no matter how many blocks follow. Stage the corpus you intend to fit before calling `index!` the first time, or start from a [`BaseProfile`](https://sadit.github.io/SimilaritySearchEngine.jl/dev/api.html#SimilaritySearchEngine.IndexEngine.BaseProfile).
 
 ---
 
@@ -364,7 +364,7 @@ hp = create_project(workdir, "wiki_base"; engine=FullTextEngine, backend=BM25Inv
 
 ## Query Resolution and Expansion: `QueryPolicy`
 
-Full-text queries execute under a [`QueryPolicy`](@ref) that controls spelling variant correction and semantic expansion:
+Full-text queries execute under a [`QueryPolicy`](https://sadit.github.io/TextSearch.jl/dev/api/) that controls spelling variant correction and semantic expansion:
 
 ```julia
 # Default policy: automatic orthographic correction

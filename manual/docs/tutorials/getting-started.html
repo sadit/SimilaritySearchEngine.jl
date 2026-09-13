@@ -317,12 +317,12 @@ window.Quarto = {
 </section>
 <section id="constructing-the-proximity-graph" class="level3">
 <h3 class="anchored" data-anchor-id="constructing-the-proximity-graph">4. Constructing the Proximity Graph</h3>
-<p>For a <code>SearchGraph</code> backend, <code>append_items!</code> writes vectors to disk immediately but does not construct graph edges. To build graph connectivity across the staged backlog, invoke <a href="@ref"><code>index!</code></a>:</p>
+<p>For a <code>SearchGraph</code> backend, <code>append_items!</code> writes vectors to disk immediately but does not construct graph edges. To build graph connectivity across the staged backlog, invoke <a href="https://sadit.github.io/SimilaritySearchEngine.jl/dev/api.html#SimilaritySearchEngine.index!-Tuple%7BEmbeddedEngine%7D"><code>index!</code></a>:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="fu">index!</span>(h)  <span class="co"># Builds graph connections over the 362 staged items</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </section>
 <section id="executing-queries-and-metadata-filtering" class="level3">
 <h3 class="anchored" data-anchor-id="executing-queries-and-metadata-filtering">5. Executing Queries and Metadata Filtering</h3>
-<p>Once indexed, queries are evaluated using <a href="@ref"><code>search</code></a>:</p>
+<p>Once indexed, queries are evaluated using <a href="https://sadit.github.io/SimilaritySearchEngine.jl/dev/api.html#SimilaritySearchEngine.search"><code>search</code></a>:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb8"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>query <span class="op">=</span> <span class="fu">vectorize</span>(lsi, <span class="st">"the monster and its creator"</span>)</span>
 <span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>results <span class="op">=</span> <span class="fu">search</span>(h, query, <span class="fl">5</span>)</span>
 <span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -340,13 +340,13 @@ window.Quarto = {
 </section>
 <section id="batch-queries" class="level3">
 <h3 class="anchored" data-anchor-id="batch-queries">6. Batch Queries</h3>
-<p>A set of queries is answered in a single parallel pass rather than one call at a time. Passing a vector of query vectors to <a href="@ref"><code>search</code></a> returns one result list per query, in the same order:</p>
+<p>A set of queries is answered in a single parallel pass rather than one call at a time. Passing a vector of query vectors to <a href="https://sadit.github.io/SimilaritySearchEngine.jl/dev/api.html#SimilaritySearchEngine.search"><code>search</code></a> returns one result list per query, in the same order:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb11"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>queries <span class="op">=</span> [<span class="fu">vectorize</span>(lsi, t) for t <span class="kw">in</span> [<span class="st">"the monster and its creator"</span>,</span>
 <span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>                                       <span class="st">"the arctic expedition"</span>,</span>
 <span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>                                       <span class="st">"letters to Margaret"</span>]]</span>
 <span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>batched <span class="op">=</span> <span class="fu">search</span>(h, queries, <span class="fl">5</span>)     <span class="co"># Vector{Vector{SearchResult}}</span></span>
 <span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>batched[<span class="fl">2</span>][<span class="fl">1</span>].doc_id</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p><a href="@ref"><code>searchbatch</code></a> returns the same neighbourhoods in raw form – two <code>(k, length(queries))</code> matrices of internal ids and distances, with no metadata reads at all – which is the appropriate input for evaluation loops, offline scoring, or feeding another index:</p>
+<p><a href="https://sadit.github.io/SimilaritySearchEngine.jl/dev/api.html#SimilaritySearchEngine.searchbatch"><code>searchbatch</code></a> returns the same neighbourhoods in raw form – two <code>(k, length(queries))</code> matrices of internal ids and distances, with no metadata reads at all – which is the appropriate input for evaluation loops, offline scoring, or feeding another index:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb12"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>ids, dists <span class="op">=</span> <span class="fu">searchbatch</span>(h, queries, <span class="fl">5</span>)</span>
 <span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="fu">size</span>(ids)     <span class="co"># (5, 3)</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p>Measured over 50,000 dense vectors on 8 threads, <code>searchbatch</code> sustains 39,000 queries/s against 3,800 queries/s query-by-query; the hydrated form reaches 12,600 queries/s, the difference being the metadata read and decode per hit.</p>
@@ -368,7 +368,7 @@ window.Quarto = {
 <span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a><span class="co"># Execute search enforcing minimum 95% target recall</span></span>
 <span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a>precise_results <span class="op">=</span> <span class="fu">search</span>(h, query, <span class="fl">5</span>; minrecall<span class="op">=</span><span class="fl">0.95</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>What a recall target buys is paid for in distance computations, and the price is measurable. Pass a <a href="@ref"><code>SearchStats</code></a> instance and the engine records what that specific call cost:</p>
+<p>What a recall target buys is paid for in distance computations, and the price is measurable. Pass a <a href="https://sadit.github.io/SimilaritySearchEngine.jl/dev/api.html#SimilaritySearchEngine.SearchStats"><code>SearchStats</code></a> instance and the engine records what that specific call cost:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb15"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>stats <span class="op">=</span> <span class="fu">SearchStats</span>()</span>
 <span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="fu">search</span>(h, query, <span class="fl">5</span>; minrecall<span class="op">=</span><span class="fl">0.8</span>, stats)</span>
 <span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>cheap <span class="op">=</span> stats.distance_evaluations</span>
@@ -376,14 +376,14 @@ window.Quarto = {
 <span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a><span class="fu">search</span>(h, query, <span class="fl">5</span>; minrecall<span class="op">=</span><span class="fl">0.95</span>, stats)</span>
 <span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>precise <span class="op">=</span> stats.distance_evaluations     <span class="co"># larger: a wider beam visits more of the graph</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p>The gap is the entire point of calibration. Over 20,000 random 32-dimensional vectors, a 5-nearest-neighbour query costs 242 distance computations at <code>minrecall=0.8</code> and 927 at <code>minrecall=0.95</code> – which, on that collection, is also what the uncalibrated default beam costs, out of 20,000 an exhaustive scan would perform.</p>
-<p>The field is overwritten by each call rather than accumulated, so read it before issuing the next query. <a href="@ref"><code>ftsearch</code></a> and the filtered form of <a href="@ref"><code>search</code></a> accept <code>stats</code> as well, the latter reporting the cost of the candidate search it ran underneath rather than of the <code>k</code> results that survived the predicate. An exhaustive backend reports the size of the collection, by definition.</p>
+<p>The field is overwritten by each call rather than accumulated, so read it before issuing the next query. <a href="https://sadit.github.io/SimilaritySearchEngine.jl/dev/api.html#SimilaritySearchEngine.ftsearch"><code>ftsearch</code></a> and the filtered form of <a href="https://sadit.github.io/SimilaritySearchEngine.jl/dev/api.html#SimilaritySearchEngine.search"><code>search</code></a> accept <code>stats</code> as well, the latter reporting the cost of the candidate search it ran underneath rather than of the <code>k</code> results that survived the predicate. An exhaustive backend reports the size of the collection, by definition.</p>
 <p>The count cannot be obtained any other way: a query runs on a context borrowed from the engine’s pool and returned when the call ends, so the counters reachable from outside afterwards belong to whatever has searched since. This is also how the server fills the <code>distance_evaluations</code> field of its operation log.</p>
 </section>
 <section id="project-closure-and-reopening" class="level3">
 <h3 class="anchored" data-anchor-id="project-closure-and-reopening">9. Project Closure and Reopening</h3>
 <p>To close all active RocksDB handles and memory-mapped files:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb16"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="fu">close_project!</span>(h)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Closing a session that performed writes also compacts the project’s storage. This is not housekeeping: what a bulk ingestion leaves behind is a write-ahead log that the <em>next</em> open must replay, so the cost appears as open latency. On a 50,000-vector project, reopening costs 2.97 s without compaction and 0.48 s with it, for a compaction of 0.16 s. Pass <code>close_project!(h; compact=false)</code> when closing sits on a latency path, or call <a href="@ref"><code>compact_project!</code></a> mid-session after a large ingestion the same process will continue to serve.</p>
+<p>Closing a session that performed writes also compacts the project’s storage. This is not housekeeping: what a bulk ingestion leaves behind is a write-ahead log that the <em>next</em> open must replay, so the cost appears as open latency. On a 50,000-vector project, reopening costs 2.97 s without compaction and 0.48 s with it, for a compaction of 0.16 s. Pass <code>close_project!(h; compact=false)</code> when closing sits on a latency path, or call <a href="https://sadit.github.io/SimilaritySearchEngine.jl/dev/api.html#SimilaritySearchEngine.compact_project!-Tuple%7BEmbeddedEngine%7D"><code>compact_project!</code></a> mid-session after a large ingestion the same process will continue to serve.</p>
 <p>Reopening the project restores both the stored vectors and graph connectivity:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb17"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a>h2 <span class="op">=</span> <span class="fu">open_project</span>(workdir, <span class="st">"frankenstein_dense"</span>)</span>
 <span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>reopened_results <span class="op">=</span> <span class="fu">search</span>(h2, query, <span class="fl">5</span>)</span>
@@ -393,7 +393,7 @@ window.Quarto = {
 </section>
 <section id="sparse-vector-search-sparseengine" class="level2">
 <h2 class="anchored" data-anchor-id="sparse-vector-search-sparseengine">Sparse Vector Search (<code>SparseEngine</code>)</h2>
-<p><a href="@ref"><code>SparseEngine</code></a> indexes user-provided sparse representations (<code>SparseItem</code>) of fixed dimensionality using an <a href="@ref"><code>InvertedFile</code></a> backend.</p>
+<p><a href="https://sadit.github.io/SimilaritySearchEngine.jl/dev/api.html#SimilaritySearchEngine.IndexEngine.SparseEngine"><code>SparseEngine</code></a> indexes user-provided sparse representations (<code>SparseItem</code>) of fixed dimensionality using an <a href="https://sadit.github.io/SimilaritySearch.jl/dev/api/"><code>InvertedFile</code></a> backend.</p>
 <section id="indexing-pre-encoded-sparse-vectors" class="level3">
 <h3 class="anchored" data-anchor-id="indexing-pre-encoded-sparse-vectors">Indexing Pre-Encoded Sparse Vectors</h3>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb18"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="im">using</span> <span class="bu">SimilaritySearch</span>: Dist</span>
@@ -432,14 +432,14 @@ window.Quarto = {
 <ul>
 <li><strong>Fixed Dimension Requirement</strong>: The <code>dimension</code> parameter must be specified at project creation and must match the coordinate dimension of all appended <code>SparseVector</code> objects.</li>
 <li><strong>Strict Query Typing</strong>: Queries must be provided as <code>SparseVector{Float32, Int32}</code> matching the configured dimension.</li>
-<li><strong>Supported Distance Metrics</strong>: Supports <a href="@ref"><code>Dist.NormCosine</code></a> over vector weights or discrete set distances (<a href="@ref"><code>Dist.Sets.Jaccard</code></a>, <a href="@ref"><code>Dist.Sets.Dice</code></a>) over non-zero coordinate supports.</li>
+<li><strong>Supported Distance Metrics</strong>: Supports <a href="https://sadit.github.io/SimilaritySearch.jl/dev/api/"><code>Dist.NormCosine</code></a> over vector weights or discrete set distances (<a href="https://sadit.github.io/SimilaritySearch.jl/dev/api/"><code>Dist.Sets.Jaccard</code></a>, <a href="https://sadit.github.io/SimilaritySearch.jl/dev/api/"><code>Dist.Sets.Dice</code></a>) over non-zero coordinate supports.</li>
 </ul>
 <hr>
 </section>
 </section>
 <section id="full-text-retrieval-with-bm25-fulltextengine" class="level2">
 <h2 class="anchored" data-anchor-id="full-text-retrieval-with-bm25-fulltextengine">Full-Text Retrieval with BM25 (<code>FullTextEngine</code>)</h2>
-<p>For text retrieval without manual vector encoding, <a href="@ref"><code>FullTextEngine</code></a> integrates text normalization, vocabulary management, and inverted file scoring.</p>
+<p>For text retrieval without manual vector encoding, <a href="https://sadit.github.io/SimilaritySearchEngine.jl/dev/api.html#SimilaritySearchEngine.IndexEngine.FullTextEngine"><code>FullTextEngine</code></a> integrates text normalization, vocabulary management, and inverted file scoring.</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb19"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="im">using</span> <span class="bu">TextSearch</span>: BM25InvertedFile</span>
 <span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>hb <span class="op">=</span> <span class="fu">create_project</span>(workdir, <span class="st">"frankenstein_bm25"</span>; </span>
@@ -468,7 +468,7 @@ window.Quarto = {
 <span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a><span class="fu">close_project!</span>(hb2)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p>Posting lists are read from storage as queries ask for them, behind a cache of the most frequently used ones; their size is set at open time with <code>postings_cache_max</code> and <code>postings_cache_base</code> (the maximum number of cached lists, and the number it is trimmed back to when that maximum is exceeded). Per-document term vectors are read into memory instead, because BM25 scores every candidate from its own vector and a query containing a frequent term makes most of the collection a candidate. The <a href="../architecture.html">architecture guide</a> carries the measurements behind both halves of that choice.</p>
 <p>A project written by an earlier version, which stored the indexed objects instead of the index, opens with no index at all and says so when searched; <code>index!(h)</code> rebuilds it from the staged text, which was always persisted separately. That is the whole migration procedure, and it is explicit on purpose.</p>
-<p>Appending after the first <code>index!</code> writes only what the new block changes, so a project can keep growing without ever being rebuilt. The vocabulary, however, is fixed at the first <code>index!</code> under <code>FitFromCorpus</code>: words absent from the text staged by then stay out of vocabulary no matter how many blocks follow. Stage the corpus you intend to fit before calling <code>index!</code> the first time, or start from a <a href="@ref"><code>BaseProfile</code></a>.</p>
+<p>Appending after the first <code>index!</code> writes only what the new block changes, so a project can keep growing without ever being rebuilt. The vocabulary, however, is fixed at the first <code>index!</code> under <code>FitFromCorpus</code>: words absent from the text staged by then stay out of vocabulary no matter how many blocks follow. Stage the corpus you intend to fit before calling <code>index!</code> the first time, or start from a <a href="https://sadit.github.io/SimilaritySearchEngine.jl/dev/api.html#SimilaritySearchEngine.IndexEngine.BaseProfile"><code>BaseProfile</code></a>.</p>
 <hr>
 </section>
 <section id="configuring-linguistic-models-abstracttextmodelspec" class="level2">
@@ -502,7 +502,7 @@ window.Quarto = {
 </section>
 <section id="query-resolution-and-expansion-querypolicy" class="level2">
 <h2 class="anchored" data-anchor-id="query-resolution-and-expansion-querypolicy">Query Resolution and Expansion: <code>QueryPolicy</code></h2>
-<p>Full-text queries execute under a <a href="@ref"><code>QueryPolicy</code></a> that controls spelling variant correction and semantic expansion:</p>
+<p>Full-text queries execute under a <a href="https://sadit.github.io/TextSearch.jl/dev/api/"><code>QueryPolicy</code></a> that controls spelling variant correction and semantic expansion:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb24"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Default policy: automatic orthographic correction</span></span>
 <span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a><span class="fu">ftsearch</span>(hes, <span class="st">"musica clasica"</span>, <span class="fl">5</span>)</span>
 <span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a></span>

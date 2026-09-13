@@ -661,7 +661,7 @@ window.Quarto = {
 </section>
 <section id="dual-logging-architecture-reporters-vs.-observers" class="level2">
 <h2 class="anchored" data-anchor-id="dual-logging-architecture-reporters-vs.-observers">Dual Logging Architecture: Reporters vs.&nbsp;Observers</h2>
-<p>Contexts maintain two isolated logging channels: - <strong>Reporters (<code>ctx.reporters</code>)</strong>: Receive progress messages via <a href="@ref"><code>INFORM</code></a> and output formatted status lines to <code>stderr</code> or custom <code>IO</code> streams. Throttled to prevent console flooding. - <strong>Observers (<code>ctx.observers</code>)</strong>: Receive structural mutation events (<code>:add!</code>) via <a href="@ref"><code>OBSERVE</code></a>. Execute un-throttled callbacks that trigger persistence updates (<code>CallbackLog</code>).</p>
+<p>Contexts maintain two isolated logging channels: - <strong>Reporters (<code>ctx.reporters</code>)</strong>: Receive progress messages via <a href="https://sadit.github.io/SimilaritySearch.jl/dev/api/"><code>INFORM</code></a> and output formatted status lines to <code>stderr</code> or custom <code>IO</code> streams. Throttled to prevent console flooding. - <strong>Observers (<code>ctx.observers</code>)</strong>: Receive structural mutation events (<code>:add!</code>) via <a href="https://sadit.github.io/SimilaritySearch.jl/dev/api/"><code>OBSERVE</code></a>. Execute un-throttled callbacks that trigger persistence updates (<code>CallbackLog</code>).</p>
 <div class="cell" data-layout-align="default">
 <div class="cell-output-display">
 <div>

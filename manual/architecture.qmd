@@ -365,8 +365,8 @@ The alternative — bare `error("...")` — forces every consumer to classify by
 ## Dual Logging Architecture: Reporters vs. Observers
 
 Contexts maintain two isolated logging channels:
-- **Reporters (`ctx.reporters`)**: Receive progress messages via [`INFORM`](@ref) and output formatted status lines to `stderr` or custom `IO` streams. Throttled to prevent console flooding.
-- **Observers (`ctx.observers`)**: Receive structural mutation events (`:add!`) via [`OBSERVE`](@ref). Execute un-throttled callbacks that trigger persistence updates (`CallbackLog`).
+- **Reporters (`ctx.reporters`)**: Receive progress messages via [`INFORM`](https://sadit.github.io/SimilaritySearch.jl/dev/api/) and output formatted status lines to `stderr` or custom `IO` streams. Throttled to prevent console flooding.
+- **Observers (`ctx.observers`)**: Receive structural mutation events (`:add!`) via [`OBSERVE`](https://sadit.github.io/SimilaritySearch.jl/dev/api/). Execute un-throttled callbacks that trigger persistence updates (`CallbackLog`).
 
 ```{mermaid}
 flowchart LR

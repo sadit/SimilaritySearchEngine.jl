@@ -138,7 +138,7 @@ println("Text Preview:  ", first(r.text, 240), "…")
 
 ## Linguistic Profiles (`TextProfile`)
 
-A text project requires a [`TextProfile`](@ref) to specify vocabulary tokenization, term weighting, stopword lists, morphological lemma maps, and semantic query expansion networks.
+A text project requires a [`TextProfile`](https://sadit.github.io/TextSearch.jl/dev/api/) to specify vocabulary tokenization, term weighting, stopword lists, morphological lemma maps, and semantic query expansion networks.
 
 The preparation script fits profiles using `TextSearch.jl`'s profile fitting pipeline (`textsearch fit`), executing Latent Semantic Indexing (LSI) to generate dense semantic word embeddings and query expansion structures.
 
