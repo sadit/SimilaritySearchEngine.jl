@@ -24,6 +24,43 @@
     disagree, that one is right.
     Treat this as the standing default for "what's next" until told otherwise.
 
+## 0. Implementation status (read on 2026-09-13)
+
+What follows was obtained by reading the code on that date, not by reading this document.
+Section 9 below is the roadmap this specification proposed; this section reports which parts
+of it exist.
+
+| Phase | State | Notes |
+| :--- | :--- | :--- |
+| 1. Foundation | complete | Three applications under `src/apps/`, one `ArgParseSettings` per command line, `parse_distance` in the place of the proposed `DistanceRegistry`. One index per dataset holds by construction: a project of the engine has one index. |
+| 1.5. Interactive mode | complete, with one deviation | `interactive.jl` introspects the same settings object. `Term.jl` is not a dependency, so the forms are plain `REPL.TerminalMenus`. It is reached through the `interactive` subcommand, not by an `isatty` test, so it also cannot engage inside a job subprocess. |
+| 2. Concurrency | partial | The engine provides the reader-writer lock and the context pool, and a job that reads the whole dataset runs as a subprocess, which is what keeps queries answerable while it runs. The 80/20 split is **not implemented**: `query_threads_pct` and `batch_threads_pct` exist in `config.toml` and no code reads them. There is no request collector and no `:dynamic` queue. |
+| 3. Persistence and telemetry | complete except §4.5 | RocksDB, and an `op_log` with elapsed time and a real distance-computation count per request. The declared metadata schema (typed fields plus an `extra` blob) and the `meta_idx_<field>` column families do not exist: `meta` is free-form, and the indexed fields are `doc_id`, `keywords` and `refs`. |
+| 3.5. Job model and cursors | complete, with a deliberate change of persistence | Job registry with `queued`, `running`, `blocked`, `completed` and `failed`, `kill`, `gc`, `LocalCLIExecutor`, and result cursors. JLD2 snapshots were removed, because the engine persists its own index; Avro remains for `dump` and `load`. |
+| 4. Web layer | complete except two items | 34 routes, `/healthz`, `/readyz`, `/metrics`, join groups. `/metrics` does not derive counters from the `op_log` (§5.8), and **authentication is not enforced** (see below). |
+| 5. Full text and hybrid | mostly complete | `ftsearch`, fan-out over a join group, `hybrid_search` with reciprocal rank fusion, and `QueryPolicy` for correction and expansion. The stemmer registry is absent: neither `Snowball` nor `Languages` is a dependency. Vocabulary-drift detection by out-of-vocabulary rate is absent; `rebuild` is the manual procedure. |
+| 6. Scripting packages | one of three | The Python client exists (`client`, `async_client`, `jobs.run_job`, `cursors`, `stress_client.py`). There is no Julia scripting package (§8.3), although §8.5, access without HTTP, is provided by the engine itself. The Node package (§8.4) was never started. |
+| §3. Long-lived search policy | not implemented | `long_query_policy = "deny"` is in `config.toml` and no code reads it. No request is answered with 429, and no search is converted into a job. |
+
+### Pending work, in the order it is being addressed
+
+1. **Authentication (§4.1).** Tokens are created, revoked, listed and pruned, and the
+   `Authorization` header is read into the operation log, but no endpoint validates it. A
+   caller that reaches the port can delete a dataset. This is the only item in this list that
+   is a risk rather than a missing feature.
+2. **Remnants of the port.** Removed on 2026-09-13: the `JLD2` dependency, `src/snapshots.jl`,
+   and the passages that described a snapshot file as current behavior. Still pending: two
+   docstrings in `server.jl` that document `parse_meta_schema` and `serialize_meta_schema`,
+   functions that do not exist, and that describe the §4.5 schema that was never built.
+3. **The 80/20 split**: implement it, or remove the two keys from `config.toml`. A
+   configuration key that does nothing states something the program does not do.
+4. **§5.8**, counters derived from the `op_log`, now that `distance_evaluations` carries a
+   real value per request.
+5. **§4.5**, the declared metadata schema with an index per field. This is the item that
+   requires work in the engine, not only in this package.
+6. **Snowball and out-of-vocabulary tracking** (§5). These change the quality of retrieval,
+   not the operation of the server.
+
 ## 1. System Overview & Application Architecture
 
 `SimilaritySearchServer` is a high-performance, vector and full-text search engine built on top of `SimilaritySearch.jl` (v1.2.0) and `TextSearch.jl` (v1.1.0). The system is designed to provide both standard vector database integration and advanced topological graph operations through a robust CLI and HTTP REST API. Both interfaces are almost equivalent and can do almost the same operations, but going coherent with their medium design; one important difference is that cli don't need tokens to access indexes and datasets.

@@ -29,8 +29,8 @@ function execute_build(cmd_args::Dict)
 
     inserted = isempty(items) ? 0 : SSE.append_items!(handle, items)
     inserted > 0 && SSE.index!(handle)
-    # No snapshot to write: the project persists itself, which is also why `search`,
-    # `describe` and every heavy job below reopen it instead of loading a JLD2 file.
+    # Nothing else to write: the project persists itself, which is also why `search`,
+    # `describe` and every job below reopen it instead of reading a separate file.
     SSE.close_project!(handle)
 
     println("Successfully built index with $inserted items. Saved to $(joinpath(workdir, project_id))")
@@ -88,11 +88,11 @@ Reopens a dataset by id, whichever of this codebase's two layouts it lives under
 `<workdir>/datasets/<id>` for one created over HTTP, `<workdir>/<id>` for one built by the
 CLI. Prints an error and returns `nothing` when neither exists.
 
-This replaced a JLD2 snapshot file per dataset (`save_snapshot`/`load_snapshot`), written by
-`build` and by every HTTP append, and loaded by each heavy command. The engine persists its
-own index now, so the snapshot was a second, staler copy of state that already had a home --
-and a job that ran before anybody remembered to snapshot simply failed with "snapshot not
-found".
+This replaced a snapshot file per dataset, written by `build` and by every HTTP append, and
+read by each command that operated on a whole dataset. The engine persists its own index, so
+that file was a second and older copy of state that already had a place to live, and a job
+that ran before a snapshot had been written failed with "snapshot not found". The functions
+that wrote and read it were removed on 2026-09-13, together with the `JLD2` dependency.
 """
 function _open_handle(project_id::String, workdir::String; read_only::Bool=false)
     for root in (joinpath(workdir, "datasets"), workdir)
@@ -599,11 +599,10 @@ _dense_index_kind_name(::SimilaritySearch.ParallelExhaustiveSearch) = "parallel_
     execute_dump(cmd_args::Dict) -> Int
 
 `dump` (PLAN.md §4.4/§1): exports a dataset as a portable bundle directory --
-`dataset.avro` (every metadata record, tombstoned or not, via `Persistence.DumpRecord`),
-`index.snapshot.jld2` (a straight file copy of the dataset's current JLD2 snapshot -- the
-index is restored byte-for-byte by `load`, never rebuilt from the Avro rows, so it comes
-back with the exact same graph topology/posting lists it had at dump time, not a
-plausible-but-different reconstruction), and `manifest.json` (index_kind/distance/
+`dataset.avro` (every metadata record, deleted or not, via `Persistence.DumpRecord`),
+`project/` (a copy of the project directory, which is the index: `load` restores it as it
+is and never rebuilds it from the Avro rows, so the bundle comes back with the same graph
+topology and posting lists it had when it was written), and `manifest.json` (index_kind/distance/
 meta_schema/join_group/holds_metadata/key -- everything `load` needs to recreate a
 descriptor.json at the target, on top of the dataset it opens read-only so it can run
 concurrently with a live server serving the same dataset (see `describe`'s identical
@@ -661,11 +660,10 @@ function execute_dump(cmd_args::Dict)
     mkpath(output_dir)
     Persistence.write_dump_records(joinpath(output_dir, "dataset.avro"), records)
 
-    # The project directory itself, copied whole: it *is* the index now (posting lists,
-    # document vectors, the graph's adjacency, the dense vector file), where this used to copy
-    # a JLD2 snapshot beside it. Same coupling as before -- a bundle restores into an engine
-    # that can read this on-disk layout -- and `dataset.avro` beside it stays the portable,
-    # engine-independent half.
+    # The project directory, copied whole: it is the index (posting lists, document vectors,
+    # the adjacency of the graph, the dense vector file). A bundle therefore restores only into
+    # an engine that reads this on-disk layout, and `dataset.avro` beside it remains the
+    # portable half, independent of the engine.
     project_copy = joinpath(output_dir, "project")
     ispath(project_copy) && rm(project_copy; recursive=true)
     cp(dir, project_copy)
@@ -693,8 +691,8 @@ end
 directory (`<workdir>/datasets/{id}/`), so a subsequently-(re)started `serve` picks it up
 via `Server.reload_datasets!` with no extra step, regardless of which layout the original
 dump came from. Refuses to overwrite an existing target (`--dataset` must be a fresh id).
-Copies `index.snapshot.jld2` back verbatim (see `execute_dump`'s docstring on why this is
-a straight file copy, not a rebuild-from-rows) and replays every `dataset.avro` row into
+Copies `project/` back as it is (see `execute_dump` for why this is a copy and not a
+reconstruction from the rows) and replays every `dataset.avro` row into
 fresh `Schema.MetadataRecord`s under its original `doc_id` -- both `declared_json` and
 `extra_json` were captured separately at dump time (not pre-merged), so this reconstructs
 the exact original `MetadataRecord`, not a re-derived approximation of one.

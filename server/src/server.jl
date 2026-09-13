@@ -381,10 +381,8 @@ To force-refresh a dataset that's already loaded, see `handle_reload_dataset` in
 (PLAN.md §5.7's "hot-reload a single dataset" note) -- this function deliberately never
 overwrites an already-loaded entry on its own.
 
-A dataset directory with a `descriptor.json` but no `.snapshot.jld2` yet (created via
-`POST /api/v1/datasets` but never appended to) reopens with a freshly created empty
-engine of its declared `index_kind`/`distance` -- exactly the state it was in right after
-creation, before any items existed to snapshot.
+A dataset created with `POST /api/v1/datasets` and never appended to reopens as an empty
+engine of its declared `index_kind` and `distance`, which is the state it was left in.
 
 Returns the list of dataset ids actually (re)loaded, for a startup log line.
 """
@@ -1006,11 +1004,9 @@ end
 Soft-deletes a document (PLAN.md §1): marks its `doc_id` in the engine's tombstone set
 so future searches exclude it, without removing it from the underlying index.
 
-Also resaves the dataset's JLD2 snapshot, mirroring `handle_append`'s reasoning: a CLI
-`rebuild` (which is what actually purges tombstoned items) runs as a separate subprocess
-that only ever sees on-disk state, so a tombstone that lives purely in this process's
-in-memory `engine.deleted_ids` would be invisible to it. Without this resave, `rebuild`
-would have no way to know which documents were ever soft-deleted.
+The engine writes the deletion mark to storage as part of the call, which is what makes it
+visible to a CLI `rebuild`. That command is the one that removes deleted items, and it runs
+as a separate subprocess that reads only what is on disk.
 """
 function handle_delete_item(req::HTTP.Request, app::AppState, index::String)
     haskey(app.handles, index) || return json_response(404, Dict("error" => "dataset_not_found"))
@@ -1018,8 +1014,8 @@ function handle_delete_item(req::HTTP.Request, app::AppState, index::String)
     haskey(data, "doc_id") || return json_response(400, Dict("error" => "delete requires a 'doc_id' field"))
 
     doc_id = Int(data["doc_id"])
-    # `delete_item!` persists the tombstone itself; the JLD2 snapshot this used to write
-    # afterwards existed only because the engine did not persist its own state back then.
+    # `delete_item!` persists the deletion mark itself. This handler used to write a snapshot
+    # file afterwards, which was necessary only while the engine did not persist its own state.
     try
         SSE.delete_item!(app.handles[index], doc_id)
     catch e
@@ -1259,8 +1255,8 @@ function build_heavy_job_command(kind::String, data::AbstractDict, output_path::
         # `dataset` here is the source dataset being exported. `output_path` (computed by
         # the caller, guaranteed not to already exist) doubles as the bundle *directory*
         # `execute_dump` creates -- unlike every other HEAVY_JOB_KINDS result, this one is
-        # a directory of 3 files (dataset.avro/index.snapshot.jld2/manifest.json), not a
-        # single file (see `handle_get_job_result`'s `isdir` branch).
+        # a directory holding `dataset.avro`, `manifest.json` and a copy of the project
+        # directory, not a single file (see `handle_get_job_result`'s `isdir` branch).
         return ["dump", "--dataset", dataset, "--workdir", workdir, "--output", output_path]
     elseif kind == "load"
         # `dataset` here is the *target* dataset id being created (must not already exist
@@ -1383,8 +1379,8 @@ heavy job's CLI subprocess wrote (see `handle_submit_job`'s `result_ref` bookkee
 `409` if the job hasn't reached `completed` yet, `404` if there's no `result_ref` at all
 (e.g. a job submitted via the raw `"command"` escape hatch, which doesn't set one).
 
-A `dump` job's `result_ref` is a bundle *directory* (`dataset.avro`/
-`index.snapshot.jld2`/`manifest.json`), not a single file -- unlike every other
+A `dump` job's `result_ref` is a bundle *directory* (`dataset.avro`, `manifest.json` and a
+copy of the project directory), not a single file -- unlike every other
 `HEAVY_JOB_KINDS` result, it can't be streamed back as one HTTP body (and the bundle is
 meant to stay on the shared local filesystem the `LocalCLIExecutor`/operator already has
 access to, not leave it over HTTP). For that case this returns a small JSON pointer

@@ -66,7 +66,7 @@ function build_settings()
             help = "Rebuild a dataset's index from its current live (non-tombstoned) documents -- purges soft-deletes and, for text indices, retrains the vocabulary from scratch"
             action = :command
         "dump"
-            help = "Export a dataset (index snapshot + metadata) as a portable bundle directory for backup/migration"
+            help = "Export a dataset (its index and its metadata) as a portable bundle directory, for backup or migration"
             action = :command
         "load"
             help = "Import a dataset from a bundle directory produced by dump"
