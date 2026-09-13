@@ -39,6 +39,34 @@ julia --project=server -t auto -e 'using Pkg; Pkg.test()'
 Julia 1.12 or later, in both packages: it is what CI verifies, and the server's `[apps]`
 entries need `Pkg.Apps`, which does not exist before it.
 
+## How the documentation is written
+
+The manual, the tutorials and the docstrings are read by people who do not read English
+natively. Write for them:
+
+- **No analogies, no metaphors, no figurative verbs.** State the technical fact. Not "the seam
+  between the two packages" but "the public API of the engine"; not "what a recall target buys
+  is paid for in distance computations" but "a higher recall target requires more distance
+  computations". A figure of speech is one more step for a reader who is already translating,
+  and it adds nothing to the plain statement.
+- **One fact per sentence.** Keep sentences under about 35 words, and prefer subject-verb-object
+  order. Split a sentence rather than joining its parts with a dash, a semicolon or a
+  parenthetical aside; the aside forces the reader to hold two ideas at once.
+- **No superlatives and no evaluative adjectives.** Not "high-quality stopword lists",
+  "comprehensive analyses", "first-class engine", "the entire point of calibration", "not small
+  at scale". If something is better, say by how much, with the measurement.
+- **Ordinary vocabulary.** Avoid leverage, encapsulate, agnostic, orchestrate, hydrate, splice,
+  amortize, provenance, and similar terms when a common word exists. Technical terms of the
+  domain (posting list, beam search, column family, write lock) are not in this category: use
+  them, and define each one the first time it appears.
+- **Section titles name a topic**, not a claim: "Measuring the Cost of a Query", not "Cost
+  Accounting Across the Pool Boundary".
+- **Numbers, not adjectives.** A performance statement carries the measurement and the date it
+  was taken, as the existing pages do.
+
+This applies to prose. Code examples, tables, endpoint lists and measurements are unchanged by
+it.
+
 ## Things worth knowing before changing something
 
 - **Errors are typed in the engine and mapped at each boundary** (`src/errors.jl`). The engine
