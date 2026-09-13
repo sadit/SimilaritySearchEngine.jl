@@ -192,6 +192,23 @@ calibrate!(h; levels=[0.8, 0.9, 0.95, 0.97])
 precise_results = search(h, query, 5; minrecall=0.95)
 ```
 
+What a recall target buys is paid for in distance computations, and the price is measurable. Pass a [`SearchStats`](@ref) instance and the engine records what that specific call cost:
+
+```julia
+stats = SearchStats()
+search(h, query, 5; minrecall=0.8, stats)
+cheap = stats.distance_evaluations
+
+search(h, query, 5; minrecall=0.95, stats)
+precise = stats.distance_evaluations     # larger: a wider beam visits more of the graph
+```
+
+The gap is the entire point of calibration. Over 20,000 random 32-dimensional vectors, a 5-nearest-neighbour query costs 242 distance computations at `minrecall=0.8` and 927 at `minrecall=0.95` -- which, on that collection, is also what the uncalibrated default beam costs, out of 20,000 an exhaustive scan would perform.
+
+The field is overwritten by each call rather than accumulated, so read it before issuing the next query. [`ftsearch`](@ref) and the filtered form of [`search`](@ref) accept `stats` as well, the latter reporting the cost of the candidate search it ran underneath rather than of the `k` results that survived the predicate. An exhaustive backend reports the size of the collection, by definition.
+
+The count cannot be obtained any other way: a query runs on a context borrowed from the engine's pool and returned when the call ends, so the counters reachable from outside afterwards belong to whatever has searched since. This is also how the server fills the `distance_evaluations` field of its operation log.
+
 ### 9. Project Closure and Reopening
 
 To close all active RocksDB handles and memory-mapped files:

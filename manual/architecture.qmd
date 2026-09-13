@@ -210,6 +210,20 @@ flowchart LR
 
 The pool expands dynamically to match the peak concurrent query volume and retains allocated buffers to eliminate runtime allocation overhead.
 
+### Cost Accounting Across the Pool Boundary
+
+Pooling has a consequence for measurement. `SimilaritySearch.jl` accounts for the work an operation performs in the counters carried by the context itself (`ctx.costdists`), which accumulate and are never reset; the cost of a single operation is therefore a difference between two readings taken around it. That technique is sound for insertion, which runs on the engine's own `ctx` under an exclusive write lock, and unsound for search: the context a query ran on was borrowed from the pool for the duration of the call and returned at the end, so a reading taken afterwards from outside describes whatever else has since been searching concurrently, not the query in question.
+
+The count is consequently produced where it is unambiguous -- inside `IndexEngine.search_live`, between checkout and checkin -- and surfaced to the caller through a supplied `SearchStats` instance:
+
+```julia
+stats = SearchStats()
+results = search(h, query, 10; stats)
+stats.distance_evaluations
+```
+
+`search`, `ftsearch` and the filtered search path all accept it, the filtered path reporting the cost of the candidate search it actually ran rather than of the `k` results it returned. The field is overwritten by each call rather than accumulated. This is the mechanism behind the `distance_evaluations` field of the server's `op_log`, which has no other way to attribute work to the request that caused it.
+
 ---
 
 ## Persistence Architecture

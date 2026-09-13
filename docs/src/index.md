@@ -20,6 +20,7 @@ The library executes directly within the host Julia process without requiring ex
 - **Logical Deletions**: Non-destructive soft deletes (`delete_item!`) that preserve index integrity while marking candidates in query responses.
 - **Batch Query Execution**: `searchbatch(handle, queries, k)` resolves an entire set of queries in one parallel pass and returns the raw `(ids, dists)` matrices; `search(handle, queries, k)` returns the same hits hydrated with their `doc_id` and soft-delete state.
 - **Global Metric Operations**: In-process execution of all-pairs nearest neighbors (`allknn`), diverse sampling (`fft`), closest pair discovery (`closestpairs`), and cross-dataset closest pairs (`bichromatic_kclosestpairs`).
+- **Query Cost Accounting**: `search(handle, query, k; stats=SearchStats())` reports the distance computations performed by that one call -- the only vantage point from which they can be attributed, since a query runs on a context borrowed from the engine's pool and returned when it ends.
 - **Indexed External Identifiers**: `doc_id` resolution is backed by its own column family, and a `doc_id` shared by several items resolves to all of them.
 - **Storage Compaction**: `compact_project!`, and an automatic compaction when a writing session closes, keep reopen latency flat after bulk ingestion.
 - **Typed Errors**: `EngineError` and its four categories (`InvalidRequest`, `NotFound`, `ConflictingState`, `StorageFailure`) describe *why* a call failed, in types rather than prose.

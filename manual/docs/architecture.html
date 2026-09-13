@@ -211,6 +211,7 @@ window.Quarto = {
   <ul class="collapse">
   <li><a href="#reader-writer-synchronization-readwritelock" id="toc-reader-writer-synchronization-readwritelock" class="nav-link" data-scroll-target="#reader-writer-synchronization-readwritelock">Reader-Writer Synchronization: <code>ReadWriteLock</code></a></li>
   <li><a href="#context-isolation-contextpool" id="toc-context-isolation-contextpool" class="nav-link" data-scroll-target="#context-isolation-contextpool">Context Isolation: <code>ContextPool</code></a></li>
+  <li><a href="#cost-accounting-across-the-pool-boundary" id="toc-cost-accounting-across-the-pool-boundary" class="nav-link" data-scroll-target="#cost-accounting-across-the-pool-boundary">Cost Accounting Across the Pool Boundary</a></li>
   </ul></li>
   <li><a href="#persistence-architecture" id="toc-persistence-architecture" class="nav-link" data-scroll-target="#persistence-architecture">Persistence Architecture</a>
   <ul class="collapse">
@@ -473,6 +474,15 @@ window.Quarto = {
 </div>
 </div>
 <p>The pool expands dynamically to match the peak concurrent query volume and retains allocated buffers to eliminate runtime allocation overhead.</p>
+</section>
+<section id="cost-accounting-across-the-pool-boundary" class="level3">
+<h3 class="anchored" data-anchor-id="cost-accounting-across-the-pool-boundary">Cost Accounting Across the Pool Boundary</h3>
+<p>Pooling has a consequence for measurement. <code>SimilaritySearch.jl</code> accounts for the work an operation performs in the counters carried by the context itself (<code>ctx.costdists</code>), which accumulate and are never reset; the cost of a single operation is therefore a difference between two readings taken around it. That technique is sound for insertion, which runs on the engine’s own <code>ctx</code> under an exclusive write lock, and unsound for search: the context a query ran on was borrowed from the pool for the duration of the call and returned at the end, so a reading taken afterwards from outside describes whatever else has since been searching concurrently, not the query in question.</p>
+<p>The count is consequently produced where it is unambiguous – inside <code>IndexEngine.search_live</code>, between checkout and checkin – and surfaced to the caller through a supplied <code>SearchStats</code> instance:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>stats <span class="op">=</span> <span class="fu">SearchStats</span>()</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>results <span class="op">=</span> <span class="fu">search</span>(h, query, <span class="fl">10</span>; stats)</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>stats.distance_evaluations</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><code>search</code>, <code>ftsearch</code> and the filtered search path all accept it, the filtered path reporting the cost of the candidate search it actually ran rather than of the <code>k</code> results it returned. The field is overwritten by each call rather than accumulated. This is the mechanism behind the <code>distance_evaluations</code> field of the server’s <code>op_log</code>, which has no other way to attribute work to the request that caused it.</p>
 <hr>
 </section>
 </section>
@@ -529,8 +539,8 @@ window.Quarto = {
 <p><strong>Posting lists are lazy; document vectors are not</strong>, and the asymmetry is measured rather than assumed. A query reads one posting list per query <em>term</em>, so serving them from storage costs 1.8% in latency (66.8 ms against 68.0 ms) while removing 55.8 MB of 237.5 MB from memory. Scoring, by contrast, reads a <em>candidate’s</em> term vector (<code>bm25score(..., idx.db[docID])</code>), and the merge makes every document containing any query token a candidate – so a query with a frequent term turns lazy document vectors into one point read per document in the collection: 1,771.9 ms against 66.8 ms for the same query. Document vectors are therefore read into memory at open (0.76 s for that corpus).</p>
 <p>The lazy posting lists sit behind a least-frequently-used cache bounded by a maximum number of cached lists, trimmed back to a base size when it is exceeded. Eviction happens only after a query has fully resolved, never inside one: concurrent searches hold read locks, not exclusive ones, and a list dropped mid-query would be re-read by whichever of them was still walking it.</p>
 <p><strong>There is no migration path from the previous format, deliberately.</strong> A project written before the index was persisted opens with its profile and its staged text intact and no index at all; searching it says so, and one <code>index!</code> call rebuilds it from that staged text, which was always persisted independently of the index. Keeping the old format readable would mean keeping the whole rebuild-by-reinsertion path alive to serve projects that, with no released version, do not yet exist – so the procedure is explicit and costs a line:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>h <span class="op">=</span> <span class="fu">open_project</span>(workdir, dataset)</span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="fu">index!</span>(h)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>h <span class="op">=</span> <span class="fu">open_project</span>(workdir, dataset)</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="fu">index!</span>(h)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </section>
 <section id="external-identifier-resolution" class="level3">
 <h3 class="anchored" data-anchor-id="external-identifier-resolution">External Identifier Resolution</h3>
@@ -639,13 +649,13 @@ window.Quarto = {
 </table>
 <p>Concrete types carry structured detail where a caller can use it: <code>PendingBacklog</code> reports the staged and connected counts, <code>WrongDimension</code> the expected and received lengths, <code>InvalidOption</code> the keyword at fault.</p>
 <p><strong>Mapping lives at each boundary, never in the engine.</strong> The engine does not know what an HTTP status code or an exit code is. Its consumers translate:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="cf">try</span></span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>    <span class="fu">search</span>(handle, query, <span class="fl">10</span>)</span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="cf">catch</span> <span class="cn">e</span></span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>    <span class="cn">e</span> isa ConflictingState <span class="op">&amp;&amp;</span> <span class="cf">return</span> <span class="fu">retry_after_indexing</span>()</span>
-<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    <span class="cn">e</span> isa NotFound <span class="op">&amp;&amp;</span> <span class="cf">return</span> <span class="fu">not_found</span>()</span>
-<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    <span class="fu">rethrow</span>()</span>
-<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="cf">try</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>    <span class="fu">search</span>(handle, query, <span class="fl">10</span>)</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="cf">catch</span> <span class="cn">e</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>    <span class="cn">e</span> isa ConflictingState <span class="op">&amp;&amp;</span> <span class="cf">return</span> <span class="fu">retry_after_indexing</span>()</span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>    <span class="cn">e</span> isa NotFound <span class="op">&amp;&amp;</span> <span class="cf">return</span> <span class="fu">not_found</span>()</span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>    <span class="fu">rethrow</span>()</span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p><code>SimilaritySearchServer</code> maps categories to status codes (<code>NotFound</code> to 404, <code>ConflictingState</code> to 409, <code>InvalidRequest</code> to 400, anything else to 500) and its CLIs map the same categories to exit codes (4, 5, 2, 70), so a shell script can branch on the reason without reading output.</p>
 <p>The alternative — bare <code>error("...")</code> — forces every consumer to classify by message text, which breaks silently the first time the wording improves. That had already happened here: this engine’s own concurrency test recognized a refused whole-dataset operation with <code>occursin("requires no pending backlog", e.msg)</code>, and now matches <code>PendingBacklog</code> instead.</p>
 </section>

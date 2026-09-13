@@ -77,6 +77,15 @@ server is not exposed over HTTP yet.
 - `POST /api/v1/simsearch/{id}/calibrate` — recall calibration for a graph-backed project.
 - `POST /api/v1/simsearch/hybrid` and `/ftsearch_group` — reciprocal-rank fusion across two datasets, and text fan-out across a join group.
 
+### Telemetry
+- `GET /api/v1/datasets/{id}/log?offset=&limit=` — the dataset's `op_log`: one record per `search`/`ftsearch`/`append`/`delete`, with elapsed time and `distance_evaluations`.
+
+The evaluation count for a search comes from the engine (`SimilaritySearchEngine.SearchStats`,
+passed into `search`/`ftsearch` by `_run_search`), not from reading a context before and after
+the call: a search runs on a context borrowed from the engine's pool, so counters read from out
+here belong to whatever else has searched in the meantime. `append` does read its context that
+way, correctly — insertion holds the engine's own context under an exclusive write lock.
+
 ### Asynchronous jobs
 - `POST /api/v1/jobs/{kind}` — submits (`allknn`, `fft`, `neardup`, `hsp`, `searchbatch`, `closestpair`, `build`, `dump`, `load`). Returns `202` with a `job_id`.
 - `GET /api/v1/jobs/{job_id}` and `/result` — state and output.
@@ -120,8 +129,9 @@ Two levels, selected with `test_args=["full"]` or `SSE_TEST_LEVEL=full`:
 - **light** (50 assertions, ~5 s): the boundary with the engine — wire names to engine types,
   engine errors to status and exit codes, wire items to engine items — with no server started
   and no subprocess spawned. This is what catches an engine-side change on the day it lands.
-- **full** (520 assertions, ~17 min): the API, job and CLI end-to-end suites, which start real
-  servers and poll real subprocesses.
+- **full** (585 assertions, ~19 min): the API, job and CLI end-to-end suites, which start real
+  servers and poll real subprocesses. It includes a stretch of some ten minutes with no output
+  at all, near the end, where the CLI suite waits for job expiry — the run is not stuck.
 
 ```bash
 julia --project=server -e 'using Pkg; Pkg.develop(path="."); Pkg.test()'
