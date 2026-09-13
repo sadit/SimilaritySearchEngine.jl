@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 
-<title>Tutorials Overview – SimilaritySearchEngine.jl</title>
+<title>Server Tutorial – SimilaritySearchEngine.jl</title>
 <style>
 /* Default styles provided by pandoc.
 ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
@@ -22,6 +22,41 @@ ul.task-list li input[type="checkbox"] {
   width: 0.8em;
   margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
   vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
 }
 </style>
 
@@ -166,15 +201,30 @@ ul.task-list li input[type="checkbox"] {
 <div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
 <!-- sidebar -->
 <!-- margin-sidebar -->
-    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar zindex-bottom">
-        
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">On this page</h2>
+   
+  <ul>
+  <li><a href="#step-1-set-up-the-environment" id="toc-step-1-set-up-the-environment" class="nav-link active" data-scroll-target="#step-1-set-up-the-environment">Step 1: Set up the environment</a></li>
+  <li><a href="#step-2-start-the-server" id="toc-step-2-start-the-server" class="nav-link" data-scroll-target="#step-2-start-the-server">Step 2: Start the server</a></li>
+  <li><a href="#step-3-create-a-dataset-and-index-documents" id="toc-step-3-create-a-dataset-and-index-documents" class="nav-link" data-scroll-target="#step-3-create-a-dataset-and-index-documents">Step 3: Create a dataset and index documents</a></li>
+  <li><a href="#step-4-search" id="toc-step-4-search" class="nav-link" data-scroll-target="#step-4-search">Step 4: Search</a></li>
+  <li><a href="#step-5-read-failures" id="toc-step-5-read-failures" class="nav-link" data-scroll-target="#step-5-read-failures">Step 5: Read failures</a></li>
+  <li><a href="#step-6-run-a-heavy-job" id="toc-step-6-run-a-heavy-job" class="nav-link" data-scroll-target="#step-6-run-a-heavy-job">Step 6: Run a heavy job</a></li>
+  <li><a href="#step-7-the-same-thing-from-the-command-line" id="toc-step-7-the-same-thing-from-the-command-line" class="nav-link" data-scroll-target="#step-7-the-same-thing-from-the-command-line">Step 7: The same thing from the command line</a></li>
+  <li><a href="#step-8-the-python-client" id="toc-step-8-the-python-client" class="nav-link" data-scroll-target="#step-8-the-python-client">Step 8: The Python client</a></li>
+  <li><a href="#where-to-go-next" id="toc-where-to-go-next" class="nav-link" data-scroll-target="#where-to-go-next">Where to go next</a></li>
+  </ul>
+</nav>
     </div>
 <!-- main -->
 <main class="content" id="quarto-document-content">
 
 <header id="title-block-header" class="quarto-title-block default">
 <div class="quarto-title">
-<h1 class="title">Tutorials Overview</h1>
+<h1 class="title">Server Tutorial</h1>
+<p class="subtitle lead">From an empty workdir to a query over HTTP, a job, and the same thing from the command line</p>
 </div>
 
 
@@ -191,28 +241,132 @@ ul.task-list li input[type="checkbox"] {
 </header>
 
 
-<p>This section provides hands-on tutorials for working with <code>SimilaritySearchEngine.jl</code>, the embedded engine. To reach the same capabilities over HTTP instead, the <a href="../server/tutorial.html">server tutorial</a> covers the service layer built on top of it.</p>
+<p>This walks through starting the server, creating a dataset, indexing documents, searching them, and running a heavy job asynchronously. It assumes you have this repository checked out; <code>SimilaritySearchServer</code> is the package under <code>server/</code>, and the engine it serves is the package at the root, whose own tutorial is <a href="../tutorials/getting-started.html">Getting started</a>.</p>
+<p>Everything below happens over HTTP or a command line, but nothing below is implemented here: each endpoint is a thin translation of one engine call, and reading the two tutorials side by side is the fastest way to see which is which.</p>
+<p>Julia 1.12 or later is required.</p>
+<section id="step-1-set-up-the-environment" class="level2">
+<h2 class="anchored" data-anchor-id="step-1-set-up-the-environment">Step 1: Set up the environment</h2>
+<p>The server depends on the engine from this same repository, so develop it by path once:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">--project</span><span class="op">=</span>server <span class="at">-e</span> <span class="st">'using Pkg; Pkg.develop(path="."); Pkg.instantiate()'</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="step-2-start-the-server" class="level2">
+<h2 class="anchored" data-anchor-id="step-2-start-the-server">Step 2: Start the server</h2>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">--project</span><span class="op">=</span>server <span class="at">-t</span> auto <span class="at">-m</span> SimilaritySearchServer serve</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>On a first run it writes a default configuration and listens on <code>http://127.0.0.1:8080</code>. Every dataset lives under <code>&lt;workdir&gt;/datasets/</code>, and the server reopens all of them at startup — a restart loses nothing.</p>
+<p>To install the three apps (<code>similarity-search</code>, <code>similarity-search-admin</code>, <code>similarity-search-serve</code>) into <code>~/.julia/bin</code> instead of invoking Julia each time:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">-e</span> <span class="st">'using Pkg; Pkg.Apps.develop(path="server")'</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="step-3-create-a-dataset-and-index-documents" class="level2">
+<h2 class="anchored" data-anchor-id="step-3-create-a-dataset-and-index-documents">Step 3: Create a dataset and index documents</h2>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="ex">curl</span> <span class="at">-s</span> <span class="at">-X</span> POST localhost:8080/api/v1/datasets <span class="dt">\</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>     <span class="at">-H</span> <span class="st">'Content-Type: application/json'</span> <span class="dt">\</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>     <span class="at">-d</span> <span class="st">'{"id": "demo", "index_kind": "bm25_invfile"}'</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="ex">curl</span> <span class="at">-s</span> <span class="at">-X</span> POST localhost:8080/api/v1/simsearch/demo/append <span class="dt">\</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>     <span class="at">-H</span> <span class="st">'Content-Type: application/json'</span> <span class="dt">\</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>     <span class="at">-d</span> <span class="st">'{"items": [</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a><span class="st">           {"doc_id": "d1", "text": "el gato duerme sobre el tejado", "keywords": ["gato"]},</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a><span class="st">           {"doc_id": "d2", "text": "un perro ladra en la calle", "year": 2024}</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a><span class="st">         ]}'</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><code>index_kind</code> names what the project holds and what indexes it: <code>searchgraph</code> (dense vectors, the default), <code>bm25_invfile</code> or <code>invfile</code> (text), <code>sparse_invfile</code> (caller-encoded sparse vectors, which also needs <code>dimension</code>). Any field that is not <code>doc_id</code>, <code>keywords</code>, <code>refs</code>, <code>text</code>, <code>vector</code>, <code>indices</code> or <code>values</code> becomes free-form metadata — <code>year</code> above.</p>
+<p>Appending indexes immediately, so the documents are searchable when the call returns.</p>
+</section>
+<section id="step-4-search" class="level2">
+<h2 class="anchored" data-anchor-id="step-4-search">Step 4: Search</h2>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="ex">curl</span> <span class="at">-s</span> <span class="at">-X</span> POST localhost:8080/api/v1/simsearch/demo/ftsearch <span class="dt">\</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>     <span class="at">-H</span> <span class="st">'Content-Type: application/json'</span> <span class="dt">\</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>     <span class="at">-d</span> <span class="st">'{"text": "gato tejado", "k": 5}'</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>A dense project answers <code>/search</code> with a <code>vector</code> instead, and accepts a metadata <code>filter</code>:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6"><pre class="sourceCode json code-with-copy"><code class="sourceCode json"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"vector"</span><span class="fu">:</span> <span class="ot">[</span><span class="fl">0.1</span><span class="ot">,</span> <span class="fl">0.2</span><span class="ot">,</span> <span class="fl">0.3</span><span class="ot">]</span><span class="fu">,</span> <span class="dt">"k"</span><span class="fu">:</span> <span class="dv">10</span><span class="fu">,</span> <span class="dt">"filter"</span><span class="fu">:</span> <span class="fu">{</span><span class="dt">"year"</span><span class="fu">:</span> <span class="fu">{</span><span class="dt">"$gte"</span><span class="fu">:</span> <span class="dv">2024</span><span class="fu">}}}</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>A filtered search reads a bounded number of candidates before filtering, so it can return fewer than <code>k</code>; the response says so with <code>insufficient_results</code>.</p>
+</section>
+<section id="step-5-read-failures" class="level2">
+<h2 class="anchored" data-anchor-id="step-5-read-failures">Step 5: Read failures</h2>
+<p>Failures are typed, and the status code tells you what kind of problem it is before you read the message:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: right;">status</th>
+<th style="text-align: left;">meaning</th>
+<th style="text-align: left;">example</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: right;">400</td>
+<td style="text-align: left;">the request cannot be honoured as written</td>
+<td style="text-align: left;">a dense <code>vector</code> sent to a text project</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">404</td>
+<td style="text-align: left;">something named does not exist</td>
+<td style="text-align: left;">an unknown dataset id</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;">409</td>
+<td style="text-align: left;">the project is not in a state to serve it</td>
+<td style="text-align: left;">a whole-dataset job against a staged backlog</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">500</td>
+<td style="text-align: left;">stored data could not be read</td>
+<td style="text-align: left;">—</td>
+</tr>
+</tbody>
+</table>
+<p>The body carries both <code>error</code> (prose) and <code>kind</code> (the engine’s concrete error type), so a client can branch on <code>kind</code> without matching on text.</p>
+</section>
+<section id="step-6-run-a-heavy-job" class="level2">
+<h2 class="anchored" data-anchor-id="step-6-run-a-heavy-job">Step 6: Run a heavy job</h2>
+<p>Anything that scans the whole collection runs as a job: the HTTP call enqueues and returns immediately, and a dispatcher runs it as its own Julia subprocess.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="va">JOB</span><span class="op">=</span><span class="va">$(</span><span class="ex">curl</span> <span class="at">-s</span> <span class="at">-X</span> POST localhost:8080/api/v1/jobs/allknn <span class="dt">\</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>      <span class="at">-H</span> <span class="st">'Content-Type: application/json'</span> <span class="dt">\</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>      <span class="at">-d</span> <span class="st">'{"dataset": "demo", "k": 5}'</span> <span class="kw">|</span> <span class="ex">jq</span> <span class="at">-r</span> .job_id<span class="va">)</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="ex">curl</span> <span class="at">-s</span> localhost:8080/api/v1/jobs/<span class="va">$JOB</span>          <span class="co"># queued | running | completed | failed</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a><span class="ex">curl</span> <span class="at">-s</span> localhost:8080/api/v1/jobs/<span class="va">$JOB</span>/result   <span class="co"># once completed</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Jobs open their dataset read-only, so they can run while the server keeps serving it.</p>
+</section>
+<section id="step-7-the-same-thing-from-the-command-line" class="level2">
+<h2 class="anchored" data-anchor-id="step-7-the-same-thing-from-the-command-line">Step 7: The same thing from the command line</h2>
+<p>Every operation is also a subcommand, against a workdir rather than a URL:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb8"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">--project</span><span class="op">=</span>server <span class="at">-m</span> SimilaritySearchServer build <span class="dt">\</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>      <span class="at">--dataset</span> demo_cli <span class="at">--input</span> corpus.jsonl <span class="at">--index-kind</span> bm25_invfile <span class="at">--workdir</span> ./workdir</span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">--project</span><span class="op">=</span>server <span class="at">-m</span> SimilaritySearchServer describe <span class="at">--dataset</span> demo_cli <span class="at">--workdir</span> ./workdir</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>CLI exit codes mirror the status codes above: <code>2</code> invalid request, <code>4</code> not found, <code>5</code> conflicting state, <code>70</code> storage failure, and <code>1</code> for the command’s own refusals (no such dataset, unreadable input). A script can branch on those without parsing output.</p>
+</section>
+<section id="step-8-the-python-client" class="level2">
+<h2 class="anchored" data-anchor-id="step-8-the-python-client">Step 8: The Python client</h2>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb9"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> server/python</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="ex">pip</span> install <span class="at">-r</span> requirements.txt</span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="bu">export</span> <span class="va">PYTHONPATH</span><span class="op">=</span><span class="va">$(</span><span class="bu">pwd</span><span class="va">)</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> similarity_search.client <span class="im">import</span> SimilaritySearchClient</span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> similarity_search.jobs <span class="im">import</span> run_job</span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>client <span class="op">=</span> SimilaritySearchClient(<span class="st">"http://127.0.0.1:8080"</span>)</span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(client.readyz())                      <span class="co"># {'status': 'ok'}</span></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>ds_id <span class="op">=</span> client.create_dataset()</span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a>result <span class="op">=</span> run_job(client, kind<span class="op">=</span><span class="st">"allknn"</span>, command<span class="op">=</span>[<span class="st">"--dataset"</span>, ds_id, <span class="st">"--k"</span>, <span class="st">"5"</span>])</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><code>stress_client.py</code> drives the whole loop under load:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb11"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="ex">python</span> stress_client.py <span class="at">--jobs</span> 3</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="where-to-go-next" class="level2">
+<h2 class="anchored" data-anchor-id="where-to-go-next">Where to go next</h2>
 <ul>
-<li><strong><a href="../tutorials/getting-started.html">Getting Started</a></strong>: A comprehensive walkthrough using paragraphs from Mary Shelley’s <em>Frankenstein</em>. Demonstrates:
-<ul>
-<li>Dense vector similarity search using LSI-derived embeddings with <code>SearchGraph</code>.</li>
-<li>Sparse vector indexing with <code>InvertedFile</code>.</li>
-<li>Full-text retrieval with BM25 and TF-IDF models.</li>
-<li>Logical soft deletions and metadata filtering.</li>
-<li>Target recall calibration via <code>calibrate!</code>.</li>
-<li>Transactional persistence (closing and reopening projects).</li>
-<li>Whole-dataset metric operations (<code>allknn</code>, <code>fft</code>, <code>closestpairs</code>, <code>bichromatic_kclosestpairs</code>).</li>
-</ul></li>
-<li><strong><a href="../tutorials/paragraph-search.html">Multilingual Paragraph Search</a></strong>: A large-scale tutorial indexing four corpora across three languages (English, Spanish, Portuguese Project Gutenberg collections, and English Wikipedia). Demonstrates:
-<ul>
-<li>Fitting and configuring linguistic profiles (<code>TextProfile</code>).</li>
-<li>Orthographic query variant resolution and semantic query expansion.</li>
-<li>Empirical benchmarking of indexing throughput, memory overhead, and search latency.</li>
-</ul></li>
+<li>The <a href="../server/manual.html">server manual</a> — what the package contains, how a dataset is held, the full endpoint list, and the error mapping in full.</li>
+<li>The <a href="../architecture.html">engine’s architecture</a> — everything about storage, indexing and search behaviour, which is where the answers are whenever an endpoint’s behaviour is surprising.</li>
+<li>The <a href="https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html">Server API reference</a> — every handler, job state and configuration field, from the docstrings.</li>
 </ul>
-<p>Once the engine’s model is familiar, the <a href="../server/manual.html">server manual</a> reads as a thin translation layer: an endpoint per call, a status code per error category, and a job per whole-dataset operation.</p>
 
 
+</section>
 
 </main> <!-- /main -->
 <script id="quarto-html-after-body" type="application/javascript">

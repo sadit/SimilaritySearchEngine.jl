@@ -358,7 +358,7 @@ catch e
 end
 ```
 
-`SimilaritySearchServer` maps categories to status codes (`NotFound` to 404, `ConflictingState` to 409, `InvalidRequest` to 400, anything else to 500) and its CLIs map the same categories to exit codes (4, 5, 2, 70), so a shell script can branch on the reason without reading output.
+`SimilaritySearchServer` maps categories to status codes (`NotFound` to 404, `ConflictingState` to 409, `InvalidRequest` to 400, anything else to 500) and its CLIs map the same categories to exit codes (4, 5, 2, 70), so a shell script can branch on the reason without reading output. That mapping is the entire coupling between the two packages of this repository, and it is written out in one table in the [server manual](server/manual.qmd#how-failures-are-reported).
 
 The alternative — bare `error("...")` — forces every consumer to classify by message text, which breaks silently the first time the wording improves. That had already happened here: this engine's own concurrency test recognized a refused whole-dataset operation with `occursin("requires no pending backlog", e.msg)`, and now matches `PendingBacklog` instead.
 

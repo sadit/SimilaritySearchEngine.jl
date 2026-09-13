@@ -3,7 +3,7 @@ title: "Tutorials Overview"
 lang: en-US
 ---
 
-This section provides hands-on tutorials for working with `SimilaritySearchEngine.jl`:
+This section provides hands-on tutorials for working with `SimilaritySearchEngine.jl`, the embedded engine. To reach the same capabilities over HTTP instead, the [server tutorial](../server/tutorial.qmd) covers the service layer built on top of it.
 
 - **[Getting Started](getting-started.qmd)**: A comprehensive walkthrough using paragraphs from Mary Shelley's *Frankenstein*. Demonstrates:
   - Dense vector similarity search using LSI-derived embeddings with `SearchGraph`.
@@ -18,3 +18,7 @@ This section provides hands-on tutorials for working with `SimilaritySearchEngin
   - Fitting and configuring linguistic profiles (`TextProfile`).
   - Orthographic query variant resolution and semantic query expansion.
   - Empirical benchmarking of indexing throughput, memory overhead, and search latency.
+
+Once the engine's model is familiar, the [server manual](../server/manual.qmd) reads as a thin
+translation layer: an endpoint per call, a status code per error category, and a job per
+whole-dataset operation.

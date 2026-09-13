@@ -158,7 +158,7 @@
     "href": "tutorials/index.html",
     "title": "Tutorials Overview",
     "section": "",
-    "text": "This section provides hands-on tutorials for working with SimilaritySearchEngine.jl:\n\nGetting Started: A comprehensive walkthrough using paragraphs from Mary Shelley’s Frankenstein. Demonstrates:\n\nDense vector similarity search using LSI-derived embeddings with SearchGraph.\nSparse vector indexing with InvertedFile.\nFull-text retrieval with BM25 and TF-IDF models.\nLogical soft deletions and metadata filtering.\nTarget recall calibration via calibrate!.\nTransactional persistence (closing and reopening projects).\nWhole-dataset metric operations (allknn, fft, closestpairs, bichromatic_kclosestpairs).\n\nMultilingual Paragraph Search: A large-scale tutorial indexing four corpora across three languages (English, Spanish, Portuguese Project Gutenberg collections, and English Wikipedia). Demonstrates:\n\nFitting and configuring linguistic profiles (TextProfile).\nOrthographic query variant resolution and semantic query expansion.\nEmpirical benchmarking of indexing throughput, memory overhead, and search latency."
+    "text": "This section provides hands-on tutorials for working with SimilaritySearchEngine.jl, the embedded engine. To reach the same capabilities over HTTP instead, the server tutorial covers the service layer built on top of it.\n\nGetting Started: A comprehensive walkthrough using paragraphs from Mary Shelley’s Frankenstein. Demonstrates:\n\nDense vector similarity search using LSI-derived embeddings with SearchGraph.\nSparse vector indexing with InvertedFile.\nFull-text retrieval with BM25 and TF-IDF models.\nLogical soft deletions and metadata filtering.\nTarget recall calibration via calibrate!.\nTransactional persistence (closing and reopening projects).\nWhole-dataset metric operations (allknn, fft, closestpairs, bichromatic_kclosestpairs).\n\nMultilingual Paragraph Search: A large-scale tutorial indexing four corpora across three languages (English, Spanish, Portuguese Project Gutenberg collections, and English Wikipedia). Demonstrates:\n\nFitting and configuring linguistic profiles (TextProfile).\nOrthographic query variant resolution and semantic query expansion.\nEmpirical benchmarking of indexing throughput, memory overhead, and search latency.\n\n\nOnce the engine’s model is familiar, the server manual reads as a thin translation layer: an endpoint per call, a status code per error category, and a job per whole-dataset operation."
   },
   {
     "objectID": "tutorials/paragraph-search.html",
@@ -235,7 +235,7 @@
     "href": "index.html",
     "title": "SimilaritySearchEngine.jl",
     "section": "",
-    "text": "SimilaritySearchEngine.jl is an embedded, in-process library for similarity search and information retrieval in Julia. It provides transactional, persistent storage for collections of dense vectors, sparse representations, and text documents, backed by SimilaritySearch.jl, TextSearch.jl, and RocksDB.jl.\nBy executing directly within the host process, SimilaritySearchEngine.jl eliminates the operational overhead of HTTP servers, background daemons, and inter-process communication layers. Access control is managed directly through standard operating system file permissions on the working directory."
+    "text": "This site documents one repository with two packages. They are developed together, tested together and released together, and the line between them is deliberate:\nEverything about storing, indexing and searching lives in the engine. The server calls its public API and nothing beneath it; in return, the engine never learns what a status code is. That is the whole architecture of the repository, and it is why a failure in the engine travels as a typed error rather than as a message: each frontier — HTTP, CLI, or a Julia caller — decides on its own what that category means to its audience."
   },
   {
     "objectID": "index.html#what-it-gives-you",
@@ -263,7 +263,7 @@
     "href": "index.html#installation",
     "title": "SimilaritySearchEngine.jl",
     "section": "Installation",
-    "text": "Installation\nSimilaritySearchEngine.jl is not in the General registry yet, so it is installed from its repository. Its dependencies — SimilaritySearch.jl, TextSearch.jl, RocksDB.jl and the RocksDB_jll binaries — are all registered, so nothing else has to be cloned or built:\nusing Pkg\nPkg.add(url=\"https://github.com/sadit/SimilaritySearchEngine.jl\")\nJulia 1.12 or later is required. To modify the package, clone the repository and Pkg.develop(path=...) the clone; no Manifest.toml is committed, so Pkg.instantiate() resolves the base libraries from the registry unless you develop them by path as well."
+    "text": "Installation\nNeither package is in the General registry yet, so both are installed from this repository. The engine’s dependencies — SimilaritySearch.jl, TextSearch.jl, RocksDB.jl and the RocksDB_jll binaries — are all registered, so nothing else has to be cloned or built:\nusing Pkg\nPkg.add(url=\"https://github.com/sadit/SimilaritySearchEngine.jl\")\nThe server is the same repository’s server/ subdirectory, and it reaches the engine by path:\ngit clone https://github.com/sadit/SimilaritySearchEngine.jl\ncd SimilaritySearchEngine.jl\njulia --project=server -e 'using Pkg; Pkg.develop(path=\".\"); Pkg.instantiate()'\njulia --project=server -t auto -m SimilaritySearchServer serve\nJulia 1.12 or later is required by both. No Manifest.toml is committed for the engine, so Pkg.instantiate() resolves the base libraries from the registry unless you develop them by path as well."
   },
   {
     "objectID": "index.html#core-capabilities",
@@ -396,7 +396,7 @@
     "href": "architecture.html#failure-reporting-typed-errors-and-their-boundaries",
     "title": "Architecture",
     "section": "Failure Reporting: Typed Errors and Their Boundaries",
-    "text": "Failure Reporting: Typed Errors and Their Boundaries\nEvery failure the engine raises deliberately is an EngineError, and the type is the contract. Four abstract categories sit beneath it, and a concrete type beneath each:\n\n\n\n\n\n\n\n\ncategory\nmeaning\nconcrete types\n\n\n\n\nInvalidRequest\nthe call cannot be honoured as written; retrying it unchanged fails again\nPayloadMismatch, WrongDimension, UnknownBackend, InvalidOption, UnsupportedOperation\n\n\nNotFound\nsomething the call named does not exist\nProfileNotInstalled\n\n\nConflictingState\nthe request is well formed but the project is not in a state that can serve it; the same call succeeds later\nPendingBacklog, NothingStaged, NoIndex, NotTrained, EmptyProject\n\n\nStorageFailure\nwhat was read back cannot be interpreted\nCorruptedStorage\n\n\n\nConcrete types carry structured detail where a caller can use it: PendingBacklog reports the staged and connected counts, WrongDimension the expected and received lengths, InvalidOption the keyword at fault.\nMapping lives at each boundary, never in the engine. The engine does not know what an HTTP status code or an exit code is. Its consumers translate:\ntry\n    search(handle, query, 10)\ncatch e\n    e isa ConflictingState && return retry_after_indexing()\n    e isa NotFound && return not_found()\n    rethrow()\nend\nSimilaritySearchServer maps categories to status codes (NotFound to 404, ConflictingState to 409, InvalidRequest to 400, anything else to 500) and its CLIs map the same categories to exit codes (4, 5, 2, 70), so a shell script can branch on the reason without reading output.\nThe alternative — bare error(\"...\") — forces every consumer to classify by message text, which breaks silently the first time the wording improves. That had already happened here: this engine’s own concurrency test recognized a refused whole-dataset operation with occursin(\"requires no pending backlog\", e.msg), and now matches PendingBacklog instead."
+    "text": "Failure Reporting: Typed Errors and Their Boundaries\nEvery failure the engine raises deliberately is an EngineError, and the type is the contract. Four abstract categories sit beneath it, and a concrete type beneath each:\n\n\n\n\n\n\n\n\ncategory\nmeaning\nconcrete types\n\n\n\n\nInvalidRequest\nthe call cannot be honoured as written; retrying it unchanged fails again\nPayloadMismatch, WrongDimension, UnknownBackend, InvalidOption, UnsupportedOperation\n\n\nNotFound\nsomething the call named does not exist\nProfileNotInstalled\n\n\nConflictingState\nthe request is well formed but the project is not in a state that can serve it; the same call succeeds later\nPendingBacklog, NothingStaged, NoIndex, NotTrained, EmptyProject\n\n\nStorageFailure\nwhat was read back cannot be interpreted\nCorruptedStorage\n\n\n\nConcrete types carry structured detail where a caller can use it: PendingBacklog reports the staged and connected counts, WrongDimension the expected and received lengths, InvalidOption the keyword at fault.\nMapping lives at each boundary, never in the engine. The engine does not know what an HTTP status code or an exit code is. Its consumers translate:\ntry\n    search(handle, query, 10)\ncatch e\n    e isa ConflictingState && return retry_after_indexing()\n    e isa NotFound && return not_found()\n    rethrow()\nend\nSimilaritySearchServer maps categories to status codes (NotFound to 404, ConflictingState to 409, InvalidRequest to 400, anything else to 500) and its CLIs map the same categories to exit codes (4, 5, 2, 70), so a shell script can branch on the reason without reading output. That mapping is the entire coupling between the two packages of this repository, and it is written out in one table in the server manual.\nThe alternative — bare error(\"...\") — forces every consumer to classify by message text, which breaks silently the first time the wording improves. That had already happened here: this engine’s own concurrency test recognized a refused whole-dataset operation with occursin(\"requires no pending backlog\", e.msg), and now matches PendingBacklog instead."
   },
   {
     "objectID": "tutorials/getting-started.html#handling-failures",
@@ -404,5 +404,166 @@
     "title": "Getting Started",
     "section": "Handling Failures",
     "text": "Handling Failures\nThe engine raises typed errors, and the type says why a call failed. Four categories carry the meaning, and a program acts on those rather than on the message text:\nusing SimilaritySearchEngine\n\ntry\n    searchbatch(h, queries, 10)\ncatch e\n    if e isa PendingBacklog\n        # Items were appended but not indexed yet. The engine reports both counts.\n        @info \"indexing $(e.staged - e.connected) pending item(s) first\"\n        index!(h)\n        searchbatch(h, queries, 10)\n    elseif e isa ConflictingState\n        rethrow()          # some other state problem: not trained, empty, no index\n    else\n        rethrow()\n    end\nend\nThe categories, and when each one appears:\n\n\n\n\n\n\n\n\ncategory\nmeaning\ntypical cause\n\n\n\n\nInvalidRequest\nthe call cannot be honoured as written\na DenseItem appended to a text project, a query of the wrong dimension, dimension on a dense project\n\n\nNotFound\nsomething the call named does not exist\nDefaultProfile(:es) with no profile installed\n\n\nConflictingState\nthe project is not in a state that can serve the request\nwhole-dataset operations against a staged backlog, ftsearch before the first index!\n\n\nStorageFailure\nstored data this version cannot interpret\na project written by a newer layout\n\n\n\nMatching a category catches every specific type beneath it, which is what makes this stable: a future EngineError added under ConflictingState is already handled by code that matches the category. Matching a concrete type (PendingBacklog, WrongDimension, InvalidOption) is for when the distinction matters, and those carry the detail — counts, expected dimension, the offending keyword."
+  },
+  {
+    "objectID": "index.html#which-half-do-you-need",
+    "href": "index.html#which-half-do-you-need",
+    "title": "SimilaritySearchEngine.jl",
+    "section": "Which half do you need?",
+    "text": "Which half do you need?\nSearching inside your own Julia process. The engine is the whole answer: a working directory, a project handle, and function calls. No daemon, no ports, no serialization between you and the index; access control is the file permissions of the working directory.\n: Start with Getting started, then Architecture.\nServing search to other processes, machines or languages. The server wraps the same engine in a service: one EmbeddedEngine per dataset, endpoints that translate one request into one engine call, and whole-collection operations dispatched as independent Julia subprocesses so that a query never waits behind an allknn.\n: Start with the server tutorial, then the server manual.\nBoth halves are in one reference, generated from the docstrings: Engine API and Server API."
+  },
+  {
+    "objectID": "index.html#what-the-engine-provides",
+    "href": "index.html#what-the-engine-provides",
+    "title": "SimilaritySearchEngine.jl",
+    "section": "What the engine provides",
+    "text": "What the engine provides\n\nProject Lifecycle Management: Functions create_project, open_project, and close_project! manage the on-disk RocksDB directory and the associated live search engine.\nEngine and Backend Separation:\n\nPayload Engines: DenseEngine, SparseEngine, and FullTextEngine specify the stored data domain.\nIndex Backends: SearchGraph, ExhaustiveSearch, InvertedFile, and BM25InvertedFile define the underlying indexing data structures.\nThe function payload_kind(engine) identifies the data domain, and the BACKENDS registry enforces valid engine-backend pairings.\n\nDense Vector Search: Approximate nearest-neighbor search via SearchGraph with dynamic beam-search tuning, or exact brute-force search via ExhaustiveSearch and ParallelExhaustiveSearch. For SearchGraph, insertions (append_items!) and graph construction (index!) are decoupled to give callers explicit control over indexing latency.\nSparse Vector Search: Native inverted index search (InvertedFile) over user-encoded sparse representations of fixed dimension. Distance functions include cosine distance over weights and discrete set metrics (Dist.Sets.*) over non-zero coordinate supports.\nFull-Text Retrieval: Lexical search backed by BM25InvertedFile or TF-IDF-weighted TextInvertedFile. The initial index! call fits or initializes a TextProfile from staged texts, establishing the vocabulary and linguistic weighting model.\nExplicit Text Modeling: Text projects require an explicit AbstractTextModelSpec:\n\nDefaultProfile(:lang): Resolves a pre-trained language profile and refits vocabulary frequencies against the staged corpus.\nBaseProfile(p): Utilizes an existing, pre-computed TextProfile.\nFitFromCorpus(cfg): Fits a new profile directly from the staged corpus, bounded by max_documents.\nQuery execution accepts a QueryPolicy to control automatic orthographic correction and semantic query expansion.\n\nStrongly Typed Interface: Inputs are encapsulated in typed containers (DenseItem, SparseItem, TextItem), and queries return structured results (SearchResult, StoredItem, ExistsResult).\nLogical Deletions: The delete_item! function marks documents as logically deleted without mutating the underlying search index. Queries return candidates alongside an explicit deleted flag.\nTarget Recall Calibration: The calibrate! function executes hyperparameter optimization to calibrate beam-search configurations for target recall constraints (minrecall), and SearchStats reports what a query actually cost in distance computations.\nWhole-Dataset Metric Operations: Synchronous, in-process execution of all-pairs nearest neighbors (allknn), diverse center selection (fft), closest pair discovery (closestpairs), and cross-dataset closest pairs (bichromatic_kclosestpairs).\nGranular Storage Persistence: High-throughput persistence utilizing a hybrid layout of RocksDB column families and dedicated memory-mapped vector files (dense_vectors.mmapdb).\nTyped Errors: Deliberate failures are raised as EngineError subtypes grouped into four categories (InvalidRequest, NotFound, ConflictingState, StorageFailure), so a caller can act on a failure without interpreting its message."
+  },
+  {
+    "objectID": "index.html#what-the-server-adds",
+    "href": "index.html#what-the-server-adds",
+    "title": "SimilaritySearchEngine.jl",
+    "section": "What the server adds",
+    "text": "What the server adds\n\nREST API: dataset lifecycle, append, dense/sparse/text search with metadata filters, soft deletes, recall calibration, and cross-dataset fusion (hybrid, ftsearch_group).\nAsynchronous jobs: allknn, fft, neardup, hsp, searchbatch, closestpair, build, dump and load are enqueued and dispatched as independent Julia subprocesses, each opening its dataset read-only so that serving continues while they run.\nTwo command lines: similarity-search for the data plane against a working directory, similarity-search-ctl for the control plane against a running server — installable as apps with Pkg.Apps.\nOperational surface: access tokens, a per-dataset operation log (whose distance-evaluation counts come from the engine’s SearchStats), result cursors for pagination, health and metrics endpoints, and hot unload/reload of a single dataset.\nOne error vocabulary: the engine’s four categories become HTTP status codes and CLI exit codes by category, never by message — the boundary described above, made concrete."
+  },
+  {
+    "objectID": "index.html#navigating-this-site",
+    "href": "index.html#navigating-this-site",
+    "title": "SimilaritySearchEngine.jl",
+    "section": "Navigating this site",
+    "text": "Navigating this site\nEngine\n\nArchitecture: module map, engine type hierarchy, the staging/indexing split, the concurrency model, the on-disk layout, and how failures are reported.\nGetting started: dense vectors, sparse indexing, BM25 and TF-IDF text search, filtering, calibration, cost accounting, and whole-dataset operations.\nMultilingual paragraph search: a large-scale evaluation over Project Gutenberg and Wikipedia corpora.\n\nServer\n\nServer manual: what the package contains, how a dataset is held, the endpoint surface, the error mapping, configuration and the two test levels.\nServer tutorial: from an empty working directory to a query over HTTP, a heavy job, the command line, and the Python client.\n\nReference\n\nEngine API and Server API, generated with Documenter from the docstrings of both packages."
+  },
+  {
+    "objectID": "server/manual.html",
+    "href": "server/manual.html",
+    "title": "Server Manual",
+    "section": "",
+    "text": "SimilaritySearchServer exposes SimilaritySearchEngine — the embedded engine documented in the rest of this site — through a REST API, two CLIs, and an asynchronous job queue. It holds no index logic of its own: everything about storing, indexing and searching lives in the engine, and this package is the layer that turns HTTP requests and command lines into engine calls, and engine results and failures into responses and exit codes.\nThat boundary is the thing to keep in mind while reading the rest: when something about projects, persistence, profiles or search behaviour is unclear, the answer is in the engine’s architecture guide, not here. The two packages live in one repository and are documented as one thing on purpose: the seam between them is the engine’s public API, and both sides of that seam are described here."
+  },
+  {
+    "objectID": "server/manual.html#what-this-package-contains",
+    "href": "server/manual.html#what-this-package-contains",
+    "title": "Server Manual",
+    "section": "1. What this package contains",
+    "text": "1. What this package contains\n\n\n\n\n\n\n\nfile\nwhat it does\n\n\n\n\nconfig.jl, cli.jl, ctl.jl\nTOML configuration, and the two ArgParse command lines (similarity-search, similarity-search-admin)\n\n\ncli_handlers.jl, ctl_handlers.jl\none function per subcommand: build, search, searchbatch, allknn, fft, neardup, hsp, closestpair, describe, rebuild, dump, load\n\n\nserver.jl\nthe HTTP API (Oxygen), one EmbeddedEngine per dataset, and the request/response mapping\n\n\njobs.jl, executors.jl\nthe job spool: an atomic directory tree (queued/, running/, completed/, failed/) of .job.toml files, dispatched as independent Julia subprocesses\n\n\ntokens.jl, telemetry.jl, cursors.jl\naccess tokens, the op_log operation history, and server-side result cursors for pagination\n\n\ninteractive.jl\nguided invocation through REPL.TerminalMenus\n\n\napps/\nthe three installable app entry points\n\n\n\nSchema, persistence, the index engine and project management are not here: they are SimilaritySearchEngine.Schema, .Persistence, .IndexEngine and .Project."
+  },
+  {
+    "objectID": "server/manual.html#how-a-dataset-is-held",
+    "href": "server/manual.html#how-a-dataset-is-held",
+    "title": "Server Manual",
+    "section": "2. How a dataset is held",
+    "text": "2. How a dataset is held\nOne SimilaritySearchEngine.EmbeddedEngine per dataset id, in AppState.handles. That single handle carries both halves of a project (its RocksDB metadata store and its live search engine), which is what keeps them consistent across a restart: reload_datasets! reopens every dataset under &lt;workdir&gt;/datasets/ with open_project, and a reopened dataset comes back with its index, profile, staged backlog and tombstones intact.\nThere is no snapshot file. Earlier versions of this package wrote a JLD2 snapshot per dataset and reloaded it on demand, because the engine did not persist its own index; it does now, and a dataset is simply the directory it lives in.\nHeavy jobs run as subprocesses and open their project read-only, since the serving process may hold it open and RocksDB’s write lock is exclusive per process."
+  },
+  {
+    "objectID": "server/manual.html#kinds-of-project",
+    "href": "server/manual.html#kinds-of-project",
+    "title": "Server Manual",
+    "section": "3. Kinds of project",
+    "text": "3. Kinds of project\nThe API’s index_kind names a pair — what a project holds, and what indexes it:\n\n\n\n\n\n\n\n\n\nindex_kind\nengine\nbackend\nnotes\n\n\n\n\nsearchgraph\nDenseEngine\nSearchGraph\napproximate, self-tuning; the default\n\n\nexhaustive_search\nDenseEngine\nExhaustiveSearch\nexact brute force\n\n\nparallel_exhaustive_search\nDenseEngine\nParallelExhaustiveSearch\nexact, data-parallel\n\n\nbm25_invfile\nFullTextEngine\nBM25InvertedFile\nBM25 scoring\n\n\ninvfile\nFullTextEngine\nTextInvertedFile\nTF-IDF cosine\n\n\nsparse_invfile\nSparseEngine\nInvertedFile\ncaller-encoded sparse vectors; needs dimension\n\n\n\nText projects are created with FitFromCorpus: the vocabulary is fitted from whatever the dataset itself has been given by the first index!. Shipping a pre-trained profile to the server is not exposed over HTTP yet."
+  },
+  {
+    "objectID": "server/manual.html#rest-api-base-endpoints",
+    "href": "server/manual.html#rest-api-base-endpoints",
+    "title": "Server Manual",
+    "section": "4. REST API (base endpoints)",
+    "text": "4. REST API (base endpoints)\n\nControl\n\nGET /readyz — health.\nGET /metrics — Prometheus-style gauges, including per-dataset document and tombstone counts.\n\n\n\nDatasets\n\nPOST /api/v1/datasets — creates one. Accepts id, index_kind (see above), distance, dimension, and the join-group fields join_group, holds_metadata, key.\nDELETE /api/v1/datasets/{id} — destroys it.\nPOST /api/v1/datasets/{id}/unload / reload — closes or reopens a dataset without restarting the server (what the CLI’s rebuild needs, since RocksDB’s write lock is exclusive).\n\n\n\nSearch and indexing\n\nPOST /api/v1/simsearch/{id}/append — appends items. Dense items carry vector, text items text, sparse items indices+values; doc_id, keywords, refs and any other field become the item’s metadata.\nPOST /api/v1/simsearch/{id}/search — dense/sparse search, with optional filter, page_size and beamsearch_overrides.\nPOST /api/v1/simsearch/{id}/ftsearch — text search.\nPOST /api/v1/simsearch/{id}/delete — soft delete.\nPOST /api/v1/simsearch/{id}/calibrate — recall calibration for a graph-backed project.\nPOST /api/v1/simsearch/hybrid and /ftsearch_group — reciprocal-rank fusion across two datasets, and text fan-out across a join group.\n\n\n\nTelemetry\n\nGET /api/v1/datasets/{id}/log?offset=&limit= — the dataset’s op_log: one record per search/ftsearch/append/delete, with elapsed time and distance_evaluations.\n\nThe evaluation count for a search comes from the engine (SimilaritySearchEngine.SearchStats, passed into search/ftsearch by _run_search), not from reading a context before and after the call: a search runs on a context borrowed from the engine’s pool, so counters read from out here belong to whatever else has searched in the meantime. append does read its context that way, correctly — insertion holds the engine’s own context under an exclusive write lock.\n\n\nAsynchronous jobs\n\nPOST /api/v1/jobs/{kind} — submits (allknn, fft, neardup, hsp, searchbatch, closestpair, build, dump, load). Returns 202 with a job_id.\nGET /api/v1/jobs/{job_id} and /result — state and output."
+  },
+  {
+    "objectID": "server/manual.html#how-failures-are-reported",
+    "href": "server/manual.html#how-failures-are-reported",
+    "title": "Server Manual",
+    "section": "5. How failures are reported",
+    "text": "5. How failures are reported\nThe engine raises typed errors, and this package maps them by category, never by message:\n\n\n\n\n\n\n\n\nengine category\nHTTP\nCLI exit code\n\n\n\n\nNotFound\n404\n4\n\n\nConflictingState (staged backlog, untrained profile, empty project)\n409\n5\n\n\nInvalidRequest (wrong payload, wrong dimension, bad option)\n400\n2\n\n\nStorageFailure\n500\n70\n\n\n\nAn error response carries error (the message, for a human) and kind (the concrete engine type, for a client that wants to branch). A CLI’s own refusals — no such dataset directory, unreadable input file — keep exit code 1, decided before the engine is ever called."
+  },
+  {
+    "objectID": "server/manual.html#configuration",
+    "href": "server/manual.html#configuration",
+    "title": "Server Manual",
+    "section": "6. Configuration",
+    "text": "6. Configuration\nconfig.toml (or .similarity-search-server.toml):\n[paths]\nworkdir = \"./workdir\"\n\n[server]\nhost = \"127.0.0.1\"\nport = 8080\n\n[resources]\nquery_threads_pct = 80\nbatch_threads_pct = 20"
+  },
+  {
+    "objectID": "server/manual.html#tests",
+    "href": "server/manual.html#tests",
+    "title": "Server Manual",
+    "section": "7. Tests",
+    "text": "7. Tests\nTwo levels, selected with test_args=[\"full\"] or SSE_TEST_LEVEL=full:\n\nlight (50 assertions, ~5 s): the boundary with the engine — wire names to engine types, engine errors to status and exit codes, wire items to engine items — with no server started and no subprocess spawned. This is what catches an engine-side change on the day it lands.\nfull (585 assertions, ~19 min): the API, job and CLI end-to-end suites, which start real servers and poll real subprocesses. It includes a stretch of some ten minutes with no output at all, near the end, where the CLI suite waits for job expiry — the run is not stuck.\n\njulia --project=server -e 'using Pkg; Pkg.develop(path=\".\"); Pkg.test()'\njulia --project=server -e 'using Pkg; Pkg.test(test_args=[\"full\"])'"
+  },
+  {
+    "objectID": "server/manual.html#where-to-go-next",
+    "href": "server/manual.html#where-to-go-next",
+    "title": "Server Manual",
+    "section": "8. Where to go next",
+    "text": "8. Where to go next\n\nThe server tutorial — the same surface from the outside: a dataset created, indexed, queried, and a heavy job run, in eight steps.\nThe engine’s architecture — the storage layout, the engine hierarchy, the concurrency model and the typed errors this package maps.\nThe reference, generated from the docstrings of both packages: Server API and Engine API."
+  },
+  {
+    "objectID": "server/tutorial.html",
+    "href": "server/tutorial.html",
+    "title": "Server Tutorial",
+    "section": "",
+    "text": "This walks through starting the server, creating a dataset, indexing documents, searching them, and running a heavy job asynchronously. It assumes you have this repository checked out; SimilaritySearchServer is the package under server/, and the engine it serves is the package at the root, whose own tutorial is Getting started.\nEverything below happens over HTTP or a command line, but nothing below is implemented here: each endpoint is a thin translation of one engine call, and reading the two tutorials side by side is the fastest way to see which is which.\nJulia 1.12 or later is required."
+  },
+  {
+    "objectID": "server/tutorial.html#step-1-set-up-the-environment",
+    "href": "server/tutorial.html#step-1-set-up-the-environment",
+    "title": "Server Tutorial",
+    "section": "Step 1: Set up the environment",
+    "text": "Step 1: Set up the environment\nThe server depends on the engine from this same repository, so develop it by path once:\njulia --project=server -e 'using Pkg; Pkg.develop(path=\".\"); Pkg.instantiate()'"
+  },
+  {
+    "objectID": "server/tutorial.html#step-2-start-the-server",
+    "href": "server/tutorial.html#step-2-start-the-server",
+    "title": "Server Tutorial",
+    "section": "Step 2: Start the server",
+    "text": "Step 2: Start the server\njulia --project=server -t auto -m SimilaritySearchServer serve\nOn a first run it writes a default configuration and listens on http://127.0.0.1:8080. Every dataset lives under &lt;workdir&gt;/datasets/, and the server reopens all of them at startup — a restart loses nothing.\nTo install the three apps (similarity-search, similarity-search-admin, similarity-search-serve) into ~/.julia/bin instead of invoking Julia each time:\njulia -e 'using Pkg; Pkg.Apps.develop(path=\"server\")'"
+  },
+  {
+    "objectID": "server/tutorial.html#step-3-create-a-dataset-and-index-documents",
+    "href": "server/tutorial.html#step-3-create-a-dataset-and-index-documents",
+    "title": "Server Tutorial",
+    "section": "Step 3: Create a dataset and index documents",
+    "text": "Step 3: Create a dataset and index documents\ncurl -s -X POST localhost:8080/api/v1/datasets \\\n     -H 'Content-Type: application/json' \\\n     -d '{\"id\": \"demo\", \"index_kind\": \"bm25_invfile\"}'\n\ncurl -s -X POST localhost:8080/api/v1/simsearch/demo/append \\\n     -H 'Content-Type: application/json' \\\n     -d '{\"items\": [\n           {\"doc_id\": \"d1\", \"text\": \"el gato duerme sobre el tejado\", \"keywords\": [\"gato\"]},\n           {\"doc_id\": \"d2\", \"text\": \"un perro ladra en la calle\", \"year\": 2024}\n         ]}'\nindex_kind names what the project holds and what indexes it: searchgraph (dense vectors, the default), bm25_invfile or invfile (text), sparse_invfile (caller-encoded sparse vectors, which also needs dimension). Any field that is not doc_id, keywords, refs, text, vector, indices or values becomes free-form metadata — year above.\nAppending indexes immediately, so the documents are searchable when the call returns."
+  },
+  {
+    "objectID": "server/tutorial.html#step-4-search",
+    "href": "server/tutorial.html#step-4-search",
+    "title": "Server Tutorial",
+    "section": "Step 4: Search",
+    "text": "Step 4: Search\ncurl -s -X POST localhost:8080/api/v1/simsearch/demo/ftsearch \\\n     -H 'Content-Type: application/json' \\\n     -d '{\"text\": \"gato tejado\", \"k\": 5}'\nA dense project answers /search with a vector instead, and accepts a metadata filter:\n{\"vector\": [0.1, 0.2, 0.3], \"k\": 10, \"filter\": {\"year\": {\"$gte\": 2024}}}\nA filtered search reads a bounded number of candidates before filtering, so it can return fewer than k; the response says so with insufficient_results."
+  },
+  {
+    "objectID": "server/tutorial.html#step-5-read-failures",
+    "href": "server/tutorial.html#step-5-read-failures",
+    "title": "Server Tutorial",
+    "section": "Step 5: Read failures",
+    "text": "Step 5: Read failures\nFailures are typed, and the status code tells you what kind of problem it is before you read the message:\n\n\n\n\n\n\n\n\nstatus\nmeaning\nexample\n\n\n\n\n400\nthe request cannot be honoured as written\na dense vector sent to a text project\n\n\n404\nsomething named does not exist\nan unknown dataset id\n\n\n409\nthe project is not in a state to serve it\na whole-dataset job against a staged backlog\n\n\n500\nstored data could not be read\n—\n\n\n\nThe body carries both error (prose) and kind (the engine’s concrete error type), so a client can branch on kind without matching on text."
+  },
+  {
+    "objectID": "server/tutorial.html#step-6-run-a-heavy-job",
+    "href": "server/tutorial.html#step-6-run-a-heavy-job",
+    "title": "Server Tutorial",
+    "section": "Step 6: Run a heavy job",
+    "text": "Step 6: Run a heavy job\nAnything that scans the whole collection runs as a job: the HTTP call enqueues and returns immediately, and a dispatcher runs it as its own Julia subprocess.\nJOB=$(curl -s -X POST localhost:8080/api/v1/jobs/allknn \\\n      -H 'Content-Type: application/json' \\\n      -d '{\"dataset\": \"demo\", \"k\": 5}' | jq -r .job_id)\n\ncurl -s localhost:8080/api/v1/jobs/$JOB          # queued | running | completed | failed\ncurl -s localhost:8080/api/v1/jobs/$JOB/result   # once completed\nJobs open their dataset read-only, so they can run while the server keeps serving it."
+  },
+  {
+    "objectID": "server/tutorial.html#step-7-the-same-thing-from-the-command-line",
+    "href": "server/tutorial.html#step-7-the-same-thing-from-the-command-line",
+    "title": "Server Tutorial",
+    "section": "Step 7: The same thing from the command line",
+    "text": "Step 7: The same thing from the command line\nEvery operation is also a subcommand, against a workdir rather than a URL:\njulia --project=server -m SimilaritySearchServer build \\\n      --dataset demo_cli --input corpus.jsonl --index-kind bm25_invfile --workdir ./workdir\n\njulia --project=server -m SimilaritySearchServer describe --dataset demo_cli --workdir ./workdir\nCLI exit codes mirror the status codes above: 2 invalid request, 4 not found, 5 conflicting state, 70 storage failure, and 1 for the command’s own refusals (no such dataset, unreadable input). A script can branch on those without parsing output."
+  },
+  {
+    "objectID": "server/tutorial.html#step-8-the-python-client",
+    "href": "server/tutorial.html#step-8-the-python-client",
+    "title": "Server Tutorial",
+    "section": "Step 8: The Python client",
+    "text": "Step 8: The Python client\ncd server/python\npip install -r requirements.txt\nexport PYTHONPATH=$(pwd)\nfrom similarity_search.client import SimilaritySearchClient\nfrom similarity_search.jobs import run_job\n\nclient = SimilaritySearchClient(\"http://127.0.0.1:8080\")\nprint(client.readyz())                      # {'status': 'ok'}\n\nds_id = client.create_dataset()\nresult = run_job(client, kind=\"allknn\", command=[\"--dataset\", ds_id, \"--k\", \"5\"])\nstress_client.py drives the whole loop under load:\npython stress_client.py --jobs 3"
+  },
+  {
+    "objectID": "server/tutorial.html#where-to-go-next",
+    "href": "server/tutorial.html#where-to-go-next",
+    "title": "Server Tutorial",
+    "section": "Where to go next",
+    "text": "Where to go next\n\nThe server manual — what the package contains, how a dataset is held, the full endpoint list, and the error mapping in full.\nThe engine’s architecture — everything about storage, indexing and search behaviour, which is where the answers are whenever an endpoint’s behaviour is surprising.\nThe Server API reference — every handler, job state and configuration field, from the docstrings."
   }
 ]

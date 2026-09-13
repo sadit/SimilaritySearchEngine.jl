@@ -131,19 +131,64 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <a class="nav-link active" href="./index.html" aria-current="page"> 
 <span class="menu-text">Home</span></a>
   </li>  
-  <li class="nav-item">
-    <a class="nav-link" href="./architecture.html"> 
-<span class="menu-text">Architecture</span></a>
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-engine" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">Engine</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-engine">    
+        <li>
+    <a class="dropdown-item" href="./architecture.html">
+ <span class="dropdown-text">Architecture</span></a>
   </li>  
-  <li class="nav-item">
-    <a class="nav-link" href="./tutorials/index.html"> 
-<span class="menu-text">Tutorial</span></a>
+        <li>
+    <a class="dropdown-item" href="./tutorials/index.html">
+ <span class="dropdown-text">Tutorials</span></a>
   </li>  
+        <li>
+    <a class="dropdown-item" href="./tutorials/getting-started.html">
+ <span class="dropdown-text">Getting started</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./tutorials/paragraph-search.html">
+ <span class="dropdown-text">Paragraph search</span></a>
+  </li>  
+    </ul>
+  </li>
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-server" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">Server</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-server">    
+        <li>
+    <a class="dropdown-item" href="./server/manual.html">
+ <span class="dropdown-text">Manual</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./server/tutorial.html">
+ <span class="dropdown-text">Tutorial</span></a>
+  </li>  
+    </ul>
+  </li>
 </ul>
             <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-api-reference" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">API reference</span>
+    </a>
+    <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="nav-menu-api-reference">    
+        <li>
+    <a class="dropdown-item" href="https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html">
+ <span class="dropdown-text">Engine API</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html">
+ <span class="dropdown-text">Server API</span></a>
+  </li>  
+    </ul>
+  </li>
   <li class="nav-item">
-    <a class="nav-link" href="https://sadit.github.io/SimilaritySearchEngine.jl/dev/"> 
-<span class="menu-text">API reference</span></a>
+    <a class="nav-link" href="https://github.com/sadit/SimilaritySearchEngine.jl"> 
+<span class="menu-text">GitHub</span></a>
   </li>  
 </ul>
           </div> <!-- /navcollapse -->
@@ -161,10 +206,11 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <h2 id="toc-title">On this page</h2>
    
   <ul>
-  <li><a href="#installation" id="toc-installation" class="nav-link active" data-scroll-target="#installation">Installation</a></li>
-  <li><a href="#core-capabilities" id="toc-core-capabilities" class="nav-link" data-scroll-target="#core-capabilities">Core Capabilities</a></li>
-  <li><a href="#ecosystem-role" id="toc-ecosystem-role" class="nav-link" data-scroll-target="#ecosystem-role">Ecosystem Role</a></li>
-  <li><a href="#manual-navigation" id="toc-manual-navigation" class="nav-link" data-scroll-target="#manual-navigation">Manual Navigation</a></li>
+  <li><a href="#which-half-do-you-need" id="toc-which-half-do-you-need" class="nav-link active" data-scroll-target="#which-half-do-you-need">Which half do you need?</a></li>
+  <li><a href="#installation" id="toc-installation" class="nav-link" data-scroll-target="#installation">Installation</a></li>
+  <li><a href="#what-the-engine-provides" id="toc-what-the-engine-provides" class="nav-link" data-scroll-target="#what-the-engine-provides">What the engine provides</a></li>
+  <li><a href="#what-the-server-adds" id="toc-what-the-server-adds" class="nav-link" data-scroll-target="#what-the-server-adds">What the server adds</a></li>
+  <li><a href="#navigating-this-site" id="toc-navigating-this-site" class="nav-link" data-scroll-target="#navigating-this-site">Navigating this site</a></li>
   </ul>
 </nav>
     </div>
@@ -174,6 +220,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <header id="title-block-header" class="quarto-title-block default">
 <div class="quarto-title">
 <h1 class="title">SimilaritySearchEngine.jl</h1>
+<p class="subtitle lead">An embedded similarity-search engine for Julia, and the service layer built on it</p>
 </div>
 
 
@@ -190,19 +237,69 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </header>
 
 
-<p><code>SimilaritySearchEngine.jl</code> is an embedded, in-process library for similarity search and information retrieval in Julia. It provides transactional, persistent storage for collections of dense vectors, sparse representations, and text documents, backed by <a href="https://github.com/sadit/SimilaritySearch.jl">SimilaritySearch.jl</a>, <a href="https://github.com/sadit/TextSearch.jl">TextSearch.jl</a>, and <a href="https://github.com/sadit/RocksDB.jl">RocksDB.jl</a>.</p>
-<p>By executing directly within the host process, <code>SimilaritySearchEngine.jl</code> eliminates the operational overhead of HTTP servers, background daemons, and inter-process communication layers. Access control is managed directly through standard operating system file permissions on the working directory.</p>
+<p>This site documents <strong>one repository with two packages</strong>. They are developed together, tested together and released together, and the line between them is deliberate:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: left;"></th>
+<th style="text-align: left;"><code>SimilaritySearchEngine</code></th>
+<th style="text-align: left;"><code>SimilaritySearchServer</code></th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">where</td>
+<td style="text-align: left;">the repository root</td>
+<td style="text-align: left;"><code>server/</code></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">what it is</td>
+<td style="text-align: left;">an embedded, in-process library: storage, indexing and search</td>
+<td style="text-align: left;">a REST API, two command lines, and an asynchronous job queue</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">what it knows</td>
+<td style="text-align: left;">RocksDB column families, inverted files, proximity graphs</td>
+<td style="text-align: left;">HTTP status codes, exit codes, job spools, access tokens</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">what it does <strong>not</strong> know</td>
+<td style="text-align: left;">HTTP, processes, tokens</td>
+<td style="text-align: left;">anything about how an index is built or stored</td>
+</tr>
+</tbody>
+</table>
+<p>Everything about storing, indexing and searching lives in the engine. The server calls its public API and nothing beneath it; in return, the engine never learns what a status code is. That is the whole architecture of the repository, and it is why a failure in the engine travels as a <em>typed error</em> rather than as a message: each frontier — HTTP, CLI, or a Julia caller — decides on its own what that category means to its audience.</p>
 <hr>
-<section id="installation" class="level2">
-<h2 class="anchored" data-anchor-id="installation">Installation</h2>
-<p><code>SimilaritySearchEngine.jl</code> is not in the General registry yet, so it is installed from its repository. Its dependencies — <code>SimilaritySearch.jl</code>, <code>TextSearch.jl</code>, <code>RocksDB.jl</code> and the <code>RocksDB_jll</code> binaries — are all registered, so nothing else has to be cloned or built:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="im">using</span> <span class="bu">Pkg</span></span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="bu">Pkg</span>.<span class="fu">add</span>(url<span class="op">=</span><span class="st">"https://github.com/sadit/SimilaritySearchEngine.jl"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Julia 1.12 or later is required. To modify the package, clone the repository and <code>Pkg.develop(path=...)</code> the clone; no <code>Manifest.toml</code> is committed, so <code>Pkg.instantiate()</code> resolves the base libraries from the registry unless you develop them by path as well.</p>
+<section id="which-half-do-you-need" class="level2">
+<h2 class="anchored" data-anchor-id="which-half-do-you-need">Which half do you need?</h2>
+<p><strong>Searching inside your own Julia process.</strong> The engine is the whole answer: a working directory, a project handle, and function calls. No daemon, no ports, no serialization between you and the index; access control is the file permissions of the working directory.</p>
+<p>: Start with <a href="./tutorials/getting-started.html">Getting started</a>, then <a href="./architecture.html">Architecture</a>.</p>
+<p><strong>Serving search to other processes, machines or languages.</strong> The server wraps the same engine in a service: one <code>EmbeddedEngine</code> per dataset, endpoints that translate one request into one engine call, and whole-collection operations dispatched as independent Julia subprocesses so that a query never waits behind an <code>allknn</code>.</p>
+<p>: Start with the <a href="./server/tutorial.html">server tutorial</a>, then the <a href="./server/manual.html">server manual</a>.</p>
+<p>Both halves are in one reference, generated from the docstrings: <a href="https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html">Engine API</a> and <a href="https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html">Server API</a>.</p>
 <hr>
 </section>
-<section id="core-capabilities" class="level2">
-<h2 class="anchored" data-anchor-id="core-capabilities">Core Capabilities</h2>
+<section id="installation" class="level2">
+<h2 class="anchored" data-anchor-id="installation">Installation</h2>
+<p>Neither package is in the General registry yet, so both are installed from this repository. The engine’s dependencies — <a href="https://github.com/sadit/SimilaritySearch.jl">SimilaritySearch.jl</a>, <a href="https://github.com/sadit/TextSearch.jl">TextSearch.jl</a>, <a href="https://github.com/sadit/RocksDB.jl">RocksDB.jl</a> and the <code>RocksDB_jll</code> binaries — are all registered, so nothing else has to be cloned or built:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="im">using</span> <span class="bu">Pkg</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="bu">Pkg</span>.<span class="fu">add</span>(url<span class="op">=</span><span class="st">"https://github.com/sadit/SimilaritySearchEngine.jl"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>The server is the same repository’s <code>server/</code> subdirectory, and it reaches the engine by path:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="fu">git</span> clone https://github.com/sadit/SimilaritySearchEngine.jl</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> SimilaritySearchEngine.jl</span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">--project</span><span class="op">=</span>server <span class="at">-e</span> <span class="st">'using Pkg; Pkg.develop(path="."); Pkg.instantiate()'</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">--project</span><span class="op">=</span>server <span class="at">-t</span> auto <span class="at">-m</span> SimilaritySearchServer serve</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Julia 1.12 or later is required by both. No <code>Manifest.toml</code> is committed for the engine, so <code>Pkg.instantiate()</code> resolves the base libraries from the registry unless you develop them by path as well.</p>
+<hr>
+</section>
+<section id="what-the-engine-provides" class="level2">
+<h2 class="anchored" data-anchor-id="what-the-engine-provides">What the engine provides</h2>
 <ul>
 <li><strong>Project Lifecycle Management</strong>: Functions <code>create_project</code>, <code>open_project</code>, and <code>close_project!</code> manage the on-disk RocksDB directory and the associated live search engine.</li>
 <li><strong>Engine and Backend Separation</strong>:
@@ -223,25 +320,39 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </ul></li>
 <li><strong>Strongly Typed Interface</strong>: Inputs are encapsulated in typed containers (<code>DenseItem</code>, <code>SparseItem</code>, <code>TextItem</code>), and queries return structured results (<code>SearchResult</code>, <code>StoredItem</code>, <code>ExistsResult</code>).</li>
 <li><strong>Logical Deletions</strong>: The <code>delete_item!</code> function marks documents as logically deleted without mutating the underlying search index. Queries return candidates alongside an explicit <code>deleted</code> flag.</li>
-<li><strong>Target Recall Calibration</strong>: The <code>calibrate!</code> function executes hyperparameter optimization to calibrate beam-search configurations for target recall constraints (<code>minrecall</code>).</li>
+<li><strong>Target Recall Calibration</strong>: The <code>calibrate!</code> function executes hyperparameter optimization to calibrate beam-search configurations for target recall constraints (<code>minrecall</code>), and <code>SearchStats</code> reports what a query actually cost in distance computations.</li>
 <li><strong>Whole-Dataset Metric Operations</strong>: Synchronous, in-process execution of all-pairs nearest neighbors (<code>allknn</code>), diverse center selection (<code>fft</code>), closest pair discovery (<code>closestpairs</code>), and cross-dataset closest pairs (<code>bichromatic_kclosestpairs</code>).</li>
 <li><strong>Granular Storage Persistence</strong>: High-throughput persistence utilizing a hybrid layout of RocksDB column families and dedicated memory-mapped vector files (<code>dense_vectors.mmapdb</code>).</li>
 <li><strong>Typed Errors</strong>: Deliberate failures are raised as <code>EngineError</code> subtypes grouped into four categories (<code>InvalidRequest</code>, <code>NotFound</code>, <code>ConflictingState</code>, <code>StorageFailure</code>), so a caller can act on a failure without interpreting its message.</li>
 </ul>
-<hr>
 </section>
-<section id="ecosystem-role" class="level2">
-<h2 class="anchored" data-anchor-id="ecosystem-role">Ecosystem Role</h2>
-<p><code>SimilaritySearchEngine.jl</code> provides the core embedded engine functionality. Higher-level services—HTTP REST APIs, asynchronous job workers, and command-line interfaces—are provided by <code>SimilaritySearchServer</code>, which lives in the same repository under <code>server/</code> as a separate package with its own dependency set. It consumes this engine’s public API and nothing beneath it; the engine, in turn, knows nothing about HTTP status codes or exit codes.</p>
-<hr>
-</section>
-<section id="manual-navigation" class="level2">
-<h2 class="anchored" data-anchor-id="manual-navigation">Manual Navigation</h2>
+<section id="what-the-server-adds" class="level2">
+<h2 class="anchored" data-anchor-id="what-the-server-adds">What the server adds</h2>
 <ul>
-<li><strong><a href="./architecture.html">Architecture</a></strong>: Detailed specifications of the module architecture, engine type hierarchy, staging-indexing split, concurrency model, and on-disk layout.</li>
-<li><strong><a href="./tutorials/getting-started.html">Getting Started Tutorial</a></strong>: Step-by-step tutorial covering dense vectors, sparse indexing, BM25 text search, filtering, calibration, and whole-dataset operations.</li>
-<li><strong><a href="./tutorials/paragraph-search.html">Multilingual Paragraph Search</a></strong>: Comprehensive evaluation over multilingual Project Gutenberg corpora and Wikipedia.</li>
-<li><strong><a href="../api.html">API Reference</a></strong>: Comprehensive API documentation generated with Documenter.jl.</li>
+<li><strong>REST API</strong>: dataset lifecycle, append, dense/sparse/text search with metadata filters, soft deletes, recall calibration, and cross-dataset fusion (<code>hybrid</code>, <code>ftsearch_group</code>).</li>
+<li><strong>Asynchronous jobs</strong>: <code>allknn</code>, <code>fft</code>, <code>neardup</code>, <code>hsp</code>, <code>searchbatch</code>, <code>closestpair</code>, <code>build</code>, <code>dump</code> and <code>load</code> are enqueued and dispatched as independent Julia subprocesses, each opening its dataset read-only so that serving continues while they run.</li>
+<li><strong>Two command lines</strong>: <code>similarity-search</code> for the data plane against a working directory, <code>similarity-search-ctl</code> for the control plane against a running server — installable as apps with <code>Pkg.Apps</code>.</li>
+<li><strong>Operational surface</strong>: access tokens, a per-dataset operation log (whose distance-evaluation counts come from the engine’s <code>SearchStats</code>), result cursors for pagination, health and metrics endpoints, and hot unload/reload of a single dataset.</li>
+<li><strong>One error vocabulary</strong>: the engine’s four categories become HTTP status codes and CLI exit codes by category, never by message — the boundary described above, made concrete.</li>
+</ul>
+<hr>
+</section>
+<section id="navigating-this-site" class="level2">
+<h2 class="anchored" data-anchor-id="navigating-this-site">Navigating this site</h2>
+<p><strong>Engine</strong></p>
+<ul>
+<li><strong><a href="./architecture.html">Architecture</a></strong>: module map, engine type hierarchy, the staging/indexing split, the concurrency model, the on-disk layout, and how failures are reported.</li>
+<li><strong><a href="./tutorials/getting-started.html">Getting started</a></strong>: dense vectors, sparse indexing, BM25 and TF-IDF text search, filtering, calibration, cost accounting, and whole-dataset operations.</li>
+<li><strong><a href="./tutorials/paragraph-search.html">Multilingual paragraph search</a></strong>: a large-scale evaluation over Project Gutenberg and Wikipedia corpora.</li>
+</ul>
+<p><strong>Server</strong></p>
+<ul>
+<li><strong><a href="./server/manual.html">Server manual</a></strong>: what the package contains, how a dataset is held, the endpoint surface, the error mapping, configuration and the two test levels.</li>
+<li><strong><a href="./server/tutorial.html">Server tutorial</a></strong>: from an empty working directory to a query over HTTP, a heavy job, the command line, and the Python client.</li>
+</ul>
+<p><strong>Reference</strong></p>
+<ul>
+<li><strong><a href="https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html">Engine API</a></strong> and <strong><a href="https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html">Server API</a></strong>, generated with Documenter from the docstrings of both packages.</li>
 </ul>
 
 
@@ -321,7 +432,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     }
       var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
       var mailtoRegex = new RegExp(/^mailto:/);
-        var filterRegex = new RegExp('/' + window.location.host + '/');
+        var filterRegex = new RegExp("https:\/\/sadit\.github\.io\/SimilaritySearchEngine\.jl\/");
       var isInternal = (href) => {
           return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
       }

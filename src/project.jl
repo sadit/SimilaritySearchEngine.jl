@@ -186,10 +186,14 @@ function compact_all!(manager::ProjectManager)
     return nothing
 end
 
-# Every integer key in this package is big-endian, for the one reason `Schema.be_key`
-# documents: RocksDB sorts keys bytewise, so this is what makes a range of ids iterate in
-# numeric order. These keys used to be native little-endian, which only ever ordered
-# correctly below 256.
+"""
+    _id_key(id::Int32)
+
+The 4 bytes an `_id` is stored and compared as. Every integer key in this package is
+big-endian, for the one reason [`Schema.be_key`](@ref) documents: RocksDB sorts keys
+bytewise, so this is what makes a range of ids iterate in numeric order. These keys used to
+be native little-endian, which only ever ordered correctly below 256.
+"""
 _id_key(id::Int32) = Schema.be_key(id)
 
 """

@@ -792,7 +792,7 @@ get their saved direct neighbor list restored (`load_neighbors(i)`, typically
 call picks up exactly where indexing left off, over the *same* `.db` (already fully
 restored here) it would have seen pre-restart.
 
-**The `load_neighbors(i)` loop runs in parallel via [`@BATCHES`](@ref) (2026-09-09).**
+**The `load_neighbors(i)` loop runs in parallel via `SimilaritySearch.@BATCHES` (2026-09-09).**
 Measured live at a realistic scale (200K items, warm/no-compilation reopen): this loop --
 one RocksDB point-read per object -- cost 1.2-1.6s sequentially, comparable to or larger
 than `connect_reverse_links!` right after it (0.9-1.1s, itself already `@BATCHES`-parallel
@@ -1969,6 +1969,14 @@ function _require_no_backlog(engine::DenseEngine, opname::AbstractString)
     return nothing
 end
 
+"""
+    allknn_live(engine::DenseEngine, k::Int)
+
+All-pairs `k` nearest neighbours over everything the engine currently indexes, under the
+project's write lock. A whole-dataset operation rather than a search: it is exclusive, it
+refuses to run while items are staged but not indexed, and its internal parallelism is why
+it cannot be nested under a concurrent region.
+"""
 function allknn_live(engine::DenseEngine, k::Int)
     write_lock(engine.lock) do
         _require_no_backlog(engine, "allknn")

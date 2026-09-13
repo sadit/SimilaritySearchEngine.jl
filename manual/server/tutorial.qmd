@@ -1,9 +1,17 @@
-# Getting Started: SimilaritySearchServer
+---
+title: "Server Tutorial"
+subtitle: "From an empty workdir to a query over HTTP, a job, and the same thing from the command line"
+lang: en-US
+---
 
 This walks through starting the server, creating a dataset, indexing documents, searching
 them, and running a heavy job asynchronously. It assumes you have this repository checked
 out; `SimilaritySearchServer` is the package under `server/`, and the engine it serves is the
-package at the root.
+package at the root, whose own tutorial is [Getting started](../tutorials/getting-started.qmd).
+
+Everything below happens over HTTP or a command line, but nothing below is implemented here:
+each endpoint is a thin translation of one engine call, and reading the two tutorials side by
+side is the fastest way to see which is which.
 
 Julia 1.12 or later is required.
 
@@ -141,3 +149,13 @@ result = run_job(client, kind="allknn", command=["--dataset", ds_id, "--k", "5"]
 ```bash
 python stress_client.py --jobs 3
 ```
+
+## Where to go next
+
+- The [server manual](manual.qmd) — what the package contains, how a dataset is held, the
+  full endpoint list, and the error mapping in full.
+- The [engine's architecture](../architecture.qmd) — everything about storage, indexing and
+  search behaviour, which is where the answers are whenever an endpoint's behaviour is
+  surprising.
+- The [Server API reference](https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html)
+  — every handler, job state and configuration field, from the docstrings.

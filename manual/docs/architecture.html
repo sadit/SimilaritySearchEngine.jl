@@ -164,19 +164,64 @@ window.Quarto = {
     <a class="nav-link" href="./index.html"> 
 <span class="menu-text">Home</span></a>
   </li>  
-  <li class="nav-item">
-    <a class="nav-link active" href="./architecture.html" aria-current="page"> 
-<span class="menu-text">Architecture</span></a>
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-engine" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">Engine</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-engine">    
+        <li>
+    <a class="dropdown-item" href="./architecture.html">
+ <span class="dropdown-text">Architecture</span></a>
   </li>  
-  <li class="nav-item">
-    <a class="nav-link" href="./tutorials/index.html"> 
-<span class="menu-text">Tutorial</span></a>
+        <li>
+    <a class="dropdown-item" href="./tutorials/index.html">
+ <span class="dropdown-text">Tutorials</span></a>
   </li>  
+        <li>
+    <a class="dropdown-item" href="./tutorials/getting-started.html">
+ <span class="dropdown-text">Getting started</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./tutorials/paragraph-search.html">
+ <span class="dropdown-text">Paragraph search</span></a>
+  </li>  
+    </ul>
+  </li>
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-server" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">Server</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-server">    
+        <li>
+    <a class="dropdown-item" href="./server/manual.html">
+ <span class="dropdown-text">Manual</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./server/tutorial.html">
+ <span class="dropdown-text">Tutorial</span></a>
+  </li>  
+    </ul>
+  </li>
 </ul>
             <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-api-reference" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">API reference</span>
+    </a>
+    <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="nav-menu-api-reference">    
+        <li>
+    <a class="dropdown-item" href="https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html">
+ <span class="dropdown-text">Engine API</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html">
+ <span class="dropdown-text">Server API</span></a>
+  </li>  
+    </ul>
+  </li>
   <li class="nav-item">
-    <a class="nav-link" href="https://sadit.github.io/SimilaritySearchEngine.jl/dev/"> 
-<span class="menu-text">API reference</span></a>
+    <a class="nav-link" href="https://github.com/sadit/SimilaritySearchEngine.jl"> 
+<span class="menu-text">GitHub</span></a>
   </li>  
 </ul>
           </div> <!-- /navcollapse -->
@@ -656,7 +701,7 @@ window.Quarto = {
 <span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>    <span class="cn">e</span> isa NotFound <span class="op">&amp;&amp;</span> <span class="cf">return</span> <span class="fu">not_found</span>()</span>
 <span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>    <span class="fu">rethrow</span>()</span>
 <span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p><code>SimilaritySearchServer</code> maps categories to status codes (<code>NotFound</code> to 404, <code>ConflictingState</code> to 409, <code>InvalidRequest</code> to 400, anything else to 500) and its CLIs map the same categories to exit codes (4, 5, 2, 70), so a shell script can branch on the reason without reading output.</p>
+<p><code>SimilaritySearchServer</code> maps categories to status codes (<code>NotFound</code> to 404, <code>ConflictingState</code> to 409, <code>InvalidRequest</code> to 400, anything else to 500) and its CLIs map the same categories to exit codes (4, 5, 2, 70), so a shell script can branch on the reason without reading output. That mapping is the entire coupling between the two packages of this repository, and it is written out in one table in the <a href="./server/manual.html#how-failures-are-reported">server manual</a>.</p>
 <p>The alternative — bare <code>error("...")</code> — forces every consumer to classify by message text, which breaks silently the first time the wording improves. That had already happened here: this engine’s own concurrency test recognized a refused whole-dataset operation with <code>occursin("requires no pending backlog", e.msg)</code>, and now matches <code>PendingBacklog</code> instead.</p>
 </section>
 <section id="dual-logging-architecture-reporters-vs.-observers" class="level2">
@@ -764,7 +809,7 @@ window.Quarto = {
     }
       var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
       var mailtoRegex = new RegExp(/^mailto:/);
-        var filterRegex = new RegExp('/' + window.location.host + '/');
+        var filterRegex = new RegExp("https:\/\/sadit\.github\.io\/SimilaritySearchEngine\.jl\/");
       var isInternal = (href) => {
           return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
       }

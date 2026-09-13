@@ -7,21 +7,44 @@ execute:
 
 website:
   title: "SimilaritySearchEngine.jl"
+  site-url: "https://sadit.github.io/SimilaritySearchEngine.jl/"
+  description: "An embedded similarity-search engine for Julia, and the service layer built on it."
+  # One repository, two packages, one site: this manual is published at the root of the Pages
+  # domain and the generated reference under /api/ (see publish-docs.sh). The navbar is the
+  # place where that unity is visible -- the engine and the server are two sections of one
+  # manual, not two documentation sets that happen to share a domain.
   navbar:
     left:
       - href: index.qmd
         text: "Home"
-      - href: architecture.qmd
-        text: "Architecture"
-      - href: tutorials/index.qmd
-        text: "Tutorial"
-    # The API reference is a separate Documenter site deployed beside this one, at the root of
-    # the same Pages domain. An absolute URL rather than a relative one: this navbar is shared
-    # by pages at two different depths, and `quarto preview` serves them off a local port where
-    # no relative path could reach the deployed reference anyway.
+      - text: "Engine"
+        menu:
+          - href: architecture.qmd
+            text: "Architecture"
+          - href: tutorials/index.qmd
+            text: "Tutorials"
+          - href: tutorials/getting-started.qmd
+            text: "Getting started"
+          - href: tutorials/paragraph-search.qmd
+            text: "Paragraph search"
+      - text: "Server"
+        menu:
+          - href: server/manual.qmd
+            text: "Manual"
+          - href: server/tutorial.qmd
+            text: "Tutorial"
+    # Absolute URLs rather than relative ones: this navbar is shared by pages at two different
+    # depths, and `quarto preview` serves them off a local port where no relative path could
+    # reach the generated reference anyway.
     right:
-      - href: https://sadit.github.io/SimilaritySearchEngine.jl/dev/
-        text: "API reference"
+      - text: "API reference"
+        menu:
+          - href: https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html
+            text: "Engine API"
+          - href: https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html
+            text: "Server API"
+      - href: https://github.com/sadit/SimilaritySearchEngine.jl
+        text: "GitHub"
 
 format:
   html:

@@ -25,6 +25,14 @@
 #     Interactive Mode section, now that this file gives it a real command surface to
 #     introspect at all (its own prerequisite, chunks 12/15).
 
+"""
+    build_ctl_settings() -> ArgParse.ArgParseSettings
+
+The `similarity-search-ctl` command line: the control-plane subcommands that talk to a
+running server over HTTP (`list`, `stats`, `log`, the token commands, and the `jobs`
+subtree). The counterpart of [`build_settings`](@ref), which is the data plane against a
+working directory, and introspected by `interactive.jl` the same way.
+"""
 function build_ctl_settings()
     s = ArgParseSettings(description = "SimilaritySearchServer admin/control CLI")
 

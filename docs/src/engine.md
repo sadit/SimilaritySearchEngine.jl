@@ -54,7 +54,7 @@ Project-level metadata storage (`ProjectManager`), independent of any search eng
 
 ```@autodocs
 Modules = [SimilaritySearchEngine.Project]
-Order   = [:type, :function]
+Order   = [:type, :function, :constant]
 ```
 
 ## `Schema`

@@ -1,32 +1,79 @@
 ---
 title: "SimilaritySearchEngine.jl"
+subtitle: "An embedded similarity-search engine for Julia, and the service layer built on it"
 lang: en-US
 ---
 
-`SimilaritySearchEngine.jl` is an embedded, in-process library for similarity search and information retrieval in Julia. It provides transactional, persistent storage for collections of dense vectors, sparse representations, and text documents, backed by [SimilaritySearch.jl](https://github.com/sadit/SimilaritySearch.jl), [TextSearch.jl](https://github.com/sadit/TextSearch.jl), and [RocksDB.jl](https://github.com/sadit/RocksDB.jl).
+This site documents **one repository with two packages**. They are developed together, tested
+together and released together, and the line between them is deliberate:
 
-By executing directly within the host process, `SimilaritySearchEngine.jl` eliminates the operational overhead of HTTP servers, background daemons, and inter-process communication layers. Access control is managed directly through standard operating system file permissions on the working directory.
+| | `SimilaritySearchEngine` | `SimilaritySearchServer` |
+| :--- | :--- | :--- |
+| where | the repository root | `server/` |
+| what it is | an embedded, in-process library: storage, indexing and search | a REST API, two command lines, and an asynchronous job queue |
+| what it knows | RocksDB column families, inverted files, proximity graphs | HTTP status codes, exit codes, job spools, access tokens |
+| what it does **not** know | HTTP, processes, tokens | anything about how an index is built or stored |
+
+Everything about storing, indexing and searching lives in the engine. The server calls its
+public API and nothing beneath it; in return, the engine never learns what a status code is.
+That is the whole architecture of the repository, and it is why a failure in the engine
+travels as a *typed error* rather than as a message: each frontier — HTTP, CLI, or a Julia
+caller — decides on its own what that category means to its audience.
+
+---
+
+## Which half do you need?
+
+**Searching inside your own Julia process.** The engine is the whole answer: a working
+directory, a project handle, and function calls. No daemon, no ports, no serialization
+between you and the index; access control is the file permissions of the working directory.
+
+: Start with [Getting started](tutorials/getting-started.qmd), then
+[Architecture](architecture.qmd).
+
+**Serving search to other processes, machines or languages.** The server wraps the same engine
+in a service: one `EmbeddedEngine` per dataset, endpoints that translate one request into one
+engine call, and whole-collection operations dispatched as independent Julia subprocesses so
+that a query never waits behind an `allknn`.
+
+: Start with the [server tutorial](server/tutorial.qmd), then the
+[server manual](server/manual.qmd).
+
+Both halves are in one reference, generated from the docstrings:
+[Engine API](https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html) and
+[Server API](https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html).
 
 ---
 
 ## Installation
 
-`SimilaritySearchEngine.jl` is not in the General registry yet, so it is installed from its
-repository. Its dependencies — `SimilaritySearch.jl`, `TextSearch.jl`, `RocksDB.jl` and the
-`RocksDB_jll` binaries — are all registered, so nothing else has to be cloned or built:
+Neither package is in the General registry yet, so both are installed from this repository.
+The engine's dependencies — [SimilaritySearch.jl](https://github.com/sadit/SimilaritySearch.jl),
+[TextSearch.jl](https://github.com/sadit/TextSearch.jl),
+[RocksDB.jl](https://github.com/sadit/RocksDB.jl) and the `RocksDB_jll` binaries — are all
+registered, so nothing else has to be cloned or built:
 
 ```julia
 using Pkg
 Pkg.add(url="https://github.com/sadit/SimilaritySearchEngine.jl")
 ```
 
-Julia 1.12 or later is required. To modify the package, clone the repository and
-`Pkg.develop(path=...)` the clone; no `Manifest.toml` is committed, so `Pkg.instantiate()`
-resolves the base libraries from the registry unless you develop them by path as well.
+The server is the same repository's `server/` subdirectory, and it reaches the engine by path:
+
+```bash
+git clone https://github.com/sadit/SimilaritySearchEngine.jl
+cd SimilaritySearchEngine.jl
+julia --project=server -e 'using Pkg; Pkg.develop(path="."); Pkg.instantiate()'
+julia --project=server -t auto -m SimilaritySearchServer serve
+```
+
+Julia 1.12 or later is required by both. No `Manifest.toml` is committed for the engine, so
+`Pkg.instantiate()` resolves the base libraries from the registry unless you develop them by
+path as well.
 
 ---
 
-## Core Capabilities
+## What the engine provides
 
 - **Project Lifecycle Management**: Functions `create_project`, `open_project`, and `close_project!` manage the on-disk RocksDB directory and the associated live search engine.
 - **Engine and Backend Separation**:
@@ -43,22 +90,49 @@ resolves the base libraries from the registry unless you develop them by path as
   - Query execution accepts a `QueryPolicy` to control automatic orthographic correction and semantic query expansion.
 - **Strongly Typed Interface**: Inputs are encapsulated in typed containers (`DenseItem`, `SparseItem`, `TextItem`), and queries return structured results (`SearchResult`, `StoredItem`, `ExistsResult`).
 - **Logical Deletions**: The `delete_item!` function marks documents as logically deleted without mutating the underlying search index. Queries return candidates alongside an explicit `deleted` flag.
-- **Target Recall Calibration**: The `calibrate!` function executes hyperparameter optimization to calibrate beam-search configurations for target recall constraints (`minrecall`).
+- **Target Recall Calibration**: The `calibrate!` function executes hyperparameter optimization to calibrate beam-search configurations for target recall constraints (`minrecall`), and `SearchStats` reports what a query actually cost in distance computations.
 - **Whole-Dataset Metric Operations**: Synchronous, in-process execution of all-pairs nearest neighbors (`allknn`), diverse center selection (`fft`), closest pair discovery (`closestpairs`), and cross-dataset closest pairs (`bichromatic_kclosestpairs`).
 - **Granular Storage Persistence**: High-throughput persistence utilizing a hybrid layout of RocksDB column families and dedicated memory-mapped vector files (`dense_vectors.mmapdb`).
 - **Typed Errors**: Deliberate failures are raised as `EngineError` subtypes grouped into four categories (`InvalidRequest`, `NotFound`, `ConflictingState`, `StorageFailure`), so a caller can act on a failure without interpreting its message.
 
+## What the server adds
+
+- **REST API**: dataset lifecycle, append, dense/sparse/text search with metadata filters,
+  soft deletes, recall calibration, and cross-dataset fusion (`hybrid`, `ftsearch_group`).
+- **Asynchronous jobs**: `allknn`, `fft`, `neardup`, `hsp`, `searchbatch`, `closestpair`,
+  `build`, `dump` and `load` are enqueued and dispatched as independent Julia subprocesses,
+  each opening its dataset read-only so that serving continues while they run.
+- **Two command lines**: `similarity-search` for the data plane against a working directory,
+  `similarity-search-ctl` for the control plane against a running server — installable as
+  apps with `Pkg.Apps`.
+- **Operational surface**: access tokens, a per-dataset operation log (whose distance-evaluation
+  counts come from the engine's `SearchStats`), result cursors for pagination, health and
+  metrics endpoints, and hot unload/reload of a single dataset.
+- **One error vocabulary**: the engine's four categories become HTTP status codes and CLI exit
+  codes by category, never by message — the boundary described above, made concrete.
+
 ---
 
-## Ecosystem Role
+## Navigating this site
 
-`SimilaritySearchEngine.jl` provides the core embedded engine functionality. Higher-level services—HTTP REST APIs, asynchronous job workers, and command-line interfaces—are provided by `SimilaritySearchServer`, which lives in the same repository under `server/` as a separate package with its own dependency set. It consumes this engine's public API and nothing beneath it; the engine, in turn, knows nothing about HTTP status codes or exit codes.
+**Engine**
 
----
+- **[Architecture](architecture.qmd)**: module map, engine type hierarchy, the staging/indexing
+  split, the concurrency model, the on-disk layout, and how failures are reported.
+- **[Getting started](tutorials/getting-started.qmd)**: dense vectors, sparse indexing, BM25 and
+  TF-IDF text search, filtering, calibration, cost accounting, and whole-dataset operations.
+- **[Multilingual paragraph search](tutorials/paragraph-search.qmd)**: a large-scale evaluation
+  over Project Gutenberg and Wikipedia corpora.
 
-## Manual Navigation
+**Server**
 
-- **[Architecture](architecture.qmd)**: Detailed specifications of the module architecture, engine type hierarchy, staging-indexing split, concurrency model, and on-disk layout.
-- **[Getting Started Tutorial](tutorials/getting-started.qmd)**: Step-by-step tutorial covering dense vectors, sparse indexing, BM25 text search, filtering, calibration, and whole-dataset operations.
-- **[Multilingual Paragraph Search](tutorials/paragraph-search.qmd)**: Comprehensive evaluation over multilingual Project Gutenberg corpora and Wikipedia.
-- **[API Reference](../api.html)**: Comprehensive API documentation generated with Documenter.jl.
+- **[Server manual](server/manual.qmd)**: what the package contains, how a dataset is held, the
+  endpoint surface, the error mapping, configuration and the two test levels.
+- **[Server tutorial](server/tutorial.qmd)**: from an empty working directory to a query over
+  HTTP, a heavy job, the command line, and the Python client.
+
+**Reference**
+
+- **[Engine API](https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html)** and
+  **[Server API](https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html)**, generated
+  with Documenter from the docstrings of both packages.

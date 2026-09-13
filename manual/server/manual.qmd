@@ -1,15 +1,20 @@
-# Technical Manual: SimilaritySearchServer
+---
+title: "Server Manual"
+subtitle: "SimilaritySearchServer: the REST API, the job queue and the two command lines"
+lang: en-US
+---
 
-`SimilaritySearchServer` exposes [`SimilaritySearchEngine`](../../README.md) — the embedded
-engine in the root of this repository — through a REST API, two CLIs, and an asynchronous job
+`SimilaritySearchServer` exposes [`SimilaritySearchEngine`](../index.qmd) — the embedded
+engine documented in the rest of this site — through a REST API, two CLIs, and an asynchronous job
 queue. It holds no index logic of its own: **everything about storing, indexing and searching
 lives in the engine**, and this package is the layer that turns HTTP requests and command
 lines into engine calls, and engine results and failures into responses and exit codes.
 
 That boundary is the thing to keep in mind while reading the rest: when something about
 projects, persistence, profiles or search behaviour is unclear, the answer is in the engine's
-[architecture guide](https://sadit.github.io/SimilaritySearchEngine.jl/manual/architecture.html),
-not here.
+[architecture guide](../architecture.qmd), not here. The two packages live in one
+repository and are documented as one thing on purpose: the seam between them is the engine's
+public API, and both sides of that seam are described here.
 
 ## 1. What this package contains
 
@@ -137,3 +142,13 @@ Two levels, selected with `test_args=["full"]` or `SSE_TEST_LEVEL=full`:
 julia --project=server -e 'using Pkg; Pkg.develop(path="."); Pkg.test()'
 julia --project=server -e 'using Pkg; Pkg.test(test_args=["full"])'
 ```
+
+## 8. Where to go next
+
+- The [server tutorial](tutorial.qmd) — the same surface from the outside: a dataset created,
+  indexed, queried, and a heavy job run, in eight steps.
+- The [engine's architecture](../architecture.qmd) — the storage layout, the engine hierarchy,
+  the concurrency model and the typed errors this package maps.
+- The reference, generated from the docstrings of both packages:
+  [Server API](https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html) and
+  [Engine API](https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html).

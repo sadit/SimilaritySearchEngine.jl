@@ -1,8 +1,8 @@
 # SimilaritySearchEngine.jl
 
 [![CI](https://github.com/sadit/SimilaritySearchEngine.jl/actions/workflows/ci.yml/badge.svg)](https://github.com/sadit/SimilaritySearchEngine.jl/actions/workflows/ci.yml)
-[![Manual](https://img.shields.io/badge/docs-manual-blue.svg)](https://sadit.github.io/SimilaritySearchEngine.jl/manual/)
-[![API Reference](https://img.shields.io/badge/docs-reference-blue.svg)](https://sadit.github.io/SimilaritySearchEngine.jl/dev/)
+[![Manual](https://img.shields.io/badge/docs-manual-blue.svg)](https://sadit.github.io/SimilaritySearchEngine.jl/)
+[![API Reference](https://img.shields.io/badge/docs-reference-blue.svg)](https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 `SimilaritySearchEngine.jl` is an embedded similarity search engine for Julia. It provides transactional, persistent storage and nearest-neighbor search for collections of dense vectors, sparse representations, and full-text documents. It integrates [SimilaritySearch.jl](https://github.com/sadit/SimilaritySearch.jl), [TextSearch.jl](https://github.com/sadit/TextSearch.jl), and [RocksDB.jl](https://github.com/sadit/RocksDB.jl) into a unified, in-process engine.
@@ -94,11 +94,21 @@ close_project!(h)
 
 ## Documentation
 
-- **[Manual](https://sadit.github.io/SimilaritySearchEngine.jl/manual/)**:
+Both packages of this repository are documented on
+[one site](https://sadit.github.io/SimilaritySearchEngine.jl/): one manual with one navigation
+and one search index, and one generated reference. GitHub Pages serves a single site per
+repository, and the engine and the service layer are two halves of one thing anyway.
+
+- **[Manual](https://sadit.github.io/SimilaritySearchEngine.jl/)** — prose, for both packages:
   - [Architecture Guide](manual/architecture.qmd): Detailed specifications of engine submodules, concurrency controls, and the on-disk storage layout.
   - [Getting Started Tutorial](manual/tutorials/getting-started.qmd): Step-by-step walkthrough covering dense embeddings, sparse indexing, BM25 text retrieval, filtering, calibration, and whole-dataset operations.
   - [Multilingual Case Study](manual/tutorials/paragraph-search.qmd): Real-world evaluation over Project Gutenberg and Wikipedia paragraph corpora.
-- **[API Reference](https://sadit.github.io/SimilaritySearchEngine.jl/dev/)**: Complete reference documentation generated with Documenter.jl.
+  - [Server Manual](manual/server/manual.qmd) and [Server Tutorial](manual/server/tutorial.qmd): the REST API, the job queue, the two command lines, and the error mapping.
+- **API Reference**, generated with Documenter.jl from the docstrings of both packages:
+  [Engine API](https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html) and
+  [Server API](https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html).
+
+`publish-docs.sh` builds the reference and publishes it together with the pre-rendered manual.
 
 ---
 
@@ -112,7 +122,7 @@ Pkg.test()                          # light   -- engine 264 assertions, 46s
 Pkg.test(test_args=["full"])        # full    -- engine 310 assertions, 1m30
 ```
 
-The split follows the clock, not importance. The engine's full level adds the whole-dataset algorithms, the concurrency stress test, and the text testsets that fit a linguistic profile from a corpus -- everything they cover is covered in the light run too, at a size that runs in about a second each. The server's light level (50 assertions, 5 s) covers the boundary with the engine -- wire names to engine types, engine errors to status and exit codes, wire items to engine items -- without starting a server or spawning a subprocess; its full level (520 assertions, 17 min) adds the HTTP, job and CLI end-to-end suites. `SSE_TEST_LEVEL=full` selects the full level from CI.
+The split follows the clock, not importance. The engine's full level adds the whole-dataset algorithms, the concurrency stress test, and the text testsets that fit a linguistic profile from a corpus -- everything they cover is covered in the light run too, at a size that runs in about a second each. The server's light level (50 assertions, 5 s) covers the boundary with the engine -- wire names to engine types, engine errors to status and exit codes, wire items to engine items -- without starting a server or spawning a subprocess; its full level (585 assertions, 19 min) adds the HTTP, job and CLI end-to-end suites. `SSE_TEST_LEVEL=full` selects the full level from CI.
 
 A skipped testset is named at the end of a light run: a light run that looks identical to a full one is how a suite quietly stops testing something.
 
@@ -136,3 +146,5 @@ Pkg.develop(path=".")            # ... and the server against it
 ```
 
 Julia 1.12 or later is required by both, and by the server outright: its `[apps]` entries need `Pkg.Apps`, which does not exist before 1.12.
+
+Its documentation is not separate either: the [server manual](https://sadit.github.io/SimilaritySearchEngine.jl/server/manual.html), the [server tutorial](https://sadit.github.io/SimilaritySearchEngine.jl/server/tutorial.html) and the [Server API](https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html) are sections of the same site as the engine's.

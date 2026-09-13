@@ -52,8 +52,18 @@ Pkg.develop(path="path/to/SimilaritySearchEngine.jl")
 
 ## Documentation Structure
 
-- **[API Reference](api.md)**: Generated documentation for all exported types, interfaces, and function signatures.
-- **[Manual Home](https://sadit.github.io/SimilaritySearchEngine.jl/manual/)**: Architectural overview and feature summary.
-- **[Architecture](https://sadit.github.io/SimilaritySearchEngine.jl/manual/architecture.html)**: Comprehensive specification of the submodules, type hierarchies, concurrency locks, and on-disk storage layout.
-- **[Getting Started Tutorial](https://sadit.github.io/SimilaritySearchEngine.jl/manual/tutorials/getting-started.html)**: End-to-end tutorial covering dense search, sparse retrieval, BM25 text search, filtering, calibration, and whole-dataset operations.
-- **[Multilingual Paragraph Search](https://sadit.github.io/SimilaritySearchEngine.jl/manual/tutorials/paragraph-search.html)**: Large-scale case study evaluating full-text retrieval across multilingual Project Gutenberg corpora and Wikipedia.
+This reference is one half of the project site; the other half is the manual, which holds the
+prose for both packages of this repository.
+
+**Reference (here)**
+
+- **[Engine API](engine.md)**: every exported type, interface and function of `SimilaritySearchEngine`, plus its `Errors`, `Schema`, `Project`, `IndexEngine` and `Persistence` submodules.
+- **[Server API](server.md)**: `SimilaritySearchServer` — the HTTP handlers, the job spool, the two command lines, tokens, telemetry and cursors.
+
+**Manual**
+
+- **[Manual Home](https://sadit.github.io/SimilaritySearchEngine.jl/)**: what each package is for, and which one you need.
+- **[Architecture](https://sadit.github.io/SimilaritySearchEngine.jl/architecture.html)**: Comprehensive specification of the submodules, type hierarchies, concurrency locks, and on-disk storage layout.
+- **[Getting Started Tutorial](https://sadit.github.io/SimilaritySearchEngine.jl/tutorials/getting-started.html)**: End-to-end tutorial covering dense search, sparse retrieval, BM25 text search, filtering, calibration, and whole-dataset operations.
+- **[Multilingual Paragraph Search](https://sadit.github.io/SimilaritySearchEngine.jl/tutorials/paragraph-search.html)**: Large-scale case study evaluating full-text retrieval across multilingual Project Gutenberg corpora and Wikipedia.
+- **[Server Manual](https://sadit.github.io/SimilaritySearchEngine.jl/server/manual.html)** and **[Server Tutorial](https://sadit.github.io/SimilaritySearchEngine.jl/server/tutorial.html)**: the service layer — endpoints, jobs, error mapping, and a walkthrough from an empty working directory to a query over HTTP.

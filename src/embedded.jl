@@ -1286,7 +1286,7 @@ raw vectors (`SimilaritySearch.distance`/`database` of the engine's index) rathe
 graph search, so it works the same regardless of how well-tuned (or untuned) the
 project's `BeamSearch` is.
 
-Returns an [`FFTResult`](@ref) -- every field `SimilaritySearch.fft` itself reports (see its
+Returns an `FFTResult` (an alias of [`CenterSelectionResult`](@ref)) -- every field `SimilaritySearch.fft` itself reports (see its
 docstring and `SimilaritySearch.CenterSelection`), with ids as `Int32` to match every other id
 this package hands back. `centers` are internal `_id`s (1-based position in the index), not
 hydrated with metadata -- look them up yourself (e.g. via [`fetch_items`](@ref)) if you need

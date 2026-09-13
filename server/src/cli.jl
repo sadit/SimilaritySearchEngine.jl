@@ -20,6 +20,14 @@ const CLI_CHOICES = Dict(
 
 _choice_tester(name::String) = x -> x in CLI_CHOICES[name]
 
+"""
+    build_settings() -> ArgParse.ArgParseSettings
+
+The `similarity-search` command line: every data-plane subcommand (`build`, `search`,
+`searchbatch`, `allknn`, `fft`, `neardup`, `hsp`, `closestpair`, `describe`, `rebuild`,
+`dump`, `load`) with its options. Built fresh on each call rather than held in a constant,
+because `interactive.jl` introspects the same object to generate its guided forms.
+"""
 function build_settings()
     s = ArgParseSettings(description = "SimilaritySearchServer CLI")
 

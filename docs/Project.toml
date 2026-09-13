@@ -1,3 +1,11 @@
 [deps]
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
 SimilaritySearchEngine = "727cb942-cf72-4dec-85ff-a934ba36de1c"
+SimilaritySearchServer = "381ed5c1-5ad0-425d-862d-01f56a64d1b8"
+
+# Both packages of this repository, by path: the reference covers the two of them and neither
+# is registered. Without this, building it would depend on whoever ran it having `Pkg.develop`ed
+# both into an uncommitted docs/Manifest.toml.
+[sources]
+SimilaritySearchEngine = {path = ".."}
+SimilaritySearchServer = {path = "../server"}
