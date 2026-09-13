@@ -35,12 +35,11 @@ using JSON3
 
         srv = ensure_test_server()
         for id in ("reload_ds1", "reload_ds2")
-            Project.close_project(srv.app.datasets[id])
-            delete!(srv.app.datasets, id)
-            delete!(srv.app.engines, id)
+            Project.close_project(srv.app.handles[id].project)
+            delete!(srv.app.handles, id)
         end
-        @test !haskey(srv.app.datasets, "reload_ds1")
-        @test !haskey(srv.app.engines, "reload_ds1")
+        @test !haskey(srv.app.handles, "reload_ds1")
+        @test !haskey(srv.app.handles, "reload_ds2")
 
         reloaded = Server.reload_datasets!(srv.app)
         @test "reload_ds1" in reloaded
@@ -48,20 +47,17 @@ using JSON3
 
         # --- reload_ds1: schema, doc_count, and the tombstone all round-tripped from disk ---
 
-        @test haskey(srv.app.datasets, "reload_ds1")
-        @test haskey(srv.app.engines, "reload_ds1")
-        # schema1 = srv.app.datasets["reload_ds1"].schema
-        # @test any(f -> f.name == "category" && f.indexed, schema1.fields)
-        engine1 = srv.app.engines["reload_ds1"]
-        @test length(engine1.index) == 10
+        @test haskey(srv.app.handles, "reload_ds1")
+        engine1 = srv.app.handles["reload_ds1"].engine
+        @test length(engine1.backend.index) == 10
         @test length(engine1.deleted_ids) == 1
         @test 3 in engine1.deleted_ids
 
-        # --- reload_ds2: never had a snapshot -- reopens as a freshly-created, untrained engine ---
+        # --- reload_ds2: never indexed -- reopens as a freshly-created, untrained text engine ---
 
-        engine2 = srv.app.engines["reload_ds2"]
-        @test engine2.index === nothing
-        @test IndexEngine.is_text_index(engine2)
+        engine2 = srv.app.handles["reload_ds2"].engine
+        @test engine2.backend.index === nothing
+        @test payload_kind(engine2) === :text
 
         # --- Both are genuinely live again: exercise them over HTTP exactly like a normal request ---
 

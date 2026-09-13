@@ -415,7 +415,6 @@ function handle_delete_dataset(req::HTTP.Request, app::AppState, id::String)
             Project.close_project(app.handles[id].project)
             delete!(app.handles, id)
         end
-        delete!(app.handles, id)
     end
 
     path = joinpath(app.workdir, "datasets", id)
@@ -439,7 +438,6 @@ function handle_unload_dataset(req::HTTP.Request, app::AppState, id::String)
     lock(app.lock) do
         Project.close_project(app.handles[id].project)
         delete!(app.handles, id)
-        delete!(app.handles, id)
     end
     return json_response(200, Dict("status" => "unloaded", "id" => id))
 end
@@ -460,7 +458,6 @@ function handle_reload_dataset(req::HTTP.Request, app::AppState, id::String)
     if haskey(app.handles, id)
         lock(app.lock) do
             Project.close_project(app.handles[id].project)
-            delete!(app.handles, id)
             delete!(app.handles, id)
         end
     end
@@ -850,20 +847,27 @@ function _run_search(handle, index::String, req::HTTP.Request, query, k::Int;
                      filter_spec=nothing, bs_override=nothing, text::Bool=false)
     engine = handle.engine
     dataset = handle.project
-    snapshot = Telemetry.snapshot_costs(engine.backend.ctx)
+    # The cost of this one search, reported by the engine itself. It cannot be recovered by
+    # snapshotting a context around the call the way `append`/`delete` do: a search runs on a
+    # context borrowed from the engine's pool and returned at the end, so the counters a
+    # caller can reach from out here are shared with whatever else is searching concurrently.
+    stats = SSE.SearchStats()
     t0 = time()
     hits = if bs_override !== nothing
-        _hydrate_raw(handle, IndexEngine.search_live(engine, query, k;
-                                                     bs_override=bs_override, minrecall=nothing, policy=nothing))
+        raw = IndexEngine.search_live(engine, query, k;
+                                      bs_override=bs_override, minrecall=nothing, policy=nothing)
+        stats.distance_evaluations = raw.distance_evaluations
+        _hydrate_raw(handle, raw)
     elseif text
-        SSE.ftsearch(handle, query, k)
+        SSE.ftsearch(handle, query, k; stats)
     elseif filter_spec === nothing
-        SSE.search(handle, query, k)
+        SSE.search(handle, query, k; stats)
     else
-        SSE.search(handle, query, k; filter=_filter_predicate(filter_spec), candidates=FILTER_CANDIDATES(k))
+        SSE.search(handle, query, k; filter=_filter_predicate(filter_spec), candidates=FILTER_CANDIDATES(k), stats)
     end
-    Telemetry.log_request!(dataset, engine.backend.ctx, "search", index, t0, snapshot;
-        token=_request_token(req), distance_name=_engine_distance_name(engine), dimension=_engine_dimension(engine))
+    Telemetry.log_request!(dataset, nothing, "search", index, t0, nothing;
+        token=_request_token(req), distance_name=_engine_distance_name(engine), dimension=_engine_dimension(engine),
+        distance_evaluations=stats.distance_evaluations)
     return hits
 end
 
@@ -1555,7 +1559,9 @@ end
 function handle_create_token(req::HTTP.Request, app::AppState)
     data = JSON3.read(String(req.body), Dict{String, Any})
     user = get(data, "user", "anonymous")
-    permissions = String.(get(data, "permissions", String[]))
+    # `String.(...)` over an empty `Vector{Any}` (no permissions at all) stays a `Vector{Any}`,
+    # which `create_token!` does not accept -- collect into the element type instead.
+    permissions = collect(String, get(data, "permissions", String[]))
     expires_at = get(data, "expires_at", nothing)
 
     token_str = Tokens.create_token!(app.token_mgr, user, permissions; expires_at=expires_at)

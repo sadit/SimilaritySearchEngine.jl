@@ -33,6 +33,30 @@ struct SearchResult
 end
 
 """
+    SearchStats
+
+A mutable, caller-supplied box for the cost accounting of one search. Pass it as
+`search(h, q, k; stats=SearchStats())` (or to [`ftsearch`](@ref)) and read
+`stats.distance_evaluations` afterwards: the number of distance computations *that call*
+performed, which is what a frontend logs per request and what a recall/cost experiment
+measures.
+
+It exists because the count is produced inside [`IndexEngine.search_live`](@ref), on a
+context borrowed from the engine's pool for the duration of the call, and is therefore
+not recoverable from outside afterwards -- the pool hands the same context to the next
+concurrent search, and `ctx.costdists` is a running total, never reset. A caller that
+snapshots a context around a search attributes another thread's work to its own request.
+
+Reused across calls if you want a running total of your own; each search *overwrites*
+the field rather than accumulating, so add it up yourself if that is what you want.
+"""
+mutable struct SearchStats
+    distance_evaluations::Int
+end
+
+SearchStats() = SearchStats(0)
+
+"""
     ExistsResult
 
 What [`exists`](@ref) reports per queried id: the id as asked for, whether a record was found,
@@ -820,7 +844,7 @@ function _search_with_filter(engine::IndexEngine.AbstractSearchEngine, project::
         push!(dists, dist)
         length(ids) == k && break
     end
-    return (id=ids, dist=dists, deleted=falses(length(ids)))
+    return (id=ids, dist=dists, deleted=falses(length(ids)), distance_evaluations=raw.distance_evaluations)
 end
 
 function _hydrate_results(project::Project.ProjectManager, res_knn)
@@ -938,14 +962,20 @@ search. Ignored for any other engine kind.
 Returns a `Vector{`[`SearchResult`](@ref)`}` -- `_id` is the internal id, `doc_id` the
 caller's own, and note that those two field names sit the opposite way round from the named
 tuple this replaced.
+
+`stats`, if given a [`SearchStats`](@ref), receives this call's distance-evaluation count --
+the only way to get it, since the context that counted them goes back to the engine's pool
+when the call returns.
 """
-function search(handle::EmbeddedEngine, vector, k::Int=10; filter=nothing, minrecall=nothing, candidates::Int=2k)
+function search(handle::EmbeddedEngine, vector, k::Int=10; filter=nothing, minrecall=nothing, candidates::Int=2k,
+                stats::Union{Nothing,SearchStats}=nothing)
     query = _search_query(handle.engine, vector)
     needs_save = minrecall !== nothing && handle.engine isa IndexEngine.DenseEngine{IndexEngine.GraphBackend} && isempty(handle.engine.backend.opt_beamsearch)
     res_knn = filter === nothing ?
         IndexEngine.search_live(handle.engine, query, k; bs_override=nothing, minrecall, policy=nothing) :
         _search_with_filter(handle.engine, handle.project, query, k, filter; minrecall, candidates)
     needs_save && Persistence.save_field!(handle.store, :opt_beamsearch, handle.engine.backend.opt_beamsearch)
+    stats === nothing || (stats.distance_evaluations = res_knn.distance_evaluations)
     return _hydrate_results(handle.project, res_knn)
 end
 
@@ -1066,9 +1096,13 @@ of being fixed at project creation. The default is inert for a project fitted un
 default `TextConfig()`, whose policy already folds case and diacritics; it starts mattering
 for one built on a profile that preserves them. Use [`ftexplain`](@ref) to see what a query
 was actually searched as.
+
+`stats` behaves exactly as in [`search`](@ref).
 """
-function ftsearch(handle::EmbeddedEngine, text::AbstractString, k::Int=10; minrecall=nothing, policy::QueryPolicy=QueryPolicy())
+function ftsearch(handle::EmbeddedEngine, text::AbstractString, k::Int=10; minrecall=nothing, policy::QueryPolicy=QueryPolicy(),
+                  stats::Union{Nothing,SearchStats}=nothing)
     res_knn = IndexEngine.search_live(handle.engine, text, k; bs_override=nothing, minrecall, policy)
+    stats === nothing || (stats.distance_evaluations = res_knn.distance_evaluations)
     return _hydrate_results(handle.project, res_knn)
 end
 

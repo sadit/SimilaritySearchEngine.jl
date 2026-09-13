@@ -38,11 +38,17 @@ end
 
 Copies `ctx.costdists` (the per-batch distance-evaluation counters every
 `AbstractContext` -- `GenericContext`/`SearchGraphContext`/`InvertedFileContext` alike --
-carries, per `SimilaritySearch.jl`'s own cost-accounting API) before a search/insert, so
+carries, per `SimilaritySearch.jl`'s own cost-accounting API) before an operation, so
 the delta against it after the operation gives that operation's own cost rather than the
 index's lifetime total (`ctx.costdists` is never reset). `nothing` for `ctx === nothing`
 (an untrained text engine has no context yet) -- callers pass that straight through to
 `log_request!`, which then just reports 0 distance evaluations instead of erroring.
+
+This works for **insertion** (`handle_append`), which runs on the engine's own
+`backend.ctx` under an exclusive write lock. It does *not* work for a search: a search runs
+on a context borrowed from the engine's pool for the duration of the call, shared with
+whatever else is searching concurrently, so `_run_search` asks the engine for the count
+instead (`SimilaritySearchEngine.SearchStats`) and passes it to `log_request!` directly.
 """
 snapshot_costs(ctx) = ctx === nothing ? nothing : copy(ctx.costdists)
 

@@ -569,6 +569,13 @@ function execute_rebuild(cmd_args::Dict)
     reindexed = isempty(items) ? 0 : SSE.append_items!(fresh, items)
     reindexed > 0 && SSE.index!(fresh)
     SSE.close_project!(fresh)
+    # `descriptor.json` is the HTTP server's own sidecar (index kind, distance, join group,
+    # meta schema), written next to the project rather than inside it, and `create_project`
+    # above knows nothing about it. Carrying it over is what lets a live server reload the
+    # rebuilt dataset -- without it, `POST /admin/datasets/{id}/reload` answers 404 for a
+    # dataset that is sitting right there on disk.
+    stale_descriptor = joinpath(stale, "descriptor.json")
+    isfile(stale_descriptor) && cp(stale_descriptor, joinpath(dir, "descriptor.json"); force=true)
     rm(stale; recursive=true)
 
     println("Rebuild completed for '$project_id': $reindexed item(s) reindexed into $dir")

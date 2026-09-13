@@ -45,9 +45,8 @@ using JSON3
         # first to simulate the "server not currently serving this dataset" case `rebuild`
         # actually requires.
         srv = ensure_test_server()
-        Project.close_project(srv.app.datasets["rebuild_http_ds"])
-        delete!(srv.app.datasets, "rebuild_http_ds")
-        delete!(srv.app.engines, "rebuild_http_ds")
+        Project.close_project(srv.app.handles["rebuild_http_ds"].project)
+        delete!(srv.app.handles, "rebuild_http_ds")
 
         cmd_rebuild = `julia --project=$proj $cli_script rebuild --dataset rebuild_http_ds --workdir $workdir`
         @test success(cmd_rebuild)

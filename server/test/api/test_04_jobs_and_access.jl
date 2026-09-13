@@ -76,8 +76,10 @@ using JSON3
         resp = HTTP.get("$base_url/jobs/$neardup_job_id/result")
         @test resp.status == 200
         neardup_result = JSON3.read(String(resp.body))
-        @test length(neardup_result.nn) == 100
-        @test neardup_result.duplicate_count == length(neardup_result.nn) - length(neardup_result.centers)
+        # `assign`/`centers`/`dists` are the engine's own `NearDupResult` field names (the
+        # CLI used to call the assignment array `nn`, from an older SimilaritySearch API).
+        @test length(neardup_result.assign) == 100
+        @test neardup_result.duplicate_count == length(neardup_result.assign) - length(neardup_result.centers)
 
         # 5. hsp Job Execution (needs a queries file -- CLI/offline-style, like searchbatch).
         resp = HTTP.post("$base_url/jobs/hsp", [], JSON3.write(Dict("dataset" => "ops_dataset", "queries" => data_path, "k" => 5)))

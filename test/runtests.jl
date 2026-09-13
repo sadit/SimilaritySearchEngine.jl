@@ -927,6 +927,32 @@ const ACCENT_ITEMS = vcat(
         end
     end
 
+    @testset "SearchStats reports the cost of the search it was passed to" begin
+        mktempworkdir() do workdir
+            h = create_project(workdir, "stats_ds"; engine=DenseEngine, backend=ExhaustiveSearch)
+            append_items!(h, [DenseItem(Float32[i, i % 5, 1, 0]; doc_id="s$i") for i in 1:32])
+            q = Float32[3, 3, 1, 0]
+
+            stats = SearchStats()
+            @test stats.distance_evaluations == 0
+            hits = search(h, q, 4; stats)
+            @test length(hits) == 4
+            # An exhaustive backend compares the query against every item, so the count is
+            # not merely positive, it is known.
+            @test stats.distance_evaluations == 32
+
+            # Each call overwrites rather than accumulates (the filtered path reports the cost
+            # of the candidate search it ran underneath, which here is again the whole
+            # collection -- an exhaustive backend has no cheaper way to answer either query).
+            search(h, q, 2; filter=(record, meta) -> true, stats)
+            @test stats.distance_evaluations == 32
+
+            # Passing no stats is the default and changes nothing about the answer.
+            @test [r.doc_id for r in search(h, q, 4)] == [r.doc_id for r in hits]
+            close_project!(h)
+        end
+    end
+
     @testset "batch search answers exactly what one-at-a-time search answers" begin
         mktempworkdir() do workdir
             h = create_project(workdir, "batch_ds"; engine=DenseEngine, backend=ExhaustiveSearch)
