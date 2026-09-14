@@ -395,9 +395,10 @@ function execute_describe(cmd_args::Dict)
 
     if is_text
         # The vocabulary and its out-of-vocabulary rates belong to the engine, which fitted
-        # it: `describe` asks for the reading that costs a pass over the documents, which is
-        # what an offline command is for (PLAN.md §5's drift signal, see `execute_rebuild`).
-        desc["vocab"] = SSE.vocabulary_report(handle; scan=true)
+        # it. `sample=0` asks for every document rather than the bounded sample the HTTP
+        # endpoint takes: this command is offline and nobody is waiting on a connection, so it
+        # answers exactly (PLAN.md §5's drift signal, see `execute_rebuild`).
+        desc["vocab"] = SSE.vocabulary_report(handle; scan=true, sample=0)
     else
         desc["distance"] = string(nameof(typeof(SimilaritySearch.distance(engine.backend.index))))
         desc["distance_stats"] = _dense_distance_stats(handle)

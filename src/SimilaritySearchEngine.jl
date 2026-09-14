@@ -72,7 +72,7 @@ export TextConfig, TextProfile, QueryPolicy, load_profile, save_profile,
 # a `FitFromCorpus` method to -- also one function, for the same reason.
 export text_profile, fit_profile
 export meta_schema, declare_meta_schema!, MetaSchema, MetaField
-export vocabulary_report
+export vocabulary_report, DEFAULT_OOV_SCAN_SAMPLE
 
 # The text-model decision a text project is created with: `create_project` refuses to guess,
 # so these two are part of the minimum vocabulary for creating one at all.

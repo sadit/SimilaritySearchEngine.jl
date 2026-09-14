@@ -1016,6 +1016,19 @@ const ACCENT_ITEMS = vcat(
             scanned = vocabulary_report(h; scan=true)
             @test scanned["live_oov_rate"] == 0.0
             @test scanned["live_tokens"] > 0
+            @test scanned["live_documents_scanned"] == 3
+            @test scanned["live_documents_total"] == 3
+            @test scanned["live_sampled"] == false          # three documents fit in any sample
+
+            # The pass over the documents is bounded: with a sample of one, one document is
+            # read, the report says so, and the rate is what that document shows
+            partial = vocabulary_report(h; scan=true, sample=1)
+            @test partial["live_documents_scanned"] == 1
+            @test partial["live_documents_total"] == 3
+            @test partial["live_sampled"] == true
+            @test partial["live_tokens"] < scanned["live_tokens"]
+            # ... and `sample=0` reads every document, which is what `describe` asks for
+            @test vocabulary_report(h; scan=true, sample=0)["live_documents_scanned"] == 3
 
             close_project!(h)
             h2 = open_project(workdir, "oov_ds")

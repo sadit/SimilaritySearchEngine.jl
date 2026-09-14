@@ -67,9 +67,23 @@ profile to the server is not available over HTTP.
 
 ## 4. REST API (base endpoints)
 
+Every response of this API is JSON. A response that succeeded carries `status`; one that
+failed carries `error` and `kind` (section 5). The bodies below are real responses, not
+sketches.
+
+Two names appear throughout and mean opposite things in two places. In a **search result**,
+`id` is the identifier the caller gave the item and `doc_id` is the internal one the engine
+assigned. In a **stored record** (`/fetch`, the operation log), `doc_id` is the caller's and
+`_id` is the internal one. The inversion in search results is older than the rest of the API
+and has not been corrected.
+
 ### Control
-- `GET /readyz` — health.
-- `GET /metrics` — metrics in Prometheus format: the number of documents and of deleted records per dataset, the jobs in progress, and the counters the operation log feeds — requests per dataset and operation, distance computations, items inserted, and a histogram of request durations.
+
+- `GET /healthz` — the process answers HTTP.
+- `GET /readyz` — the process is ready to serve. `{"status":"ok"}`.
+- `GET /metrics` — metrics in Prometheus text format: documents and deleted records per
+  dataset, jobs in progress, and the counters the operation log feeds — requests per dataset
+  and operation, distance computations, items inserted, and a histogram of request durations.
 
 The counters cover the running process and start at zero when it starts, which is what a
 Prometheus counter is expected to do; `simsearch_process_start_time_seconds` reports when
@@ -79,8 +93,37 @@ request would cost more than the requests it measures. The log remains the durab
 is read through `GET /api/v1/datasets/{id}/log`.
 
 ### Datasets
-- `POST /api/v1/datasets` — creates one. Accepts `id`, `index_kind` (see above), `distance`, `dimension`, the join-group fields `join_group`, `holds_metadata`, `key`, and an optional `meta_schema`.
-- `GET /api/v1/datasets/{id}` reports the declaration of a dataset that is open.
+
+- `POST /api/v1/datasets` — creates one. Accepts `id`, `index_kind` (see section 3),
+  `distance`, `dimension`, the join-group fields `join_group`, `holds_metadata`, `key`, and
+  an optional `meta_schema`. Answers `201`.
+- `GET /api/v1/datasets?offset=&limit=` — every dataset on disk, loaded or not.
+- `GET /api/v1/datasets/{id}` — one of them.
+- `DELETE /api/v1/datasets/{id}` — destroys it.
+- `POST /api/v1/admin/datasets/{id}/unload` and `/reload` — closes or reopens a dataset
+  without restarting the server. The `rebuild` subcommand of the command line requires this,
+  because the RocksDB write lock is exclusive per process.
+
+```json
+POST /api/v1/datasets          {"status":"created","id":"ds"}
+DELETE /api/v1/datasets/{id}   {"status":"deleted","id":"ds"}
+POST .../unload                {"status":"unloaded","id":"ds"}
+POST .../reload                {"status":"reloaded","id":"ds"}
+
+GET /api/v1/datasets/{id}
+{"id":"ds", "index_kind":"searchgraph", "distance":"L2",
+ "created_at":"2026-09-14T19:41:57.059", "loaded":true,
+ "doc_count":5, "tombstone_count":0, "tombstone_ratio":0,
+ "join_group":null, "holds_metadata":false, "key":null,
+ "meta_schema":[{"name":"year","type":"int64"}],
+ "beamsearch_baseline":{"bsize":4,"delta":1,"maxvisits":1000000}}
+```
+
+`GET /api/v1/datasets` wraps a list of those objects: `{"status":"ok", "datasets":[...],
+"total":2, "offset":0, "limit":2}`. `doc_count`, `tombstone_count`, `tombstone_ratio`,
+`meta_schema` and `beamsearch_baseline` are reported for a dataset that is open;
+`beamsearch_baseline` is `null` for one that is not backed by a graph, and `meta_schema` is
+`null` for one that declares nothing.
 
 `meta_schema` declares which fields of an item's metadata the dataset expects and what each
 one holds:
@@ -98,17 +141,63 @@ declared fields are not indexed; what the declaration changes is that a filter c
 the declared type, so a `timestamp` is compared as an instant rather than as the text that
 stores it. The engine holds the declaration inside the project, which is why it survives a
 restart and travels with `dump`.
-- `DELETE /api/v1/datasets/{id}` — destroys it.
-- `POST /api/v1/datasets/{id}/unload` and `/reload` — closes or reopens a dataset without restarting the server. The `rebuild` subcommand of the command line requires this, because the RocksDB write lock is exclusive per process.
+
+- `GET /api/v1/datasets/{id}/join_group` — the datasets tagged with the same `join_group`.
+
+```json
+{"join_group":"g",
+ "members":[{"index_uuid":"txt","index_kind":"bm25_invfile","key":"body","holds_metadata":true}]}
+```
 
 ### Search and indexing
-- `POST /api/v1/datasets/{id}/append` — inserts items. A dense item contains `vector`, a text item contains `text`, and a sparse item contains `indices` and `values`. The fields `doc_id`, `keywords` and `refs`, and any other field, become the metadata of the item.
-- `POST /api/v1/datasets/{id}/search` — dense and sparse search, with optional `filter`, `page_size` and `beamsearch_overrides`.
+
+- `POST /api/v1/datasets/{id}/append` — inserts items. A dense item contains `vector`, a text
+  item contains `text`, and a sparse item contains `indices` and `values`. The fields
+  `doc_id`, `keywords` and `refs`, and any other field, become the metadata of the item.
+- `POST /api/v1/datasets/{id}/search` — dense and sparse search, with optional `filter`,
+  `page_size` and `beamsearch_overrides`.
 - `POST /api/v1/datasets/{id}/ftsearch` — text search.
-- `POST /api/v1/datasets/{id}/fetch` and `GET /api/v1/datasets/{id}/exists` — records by identifier, and whether an identifier exists.
+- `POST /api/v1/datasets/{id}/fetch` and `GET /api/v1/datasets/{id}/exists?ids=` — records by
+  identifier, and whether an identifier exists.
 - `POST /api/v1/datasets/{id}/delete` — logical deletion.
 - `POST /api/v1/datasets/{id}/calibrate` — recall calibration for a graph-backed project.
-- `POST /api/v1/search/hybrid` and `POST /api/v1/search/group` — reciprocal rank fusion over two datasets, and a text query sent to every dataset of a join group.
+- `POST /api/v1/search/hybrid` and `POST /api/v1/search/group` — reciprocal rank fusion over
+  two datasets, and a text query sent to every dataset of a join group.
+
+```json
+POST .../append     {"status":"appended","id":"ds","inserted":5}
+POST .../delete     {"status":"soft_deleted","id":"ds","doc_id":1}
+POST .../calibrate  {"status":"calibrated","id":"ds",
+                     "baseline":{"bsize":4,"delta":1,"maxvisits":1000000}}
+
+POST .../search  and  POST .../ftsearch
+{"status":"searched","id":"ds",
+ "results":[{"id":"d1","doc_id":1,"distance":0},
+            {"id":"d2","doc_id":2,"distance":1}]}
+
+POST .../fetch
+{"status":"fetched","id":"ds",
+ "results":[{"id":"d1","doc_id":"d1","_id":1,"keywords":["k1"],"refs":[],
+             "schema_version":1,"year":2021}]}
+
+GET .../exists?ids=d1,nope
+{"status":"ok","id":"ds",
+ "results":[{"id":"d1","exists":true,"deleted":false},
+            {"id":"nope","exists":false,"deleted":false}]}
+
+POST /api/v1/search/hybrid
+{"status":"searched","results":[{"id":"d1","doc_id":1,"score":0.0327}]}
+
+POST /api/v1/search/group
+{"status":"searched","join_group":"g",
+ "results":{"body":[{"id":"t1","doc_id":1,"score":-0.267}]}}
+```
+
+A `fetch` result merges the item's metadata into the record, which is why `year` sits beside
+`keywords` above. A `search` over a text dataset reports a BM25 score with its sign inverted,
+under the name `distance`, which is the convention of the library: a smaller value is a closer
+match. A filtered search that could not fill `k` adds `"insufficient_results":true`, since it
+reads a bounded number of candidates before applying the filter.
 
 An operation on one dataset is addressed under that dataset. The two queries that read more
 than one are under `/api/v1/search/`, which is the only place where a route is not about a
@@ -117,19 +206,46 @@ distinction that the API stopped making.
 
 ### Vocabulary
 
-- `GET /api/v1/datasets/{id}/vocab?scan=` — what a text dataset's vocabulary covers: its
-  size, the documents it was fitted from, its most frequent tokens, and how many of the
-  tokens in the queries it has answered were not in it. `scan=true` adds the same fraction
-  measured over the stored documents, which reads all of them.
+- `GET /api/v1/datasets/{id}/vocab?scan=&sample=` — what a text dataset's vocabulary covers.
+
+```json
+{"id":"txt", "vocsize":3, "trainsize":3, "numtokens":9, "avgdoclen":3,
+ "top_tokens":[{"token":"gato","ndocs":3,"occs":3}],
+ "queries":1, "query_tokens":1, "query_oov_tokens":0, "query_oov_rate":0}
+```
+
+With `scan=true`, six more fields:
+
+```json
+{"live_tokens":9, "live_oov_tokens":0, "live_oov_rate":0,
+ "live_documents_scanned":3, "live_documents_total":3, "live_sampled":false}
+```
 
 A vocabulary is fitted once and does not grow. The rate over the queries says the words being
 asked for are missing, and the rate over the documents says the words the dataset already
 holds are missing; the second is what `rebuild` corrects, by refitting the vocabulary over
-the documents the dataset has now. `409` for a dataset that holds no text or was never
-indexed.
+the documents the dataset has now.
+
+The query counters cost nothing and are always reported. The reading over the documents is
+asked for with `scan=true`, and it is bounded: at most `sample` documents are read, spread
+evenly over the dataset, and `live_sampled` says whether it read all of them. The default
+sample takes about a second whatever the dataset's size; `sample=0` reads every document,
+which on a large dataset takes minutes and is better asked for offline with `describe`.
+`409` for a dataset that holds no text or was never indexed.
 
 ### Telemetry
-- `GET /api/v1/datasets/{id}/log?offset=&limit=` — the dataset's `op_log`: one record per `search`/`ftsearch`/`append`/`delete`, with elapsed time and `distance_evaluations`.
+
+- `GET /api/v1/datasets/{id}/log?offset=&limit=` — the dataset's `op_log`: one record per
+  `search`, `ftsearch`, `append` or `delete`.
+
+```json
+{"status":"ok","total":4,"offset":0,"limit":1,
+ "entries":[{"operation":"delete","timestamp":"2026-09-14T19:42:11.195",
+             "details":{"index_uuid":"ds","doc_id":1,"token":null}}]}
+```
+
+A `search` entry carries more in `details`: `distance_name`, `dimension`,
+`distance_evaluations` and `elapsed_seconds`; an `append` entry carries `items_inserted`.
 
 The number of distance computations of a search is obtained from the engine, in a
 `SimilaritySearchEngine.SearchStats` instance that `_run_search` passes to `search` and to
@@ -139,8 +255,52 @@ of any other search executed since. For `append` the second method is correct, b
 insertion uses the engine's own context under an exclusive write lock.
 
 ### Asynchronous jobs
-- `POST /api/v1/jobs/{kind}` — enqueues a job (`allknn`, `fft`, `neardup`, `hsp`, `searchbatch`, `closestpair`, `build`, `dump`, `load`). Returns `202` and a `job_id`.
-- `GET /api/v1/jobs/{job_id}` and `/result` — the state of the job, and its output.
+
+- `POST /api/v1/jobs/{kind}` — enqueues a job (`allknn`, `fft`, `neardup`, `hsp`,
+  `searchbatch`, `closestpair`, `build`, `dump`, `load`). Answers `202`.
+- `GET /api/v1/jobs?offset=&limit=`, `GET /api/v1/jobs/{job_id}` and `/result` — the jobs,
+  the state of one, and its output.
+- `POST /api/v1/jobs/{job_id}/block`, `/resume`, `/kill`, and `DELETE /api/v1/jobs/{job_id}`.
+- `POST /api/v1/admin/jobs/gc` — removes the jobs and cursors that have expired.
+
+```json
+POST /api/v1/jobs/allknn  [202]   {"status":"accepted","job_id":"fe3198116091f825"}
+
+GET /api/v1/jobs
+{"status":"ok","total":1,"offset":0,"limit":1,
+ "jobs":[{"id":"fe3198116091f825","kind":"allknn","status":"queued"}]}
+
+POST /api/v1/admin/jobs/gc
+{"status":"ok","jobs_purged":[],"cursors_purged":[],"cursors_expired":[]}
+```
+
+A job's state is `queued`, `running`, `blocked`, `completed` or `failed`.
+`GET /api/v1/jobs/{job_id}/result` streams the file the job wrote, except for `dump`, whose
+result is a directory: for that one it answers `{"bundle_dir": ..., "manifest": {...}}`.
+
+### Tokens
+
+- `POST /api/v1/admin/tokens` — creates one. Accepts `user`, `permissions` and an optional
+  `expires_at`.
+- `GET /api/v1/admin/tokens` — every token stored, expired or not.
+- `DELETE /api/v1/admin/tokens/{token}` — revokes one.
+- `POST /api/v1/admin/tokens/prune` — removes the expired ones.
+
+```json
+POST /api/v1/admin/tokens  [201]
+{"status":"created","token":"703ffec26b6db7b1...","permissions":["read:*"]}
+
+GET /api/v1/admin/tokens
+{"status":"ok",
+ "tokens":[{"token":"703ffec26b6db7b1...","user":"alice","permissions":["read:*"],
+            "created_at":"2026-09-14T19:42:20.595","expires_at":null}]}
+
+DELETE /api/v1/admin/tokens/{token}   {"status":"revoked"}
+POST /api/v1/admin/tokens/prune       {"status":"ok","pruned":0}
+```
+
+The token string is returned once, when it is created. `GET /api/v1/admin/tokens` is an audit
+listing and reports them in full, which is why it requires `admin`.
 
 ### Authentication
 

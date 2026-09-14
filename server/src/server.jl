@@ -702,9 +702,14 @@ have. That fraction is the signal for a `rebuild`, which refits the vocabulary o
 documents the dataset holds now.
 
 `scan=true` adds the same fraction measured over the stored documents instead of over the
-queries. It reads every live document, so it is a pass over the whole dataset and is not the
-default. `404` for a dataset that does not exist or is not loaded, `409` for one that holds
-no text or whose vocabulary has not been fitted yet -- the same condition `index!` resolves.
+queries. That reading costs time linear in the size of the dataset, so it is bounded: at most
+`sample` documents are read, spread evenly over the dataset, and the response says how many
+it read of how many exist. The default is `SSE.DEFAULT_OOV_SCAN_SAMPLE`, about a second's
+work whatever the dataset's size; `sample=0` reads every document, which is a request that
+can take minutes on a large dataset and is better made offline with `describe`.
+
+`404` for a dataset that does not exist or is not loaded, `409` for one that holds no text or
+whose vocabulary has not been fitted yet -- the same condition `index!` resolves.
 """
 function handle_get_vocab(req::HTTP.Request, app::AppState, id::String)
     valid_project_id(id) || return json_response(400, Dict("error" => "invalid dataset id"))
@@ -712,8 +717,9 @@ function handle_get_vocab(req::HTTP.Request, app::AppState, id::String)
 
     params = HTTP.queryparams(HTTP.URI(req.target))
     scan = get(params, "scan", "false") in ("1", "true", "yes")
+    sample = something(tryparse(Int, get(params, "sample", "")), SSE.DEFAULT_OOV_SCAN_SAMPLE)
 
-    report = SSE.vocabulary_report(app.handles[id]; scan)
+    report = SSE.vocabulary_report(app.handles[id]; scan, sample)
     report === nothing && return json_response(409, Dict(
         "error" => "dataset '$id' has no fitted vocabulary: it is not a text dataset, or it has never been indexed",
         "kind" => "NotTrained"))

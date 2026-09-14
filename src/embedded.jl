@@ -163,6 +163,21 @@ OOVCounters() = OOVCounters(0, 0, 0, 0)
 const OOV_FLUSH_EVERY = 256
 
 """
+    DEFAULT_OOV_SCAN_SAMPLE
+
+How many documents [`vocabulary_report`](@ref) reads by default when asked to measure the
+out-of-vocabulary rate over the project's own documents.
+
+Reading every document costs time linear in the project: 11.6 s over 12.3 million tokens,
+measured 2026-09-14. That is an answer to a question an operator asks while waiting for it,
+so it is bounded instead: a rate measured over twenty thousand documents, spread over the
+whole project, decides whether to rebuild with room to spare, and costs about a second
+whatever the project's size. `sample=0` reads everything, for a caller that is offline and
+wants the exact figure.
+"""
+const DEFAULT_OOV_SCAN_SAMPLE = 20_000
+
+"""
     EmbeddedEngine
 
 Bundles everything a script needs to keep working against one open project: its directory
@@ -1308,17 +1323,28 @@ for words it now holds. `rebuild` refits the vocabulary over the documents that 
 now, and these counters are what say whether that is worth doing.
 
 `scan=true` adds `live_oov_rate`, the same fraction measured over the stored documents
-instead of over the queries: every live document is tokenized again and its tokens looked
-up. That is a pass over the whole project, seconds on a large one, which is why it is not
-the default. The two answer different questions. The query rate says the words being asked
-for are missing, which a rebuild fixes only if those words are in the documents; the
-document rate says the words already stored are missing from the vocabulary, which is
-exactly what a rebuild fixes.
+instead of over the queries: a document is read and tokenized again, and its tokens are
+looked up. The two answer different questions. The query rate says the words being asked for
+are missing, which a rebuild fixes only if those words are in the documents; the document
+rate says the words already stored are missing from the vocabulary, which is exactly what a
+rebuild fixes.
+
+`sample` bounds that pass. The cost of reading every document is linear in the size of the
+project -- 11.6 s over 12.3 million tokens, measured 2026-09-14 -- and unbounded, so at most
+`sample` documents are read, spread evenly over the project by taking every nth one. Both
+ends of the project are therefore represented, which matters because drift accumulates at the
+end: the documents appended after the vocabulary was fitted are the ones it does not cover.
+The report says how many documents were read (`live_documents_scanned`) out of how many exist
+(`live_documents_total`) and whether it read all of them (`live_sampled`). `sample <= 0`
+reads every document, which is what an offline command such as `describe` asks for.
+
+Runs under the project's read lock, like a search: the documents it reads are the ones an
+append is writing.
 
 Returns `nothing` for a project that does not hold text, and for one whose vocabulary has
 not been fitted yet.
 """
-function vocabulary_report(handle::EmbeddedEngine; scan::Bool=false)
+function vocabulary_report(handle::EmbeddedEngine; scan::Bool=false, sample::Int=DEFAULT_OOV_SCAN_SAMPLE)
     engine = handle.engine
     IndexEngine.payload_kind(engine) === :text || return nothing
     voc = IndexEngine.text_vocabulary(engine)
@@ -1344,18 +1370,28 @@ function vocabulary_report(handle::EmbeddedEngine; scan::Bool=false)
 
     oov = 0
     total = 0
-    for id in 1:length(engine.staged)
-        id in engine.deleted_ids && continue
-        text = IndexEngine.stored_payload(engine, id)
-        text === nothing && continue
-        for tok in TextSearch.tokenize(voc.textconfig, text)
-            total += 1
-            TextSearch.token2id(voc, tok) == 0 && (oov += 1)
+    scanned = 0
+    live = 0
+    IndexEngine.read_lock(engine.lock) do
+        ids = [id for id in 1:length(engine.staged) if !(id in engine.deleted_ids)]
+        live = length(ids)
+        step = sample > 0 && live > sample ? cld(live, sample) : 1
+        for id in ids[1:step:end]
+            text = IndexEngine.stored_payload(engine, id)
+            text === nothing && continue
+            scanned += 1
+            for tok in TextSearch.tokenize(voc.textconfig, text)
+                total += 1
+                TextSearch.token2id(voc, tok) == 0 && (oov += 1)
+            end
         end
     end
     report["live_tokens"] = total
     report["live_oov_tokens"] = oov
     report["live_oov_rate"] = total == 0 ? 0.0 : oov / total
+    report["live_documents_scanned"] = scanned
+    report["live_documents_total"] = live
+    report["live_sampled"] = scanned < live
     return report
 end
 
