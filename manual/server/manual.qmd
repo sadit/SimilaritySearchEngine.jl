@@ -115,6 +115,19 @@ than one are under `/api/v1/search/`, which is the only place where a route is n
 single dataset. The earlier prefix `/api/v1/simsearch/` was removed on 2026-09-13: it marked a
 distinction that the API stopped making.
 
+### Vocabulary
+
+- `GET /api/v1/datasets/{id}/vocab?scan=` — what a text dataset's vocabulary covers: its
+  size, the documents it was fitted from, its most frequent tokens, and how many of the
+  tokens in the queries it has answered were not in it. `scan=true` adds the same fraction
+  measured over the stored documents, which reads all of them.
+
+A vocabulary is fitted once and does not grow. The rate over the queries says the words being
+asked for are missing, and the rate over the documents says the words the dataset already
+holds are missing; the second is what `rebuild` corrects, by refitting the vocabulary over
+the documents the dataset has now. `409` for a dataset that holds no text or was never
+indexed.
+
 ### Telemetry
 - `GET /api/v1/datasets/{id}/log?offset=&limit=` — the dataset's `op_log`: one record per `search`/`ftsearch`/`append`/`delete`, with elapsed time and `distance_evaluations`.
 

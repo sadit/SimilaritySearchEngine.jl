@@ -58,5 +58,36 @@ using JSON3
         @test resp3.status == 200
         results = JSON3.read(resp3.body).results
         @test !isempty(results)
+
+        # 5. What the vocabulary covers, and what it does not (PLAN.md §5.8). The searches
+        # above already went through it, so the counters are not empty.
+        vocab = JSON3.read(String(HTTP.get("$base_url/datasets/lexical_ds/vocab").body))
+        @test vocab.vocsize > 0
+        @test vocab.trainsize > 0
+        @test length(vocab.top_tokens) > 0
+        @test vocab.queries > 0
+        @test vocab.query_tokens > 0
+        @test 0.0 <= vocab.query_oov_rate <= 1.0
+        # The reading over the queries costs nothing and is always there; the one over the
+        # documents reads all of them and is asked for explicitly.
+        @test !haskey(vocab, :live_oov_rate)
+
+        # A query of words this corpus does not have moves the rate up
+        before = vocab.query_oov_tokens
+        HTTP.post("$base_url/datasets/lexical_ds/ftsearch", [], JSON3.write(Dict("text" => "criptomoneda blockchain", "k" => 3)))
+        vocab = JSON3.read(String(HTTP.get("$base_url/datasets/lexical_ds/vocab?scan=true").body))
+        @test vocab.query_oov_tokens > before
+        # The documents themselves are covered: this vocabulary was fitted from them
+        @test vocab.live_oov_rate == 0.0
+        @test vocab.live_tokens > 0
+
+        # A dataset that holds no text has no vocabulary to report on
+        resp = try
+            HTTP.get("$base_url/datasets/metric_ds/vocab")
+        catch e
+            e.response
+        end
+        @test resp.status == 409
+        @test JSON3.read(String(resp.body)).kind == "NotTrained"
     end
 end

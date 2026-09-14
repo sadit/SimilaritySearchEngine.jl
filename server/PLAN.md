@@ -38,7 +38,7 @@ of it exist.
 | 3. Persistence and telemetry | complete | RocksDB, and an `op_log` with elapsed time and a real distance-computation count per request. The declared metadata schema arrived on 2026-09-13, in a different shape from the one proposed below: see the entry for §4.5 in the pending list. |
 | 3.5. Job model and cursors | complete, with a deliberate change of persistence | Job registry with `queued`, `running`, `blocked`, `completed` and `failed`, `kill`, `gc`, `LocalCLIExecutor`, and result cursors. JLD2 snapshots were removed, because the engine persists its own index; Avro remains for `dump` and `load`. |
 | 4. Web layer | complete | 34 routes, `/healthz`, `/readyz`, `/metrics`, join groups, and authentication (below). `/metrics` reports the counters of §5.8 since 2026-09-13. The routes were reorganized on 2026-09-13: the operations of a dataset are under `/api/v1/datasets/{id}/`, the two queries that read more than one dataset are under `/api/v1/search/`, and the prefix `/api/v1/simsearch/` that §5.1 to §5.3 below describe no longer exists. |
-| 5. Full text and hybrid | complete, minus one item | `ftsearch`, fan-out over a join group, `hybrid_search` with reciprocal rank fusion, and `QueryPolicy` for correction and expansion. The stemmer registry of §5.3 was **discarded on 2026-09-13**: what it was for is done by the query pipeline of `TextSearch.jl` — the text profile carries the lemma clusters, and `QueryPolicy` performs the orthographic correction and the expansion at query time — so neither `Snowball` nor `Languages` is a dependency and no stemmer is configured. Vocabulary-drift detection by out-of-vocabulary rate is absent; `rebuild` is the manual procedure. |
+| 5. Full text and hybrid | complete | `ftsearch`, fan-out over a join group, `hybrid_search` with reciprocal rank fusion, and `QueryPolicy` for correction and expansion. The stemmer registry of §5.3 was **discarded on 2026-09-13**: what it was for is done by the query pipeline of `TextSearch.jl` — the text profile carries the lemma clusters, and `QueryPolicy` performs the orthographic correction and the expansion at query time — so neither `Snowball` nor `Languages` is a dependency and no stemmer is configured. Out-of-vocabulary tracking arrived on 2026-09-14: see the entry for it in the list below. |
 | 6. Scripting packages | one of three | The Python client exists (`client`, `async_client`, `jobs.run_job`, `cursors`, `stress_client.py`). There is no Julia scripting package (§8.3), although §8.5, access without HTTP, is provided by the engine itself. The Node package (§8.4) was never started. |
 | §3. Long-lived search policy | not implemented | `long_query_policy = "deny"` is in `config.toml` and no code reads it. No request is answered with 429, and no search is converted into a job. |
 
@@ -94,9 +94,23 @@ of it exist.
      compares in that type. A field declared `:timestamp` compares as an instant rather than
      as the text that stores it.
    - `:geopoint` of the section below was dropped with the index that justified it.
-6. **Out-of-vocabulary tracking** (§5), so that a text project reports when its vocabulary no
-   longer matches what it is being asked, which is the signal for a `rebuild`. This changes
-   the quality of retrieval, not the operation of the server.
+6. ~~**Out-of-vocabulary tracking** (§5)~~ Done on 2026-09-14, as two readings that answer
+   different questions:
+   - **Over the queries**, continuously and at no measurable cost: `ftsearch` tokenizes the
+     query against the vocabulary's own `TextConfig` and counts the tokens it does not
+     contain. The counters live in the project, are written when it closes and every 256
+     queries, and survive a reopen. A process that is killed loses the queries since the last
+     write; this is a drift signal, not accounting.
+   - **Over the documents**, on request: `vocabulary_report(handle; scan=true)` re-tokenizes
+     every live document. That is a pass over the whole project, which is why it is not the
+     default, and it is what `describe` reports.
+
+   The distinction decides whether a `rebuild` helps. The query rate says the words being
+   asked for are missing, and a rebuild fixes that only if those words are in the documents;
+   the document rate says the words the project already stores are missing from the
+   vocabulary, which is exactly what refitting corrects. `GET /api/v1/datasets/{id}/vocab`
+   reports both (§5.8's vocabulary endpoint), and `describe`'s own copy of the computation
+   was removed in favour of the engine's.
 7. **The request collector of §2**, the query side of the concurrency model: a `Channel` that
    holds incoming requests and releases them as the pool frees up, instead of answering each
    one on the thread pool as Julia schedules it. It is written here as a decision still to be

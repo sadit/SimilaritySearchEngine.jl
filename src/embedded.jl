@@ -130,6 +130,39 @@ struct NearDupResult
 end
 
 """
+    OOVCounters
+
+How many of the tokens this project has been asked for were not in its vocabulary.
+
+A text project fits its vocabulary once, from the documents staged when `index!` first ran.
+Everything appended afterwards is encoded against that vocabulary, and a word it does not
+contain cannot be searched for: it is dropped, silently, at both ends. These counters make
+that visible, so that the decision to run a `rebuild` -- which refits the vocabulary over
+what the project holds now -- rests on a measurement.
+
+`queries` counts the queries that were resolved, `tokens` the tokens they contained, and
+`oov` the ones the vocabulary did not have as typed. Correction may still find a variant for
+some of those (`ftexplain` reports which), so this is an upper bound on what a query lost.
+
+The counts are kept in memory and written to the project when it is closed, or every
+`OOV_FLUSH_EVERY` queries. A process that is killed loses the queries since the last write;
+this is a signal about vocabulary drift, not accounting. `rebuild` starts them again, since
+after it the vocabulary is a different one and the old counts describe something that no
+longer exists.
+"""
+mutable struct OOVCounters
+    queries::Int
+    tokens::Int
+    oov::Int
+    unflushed::Int
+end
+
+OOVCounters() = OOVCounters(0, 0, 0, 0)
+
+"How many queries pass before the counters are written to the project."
+const OOV_FLUSH_EVERY = 256
+
+"""
     EmbeddedEngine
 
 Bundles everything a script needs to keep working against one open project: its directory
@@ -159,6 +192,9 @@ mutable struct EmbeddedEngine
     # declares nothing, which is every project written before this existed and every one
     # created without the keyword.
     meta_schema::Schema.MetaSchema
+    # How much of what this project is asked for, it has words for (PLAN.md §5). See
+    # [`OOVCounters`](@ref) and [`vocabulary_report`](@ref).
+    oov::OOVCounters
     dense_vectors::Base.RefValue{Union{Nothing,MMapMatrixDatabase}}
     read_only::Bool
     wrote::Base.RefValue{Bool}
@@ -454,7 +490,7 @@ function create_project(workdir::String, dataset::String;
     schema = _as_meta_schema(meta_schema)
     isempty(schema) || Persistence.save_field!(store, :meta_schema, schema)
     return EmbeddedEngine(workdir, dataset, dir, project, eng, store, pending_flush, schema_version,
-                          schema, dense_vectors, false, Ref(true))
+                          schema, OOVCounters(), dense_vectors, false, Ref(true))
 end
 
 """
@@ -571,6 +607,7 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
     end
     return EmbeddedEngine(workdir, dataset, dir, project, engine, store, pending_flush, schema_version,
                           Persistence.load_field(store, :meta_schema, Schema.MetaSchema()),
+                          Persistence.load_field(store, :oov_counters, OOVCounters()),
                           dense_vectors, read_only, Ref(false))
 end
 
@@ -593,6 +630,12 @@ is what keeps the *next* open fast (2.97s versus 0.28s on a 50k-vector project, 
 """
 function close_project!(handle::EmbeddedEngine; compact::Bool=true)
     handle.pending_flush[] = false
+    # The queries counted since the last write (see `OOVCounters`). A read-only handle counted
+    # them for its own report and has nowhere to put them.
+    if !handle.read_only && handle.oov.unflushed > 0
+        handle.oov.unflushed = 0
+        Persistence.save_field!(handle.store, :oov_counters, handle.oov)
+    end
     if !(handle.engine isa Union{IndexEngine.DenseEngine{IndexEngine.GraphBackend},
                                  IndexEngine.SparseEngine, IndexEngine.FullTextEngine})
         Persistence.save_field!(handle.store, :index, handle.engine.backend.index)
@@ -1109,6 +1152,7 @@ was actually searched as.
 function ftsearch(handle::EmbeddedEngine, text::AbstractString, k::Int=10; minrecall=nothing, policy::QueryPolicy=QueryPolicy(),
                   stats::Union{Nothing,SearchStats}=nothing)
     res_knn = IndexEngine.search_live(handle.engine, text, k; bs_override=nothing, minrecall, policy)
+    _count_oov!(handle, text)
     stats === nothing || (stats.distance_evaluations = res_knn.distance_evaluations)
     return _hydrate_results(handle.project, res_knn)
 end
@@ -1206,6 +1250,114 @@ generic function whose methods cover an engine and a handle alike (the same reas
 `open_project` note in `SimilaritySearchEngine.jl`).
 """
 IndexEngine.text_profile(handle::EmbeddedEngine) = IndexEngine.text_profile(handle.engine)
+
+"""
+    _count_oov!(handle::EmbeddedEngine, text::AbstractString)
+
+Adds one query to [`OOVCounters`](@ref): its tokens, and how many of them the vocabulary
+does not contain as typed.
+
+The query is tokenized once more here, with the vocabulary's own `TextConfig`, rather than
+read out of the search that just ran: the library resolves and encodes a query inside
+`search`, and none of that resolution comes back. Tokenizing a query string costs a few
+microseconds against a search that walks posting lists, and the alternative is for this
+module to assemble the query pipeline itself again, which is the arrangement
+[`IndexEngine.resolve_query`](@ref)'s docstring records as removed.
+
+Counts nothing for a project whose vocabulary has not been fitted, and never raises: a
+failure to measure must not fail the search that was measured.
+"""
+function _count_oov!(handle::EmbeddedEngine, text::AbstractString)
+    voc = IndexEngine.text_vocabulary(handle.engine)
+    voc === nothing && return nothing
+    counters = handle.oov
+    try
+        tokens = 0
+        oov = 0
+        for tok in TextSearch.tokenize(voc.textconfig, text)
+            tokens += 1
+            TextSearch.token2id(voc, tok) == 0 && (oov += 1)
+        end
+        counters.queries += 1
+        counters.tokens += tokens
+        counters.oov += oov
+        counters.unflushed += 1
+    catch
+        return nothing
+    end
+    if counters.unflushed >= OOV_FLUSH_EVERY && !handle.read_only
+        counters.unflushed = 0
+        Persistence.save_field!(handle.store, :oov_counters, counters)
+    end
+    return nothing
+end
+
+"""
+    vocabulary_report(handle::EmbeddedEngine; scan::Bool=false) -> Union{Nothing, Dict{String,Any}}
+
+What this project's vocabulary covers, and what it does not (PLAN.md §5).
+
+Reports the size of the vocabulary, how many documents it was fitted from, its ten most
+frequent tokens, and the running counters of [`OOVCounters`](@ref): how many queries were
+resolved against it, how many tokens they carried, and what fraction of those the vocabulary
+did not have.
+
+That fraction is the drift signal. A vocabulary is fitted once, from the documents staged
+when `index!` first ran, and a project whose subject matter moves ends up unable to search
+for words it now holds. `rebuild` refits the vocabulary over the documents that are there
+now, and these counters are what say whether that is worth doing.
+
+`scan=true` adds `live_oov_rate`, the same fraction measured over the stored documents
+instead of over the queries: every live document is tokenized again and its tokens looked
+up. That is a pass over the whole project, seconds on a large one, which is why it is not
+the default. The two answer different questions. The query rate says the words being asked
+for are missing, which a rebuild fixes only if those words are in the documents; the
+document rate says the words already stored are missing from the vocabulary, which is
+exactly what a rebuild fixes.
+
+Returns `nothing` for a project that does not hold text, and for one whose vocabulary has
+not been fitted yet.
+"""
+function vocabulary_report(handle::EmbeddedEngine; scan::Bool=false)
+    engine = handle.engine
+    IndexEngine.payload_kind(engine) === :text || return nothing
+    voc = IndexEngine.text_vocabulary(engine)
+    voc === nothing && return nothing
+
+    top_n = min(10, length(voc.token))
+    order = top_n == 0 ? Int[] : partialsortperm(voc.ndocs, 1:top_n, rev=true)
+    counters = handle.oov
+
+    report = Dict{String,Any}(
+        "vocsize" => Int(TextSearch.vocsize(voc)),
+        "trainsize" => Int(TextSearch.gettrainsize(voc)),
+        "numtokens" => Int(TextSearch.getnumtokens(voc)),
+        "avgdoclen" => Float64(TextSearch.avgdoclen(voc)),
+        "top_tokens" => [Dict("token" => voc.token[i], "ndocs" => Int(voc.ndocs[i]),
+                              "occs" => Int(voc.occs[i])) for i in order],
+        "queries" => counters.queries,
+        "query_tokens" => counters.tokens,
+        "query_oov_tokens" => counters.oov,
+        "query_oov_rate" => counters.tokens == 0 ? 0.0 : counters.oov / counters.tokens,
+    )
+    scan || return report
+
+    oov = 0
+    total = 0
+    for id in 1:length(engine.staged)
+        id in engine.deleted_ids && continue
+        text = IndexEngine.stored_payload(engine, id)
+        text === nothing && continue
+        for tok in TextSearch.tokenize(voc.textconfig, text)
+            total += 1
+            TextSearch.token2id(voc, tok) == 0 && (oov += 1)
+        end
+    end
+    report["live_tokens"] = total
+    report["live_oov_tokens"] = oov
+    report["live_oov_rate"] = total == 0 ? 0.0 : oov / total
+    return report
+end
 
 """
     ftexplain(handle::EmbeddedEngine, text; policy=QueryPolicy()) -> Vector{String}

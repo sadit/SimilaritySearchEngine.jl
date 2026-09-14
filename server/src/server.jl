@@ -690,6 +690,37 @@ function handle_get_join_group(req::HTTP.Request, app::AppState, id::String)
 end
 
 """
+    handle_get_vocab(req, app, id) -> HTTP.Response
+
+`GET /api/v1/datasets/{id}/vocab?scan=` (PLAN.md §5.8): what a text dataset's vocabulary
+covers and what it does not.
+
+Reports the size of the vocabulary, the documents it was fitted from, its most frequent
+tokens, and the running out-of-vocabulary counters: how many queries this dataset has
+answered, how many tokens they carried, and what fraction of those the vocabulary did not
+have. That fraction is the signal for a `rebuild`, which refits the vocabulary over the
+documents the dataset holds now.
+
+`scan=true` adds the same fraction measured over the stored documents instead of over the
+queries. It reads every live document, so it is a pass over the whole dataset and is not the
+default. `404` for a dataset that does not exist or is not loaded, `409` for one that holds
+no text or whose vocabulary has not been fitted yet -- the same condition `index!` resolves.
+"""
+function handle_get_vocab(req::HTTP.Request, app::AppState, id::String)
+    valid_project_id(id) || return json_response(400, Dict("error" => "invalid dataset id"))
+    haskey(app.handles, id) || return json_response(404, Dict("error" => "dataset_not_found"))
+
+    params = HTTP.queryparams(HTTP.URI(req.target))
+    scan = get(params, "scan", "false") in ("1", "true", "yes")
+
+    report = SSE.vocabulary_report(app.handles[id]; scan)
+    report === nothing && return json_response(409, Dict(
+        "error" => "dataset '$id' has no fitted vocabulary: it is not a text dataset, or it has never been indexed",
+        "kind" => "NotTrained"))
+    return json_response(200, merge(Dict{String,Any}("id" => id), report))
+end
+
+"""
     handle_get_op_log(req, app, id) -> HTTP.Response
 
 `GET /api/v1/datasets/{id}/log?offset=&limit=` (PLAN.md §1's admin `log` command --
@@ -1760,6 +1791,7 @@ function run_server(host::String, port::Int, app::AppState; async::Bool=false)
     # The operation log records the token presented by each request, so reading it is an
     # administrative operation even though it is a GET.
     @get "/api/v1/datasets/{id}/log" (req, id) -> _guard(() -> handle_get_op_log(req, app, id), req, app, :admin, id)
+    @get "/api/v1/datasets/{id}/vocab" (req, id) -> _guard(() -> handle_get_vocab(req, app, id), req, app, :read, id)
     @get "/api/v1/datasets/{id}" (req, id) -> _guard(() -> handle_get_dataset(req, app, id), req, app, :read, id)
     @delete "/api/v1/datasets/{id}" (req, id) -> _guard(() -> handle_delete_dataset(req, app, id), req, app, :admin, id)
 

@@ -184,7 +184,7 @@ end
     api = filter(r -> occursin("\"/api/v1", r), routes)
     open_routes = filter(r -> !occursin("\"/api/v1", r), routes)
 
-    @test length(api) == 31
+    @test length(api) == 32
     @test all(r -> occursin("_guard(", r), api)
     # Health and metrics stay open on purpose: a supervisor and a metrics collector have no
     # token, and refusing them would report a healthy server as down.

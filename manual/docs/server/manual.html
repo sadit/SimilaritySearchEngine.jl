@@ -214,6 +214,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <li><a href="#control" id="toc-control" class="nav-link" data-scroll-target="#control">Control</a></li>
   <li><a href="#datasets" id="toc-datasets" class="nav-link" data-scroll-target="#datasets">Datasets</a></li>
   <li><a href="#search-and-indexing" id="toc-search-and-indexing" class="nav-link" data-scroll-target="#search-and-indexing">Search and indexing</a></li>
+  <li><a href="#vocabulary" id="toc-vocabulary" class="nav-link" data-scroll-target="#vocabulary">Vocabulary</a></li>
   <li><a href="#telemetry" id="toc-telemetry" class="nav-link" data-scroll-target="#telemetry">Telemetry</a></li>
   <li><a href="#asynchronous-jobs" id="toc-asynchronous-jobs" class="nav-link" data-scroll-target="#asynchronous-jobs">Asynchronous jobs</a></li>
   <li><a href="#authentication" id="toc-authentication" class="nav-link" data-scroll-target="#authentication">Authentication</a></li>
@@ -395,6 +396,13 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <li><code>POST /api/v1/search/hybrid</code> and <code>POST /api/v1/search/group</code> — reciprocal rank fusion over two datasets, and a text query sent to every dataset of a join group.</li>
 </ul>
 <p>An operation on one dataset is addressed under that dataset. The two queries that read more than one are under <code>/api/v1/search/</code>, which is the only place where a route is not about a single dataset. The earlier prefix <code>/api/v1/simsearch/</code> was removed on 2026-09-13: it marked a distinction that the API stopped making.</p>
+</section>
+<section id="vocabulary" class="level3">
+<h3 class="anchored" data-anchor-id="vocabulary">Vocabulary</h3>
+<ul>
+<li><code>GET /api/v1/datasets/{id}/vocab?scan=</code> — what a text dataset’s vocabulary covers: its size, the documents it was fitted from, its most frequent tokens, and how many of the tokens in the queries it has answered were not in it. <code>scan=true</code> adds the same fraction measured over the stored documents, which reads all of them.</li>
+</ul>
+<p>A vocabulary is fitted once and does not grow. The rate over the queries says the words being asked for are missing, and the rate over the documents says the words the dataset already holds are missing; the second is what <code>rebuild</code> corrects, by refitting the vocabulary over the documents the dataset has now. <code>409</code> for a dataset that holds no text or was never indexed.</p>
 </section>
 <section id="telemetry" class="level3">
 <h3 class="anchored" data-anchor-id="telemetry">Telemetry</h3>

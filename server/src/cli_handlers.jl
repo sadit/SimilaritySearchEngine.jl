@@ -371,47 +371,6 @@ function _dense_distance_stats(handle)
     )
 end
 
-"""
-    _vocab_stats(engine, ds) -> Union{Nothing, Dict}
-
-Vocabulary bookkeeping (`vocsize`/`trainsize`/`numtokens`/`avgdoclen`, already tracked by
-`TextSearch.jl`'s `Vocabulary`) plus its top-10 tokens by document frequency, plus a
-`live_oov_rate`: the fraction of tokens across the dataset's *currently live* documents
-that fall outside the trained vocabulary, computed by re-tokenizing them on the spot under
-`voc.textconfig` (PLAN.md §1's vocabulary-drift signal for when a text `rebuild` is
-actually needed -- see `execute_rebuild`). `nothing` for an untrained text engine.
-"""
-function _vocab_stats(engine, ds)
-    voc = IndexEngine.text_vocabulary(engine)
-    voc === nothing && return nothing
-
-    top_n = min(10, length(voc.token))
-    order = top_n == 0 ? Int[] : partialsortperm(voc.ndocs, 1:top_n, rev=true)
-    top_tokens = [Dict("token" => voc.token[i], "ndocs" => Int(voc.ndocs[i]), "occs" => Int(voc.occs[i])) for i in order]
-
-    oov_count = 0
-    total_count = 0
-    for id in 1:length(engine.staged)
-        id in engine.deleted_ids && continue
-        text = IndexEngine.stored_payload(engine, id)
-        text === nothing && continue
-        for tok in TextSearch.tokenize(voc.textconfig, text)
-            total_count += 1
-            TextSearch.token2id(voc, tok) == 0 && (oov_count += 1)
-        end
-    end
-
-    return Dict(
-        "vocsize" => TextSearch.vocsize(voc),
-        "trainsize" => TextSearch.gettrainsize(voc),
-        "numtokens" => TextSearch.getnumtokens(voc),
-        "avgdoclen" => TextSearch.avgdoclen(voc),
-        "top_tokens" => top_tokens,
-        "live_oov_rate" => total_count == 0 ? 0.0 : oov_count / total_count,
-        "live_token_sample_count" => total_count,
-    )
-end
-
 function execute_describe(cmd_args::Dict)
     project_id = cmd_args["dataset"]
     workdir = cmd_args["workdir"]
@@ -435,7 +394,10 @@ function execute_describe(cmd_args::Dict)
     )
 
     if is_text
-        desc["vocab"] = _vocab_stats(engine, ds)
+        # The vocabulary and its out-of-vocabulary rates belong to the engine, which fitted
+        # it: `describe` asks for the reading that costs a pass over the documents, which is
+        # what an offline command is for (PLAN.md §5's drift signal, see `execute_rebuild`).
+        desc["vocab"] = SSE.vocabulary_report(handle; scan=true)
     else
         desc["distance"] = string(nameof(typeof(SimilaritySearch.distance(engine.backend.index))))
         desc["distance_stats"] = _dense_distance_stats(handle)

@@ -349,6 +349,39 @@ An insertion after the first `index!` writes only the data that the new block mo
 
 ---
 
+## What the Vocabulary Does Not Cover
+
+A text project fits its vocabulary once, from the documents staged when `index!` first ran.
+A word that vocabulary does not contain cannot be searched for: it is dropped when a query is
+encoded, and dropped again when a document that contains it is indexed. `vocabulary_report`
+measures how much of that is happening:
+
+```julia
+report = vocabulary_report(hb)
+report["vocsize"]            # how many tokens the vocabulary holds
+report["queries"]            # queries answered since the project was created
+report["query_oov_rate"]     # of the tokens they carried, the fraction it did not have
+```
+
+The query counters are accumulated as queries arrive, at the cost of tokenizing each query
+string, and they are stored in the project: closing and reopening it does not reset them.
+
+The second reading costs a pass over the project and is asked for explicitly:
+
+```julia
+scanned = vocabulary_report(hb; scan=true)
+scanned["live_oov_rate"]     # of the tokens in the stored documents, the fraction missing
+```
+
+The two answer different questions, and the difference decides what to do:
+
+- A high rate **over the queries** says people are asking for words this project does not
+  index. If those words are not in the documents either, no rebuild helps: the corpus does
+  not contain what is being asked for.
+- A high rate **over the documents** says the project stores words its vocabulary does not
+  have, which happens to any project that keeps growing after its first `index!`. That is
+  what `rebuild` corrects, by refitting the vocabulary over the documents that are there now.
+
 ## Configuring Linguistic Models (`AbstractTextModelSpec`)
 
 Text projects require an explicit linguistic model specification passed via the `textmodel` keyword:

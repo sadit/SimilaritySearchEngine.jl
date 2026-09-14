@@ -985,6 +985,61 @@ const ACCENT_ITEMS = vcat(
         @test Schema.matches_filter(record, Dict("n" => 5), Dict("n" => Dict("gte" => 3)), sch)
     end
 
+    @testset "a text project reports what its vocabulary does not cover" begin
+        mktempworkdir() do workdir
+            h = create_project(workdir, "oov_ds"; engine=FullTextEngine, backend=BM25InvertedFile,
+                               textmodel=FitFromCorpus())
+            append_items!(h, [TextItem(t; doc_id="d$i") for (i, t) in enumerate([
+                "el gato duerme sobre el tejado",
+                "un perro ladra en la calle",
+                "el gato y el perro se miran"])])
+            index!(h)
+
+            report = vocabulary_report(h)
+            @test report["vocsize"] > 0
+            @test report["trainsize"] == 3
+            @test report["queries"] == 0
+            @test report["query_oov_rate"] == 0.0     # nothing asked yet, nothing missing yet
+            @test length(report["top_tokens"]) > 0
+
+            # Two words the corpus has, two it does not
+            ftsearch(h, "gato tejado", 3)
+            ftsearch(h, "criptomoneda blockchain", 3)
+            report = vocabulary_report(h)
+            @test report["queries"] == 2
+            @test report["query_tokens"] == 4
+            @test report["query_oov_tokens"] == 2
+            @test report["query_oov_rate"] == 0.5
+
+            # The documents themselves are covered: this vocabulary was fitted from them, and
+            # that is the rate a rebuild would act on
+            scanned = vocabulary_report(h; scan=true)
+            @test scanned["live_oov_rate"] == 0.0
+            @test scanned["live_tokens"] > 0
+
+            close_project!(h)
+            h2 = open_project(workdir, "oov_ds")
+            # The counters describe the project, so they are still there after it is reopened
+            @test vocabulary_report(h2)["queries"] == 2
+            @test vocabulary_report(h2)["query_oov_tokens"] == 2
+            close_project!(h2)
+        end
+    end
+
+    @testset "vocabulary_report is for text projects with a vocabulary" begin
+        mktempworkdir() do workdir
+            dense = create_project(workdir, "oov_dense"; engine=DenseEngine, backend=ExhaustiveSearch)
+            @test vocabulary_report(dense) === nothing
+            close_project!(dense)
+
+            # A text project that has never been indexed has no vocabulary to report on
+            fresh = create_project(workdir, "oov_fresh"; engine=FullTextEngine,
+                                   backend=BM25InvertedFile, textmodel=FitFromCorpus())
+            @test vocabulary_report(fresh) === nothing
+            close_project!(fresh)
+        end
+    end
+
     @testset "a project declares its meta schema, and declaring later leaves old records alone" begin
         mktempworkdir() do workdir
             h = create_project(workdir, "schema_ds"; engine=DenseEngine, backend=ExhaustiveSearch,
