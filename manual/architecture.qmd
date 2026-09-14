@@ -46,10 +46,50 @@ flowchart LR
 
 Projects use a standardized metadata record structure, `Schema.MetadataRecord`:
 - `_id`: Internal, sequential, zero-based or 1-based integer identifier aligned with vector storage indices.
+- `schema_version`: Which declaration of `meta` was in force when the record was written (see below).
 - `doc_id`: Caller-provided external string identifier.
 - `keywords`: Indexed string tags mapped via the secondary index `idx_keywords`.
 - `refs`: Indexed document reference links mapped via `idx_refs`.
-- `meta`: Arbitrary unstructured metadata stored as a serialized JSON object.
+- `meta`: Metadata stored as a serialized JSON object, in its own column family.
+
+The record has the same shape in every project. What varies is `meta`, and a project may
+declare part of it.
+
+### The Declared Shape of `meta`
+
+A project may declare which fields of `meta` it expects and what type each one holds. The
+declaration is a `Schema.MetaSchema`: a list of `(name, type)`, with the type one of
+`:string`, `:int64`, `:float64`, `:bool` or `:timestamp`.
+
+```julia
+h = create_project(workdir, "papers"; meta_schema = ["year" => :int64, "published" => :timestamp])
+meta_schema(h)                                    # what this project declares
+declare_meta_schema!(h, ["year" => :int64])       # declare on a project that exists
+```
+
+`append_items!` checks each declared field and converts it when the conversion keeps the
+value: JSON has one number type, so `2024.0` is stored as the integer `2024`, and a timestamp
+is stored as the string its instant prints as. A value of another type raises
+`PayloadMismatch`, which is an `InvalidRequest`.
+
+Three properties define what declaring means here:
+
+- **It is additive.** A field nobody declared is stored as it arrives, and a record need not
+  carry every declared field. Declaring says what a field must hold when it is present, not
+  what an item may contain.
+- **It does not reach backwards.** Declaring on a project that already holds records reads
+  none of them. The declaration governs what is written from then on; `rebuild` is what
+  rewrites the rest. This is what makes declaring cheap on a project of any size.
+- **It is not an index.** The declared fields are stored in `meta` as before, and a filter
+  over them is still evaluated per candidate. What the declaration changes is the comparison:
+  a field declared `:timestamp` is compared as an instant rather than as the text that stores
+  it, so two spellings of one instant match.
+
+The declaration lives in the project, not in the record: giving `MetadataRecord` a typed
+column per declared field would make its Julia type vary from one project to the next, which
+propagates to every function that handles a record, to the Avro table `dump` writes, and to a
+process that holds several projects at once. `schema_version` on the record is what ties a
+record to the declaration it was written under.
 
 ---
 

@@ -295,23 +295,52 @@ end
 # ==========================================
 
 """
-    parse_meta_schema(data::Dict) -> Schema.MetaSchema
+    parse_meta_schema(data::AbstractDict) -> Schema.MetaSchema
 
-Parses an optional `"meta_schema"` array (`[{"name":..., "type":..., "indexed":...}, ...]`)
-from a `POST /api/v1/datasets` request body (PLAN.md §4.5/§5.7). Defaults to an empty schema
-(today's fully-free-form-via-`extra` behavior) when absent.
+The optional `"meta_schema"` of a `POST /api/v1/datasets` body, as the engine's own
+declaration (PLAN.md §4.5). The wire form is an array of `{"name": ..., "type": ...}`, with
+the type one of `string`, `int64`, `float64`, `bool` or `timestamp`:
+
+```json
+{"id": "papers", "index_kind": "bm25_invfile",
+ "meta_schema": [{"name": "year", "type": "int64"}, {"name": "lang", "type": "string"}]}
+```
+
+An absent `meta_schema` is the empty declaration, which is what every dataset had before
+this existed: `meta` is stored as it arrives. Declaring is additive -- an undeclared field is
+still accepted -- so this says what the declared fields must hold, not what an item may
+carry. Raises `SSE.InvalidOption` for a malformed entry or an unknown type, which the
+handler answers as a 400 like any other invalid request.
+
+There is no `indexed` flag. §4.5 proposed one, to back a pre-filter over a
+`meta_idx_<field>` column family; the decision on 2026-09-13 was that `meta` is stored with
+a schema and not indexed, and that filtering keeps using the indexes the engine already
+maintains (`keywords`, `refs`, `doc_id`).
 """
+function parse_meta_schema(data::AbstractDict)
+    raw = get(data, "meta_schema", nothing)
+    raw === nothing && return SSE.MetaSchema()
+    raw isa AbstractVector ||
+        throw(SSE.InvalidOption(:meta_schema, "meta_schema is an array of {\"name\", \"type\"} objects"))
+    fields = SSE.MetaField[]
+    for entry in raw
+        entry isa AbstractDict && haskey(entry, "name") && haskey(entry, "type") ||
+            throw(SSE.InvalidOption(:meta_schema, "each meta_schema entry needs a \"name\" and a \"type\"; got $(repr(entry))"))
+        push!(fields, SSE.MetaField(string(entry["name"]), Symbol(entry["type"])))
+    end
+    return SSE.MetaSchema(fields)
+end
 
 """
     serialize_meta_schema(schema::Schema.MetaSchema) -> Vector
 
-The inverse of `parse_meta_schema` -- turns a `MetaSchema` back into the same
-`[{"name":..., "type":..., "indexed":...}, ...]` JSON shape, so it can be persisted into
-the dataset's `descriptor.json` at creation time (see `handle_create_dataset`) and read
-back by `reload_datasets!` on server startup. Without this, a restarted server would
-reopen every dataset with the *default* empty `MetaSchema`, silently losing any
-schema-declared secondary-index column families for datasets that had one.
+The inverse of [`parse_meta_schema`](@ref): the declaration in the shape a response reports
+it, `[{"name": ..., "type": ...}, ...]`. Used by the dataset endpoints, which read the
+declaration from the project itself -- the engine stores it there, so a restarted server
+recovers it by opening the dataset and there is no second copy to keep in step.
 """
+serialize_meta_schema(schema) =
+    [Dict("name" => f.name, "type" => String(f.type)) for f in schema.fields]
 
 """
     descriptor_path(app, id) -> String
@@ -387,6 +416,13 @@ function handle_create_dataset(req::HTTP.Request, app::AppState)
         return json_response(400, Dict("error" => sprint(showerror, e)))
     end
 
+    declared = try
+        parse_meta_schema(data)
+    catch e
+        e isa SSE.EngineError || rethrow()
+        return engine_error_response(e)
+    end
+
     try
         lock(app.lock) do
             haskey(app.handles, id) && return
@@ -394,7 +430,7 @@ function handle_create_dataset(req::HTTP.Request, app::AppState)
                 engine=engine_type, backend=backend_type,
                 distance=parse_distance(distance),
                 dimension=dimension === nothing ? nothing : Int(dimension),
-                textmodel=default_textmodel(engine_type))
+                textmodel=default_textmodel(engine_type), meta_schema=declared)
         end
     catch e
         e isa SSE.EngineError || rethrow()
@@ -568,8 +604,14 @@ function dataset_descriptor(app::AppState, id::String)
 
     loaded = haskey(app.handles, id)
     base["loaded"] = loaded
+    # The declaration lives in the project, so it is reported for a dataset that is open and
+    # left out for one that is not, rather than kept as a second copy in this sidecar.
+    get!(base, "meta_schema", nothing)
     if loaded
-        engine = app.handles[id].engine
+        handle = app.handles[id]
+        declared = SSE.meta_schema(handle)
+        base["meta_schema"] = isempty(declared) ? nothing : serialize_meta_schema(declared)
+        engine = handle.engine
         doc_count = engine.backend.index === nothing ? 0 : length(engine.backend.index)
         tombstones = length(engine.deleted_ids)
         base["doc_count"] = doc_count
@@ -820,9 +862,14 @@ The wire's filter object as the predicate `SSE.search` takes.
 The engine's filtering keyword is a plain Julia function over `(record, meta)`, so the JSON
 spec stays this module's business -- `Schema.matches_filter` already knows how to read it --
 and the engine never learns a wire format.
+
+`schema` is the dataset's own declaration, which is what makes a comparison happen in the
+declared type: a field declared `:timestamp` compares as an instant rather than as the text
+that stores it. A dataset that declares nothing passes an empty declaration and compares as
+it always did.
 """
-_filter_predicate(filter_spec::AbstractDict) =
-    (record, meta) -> Schema.matches_filter(record, meta, filter_spec)
+_filter_predicate(filter_spec::AbstractDict, schema) =
+    (record, meta) -> Schema.matches_filter(record, meta, filter_spec, schema)
 
 """
     FILTER_CANDIDATES(k) -> Int
@@ -937,7 +984,7 @@ function _run_search(handle, index::String, req::HTTP.Request, query, k::Int;
     elseif filter_spec === nothing
         SSE.search(handle, query, k; stats)
     else
-        SSE.search(handle, query, k; filter=_filter_predicate(filter_spec), candidates=FILTER_CANDIDATES(k), stats)
+        SSE.search(handle, query, k; filter=_filter_predicate(filter_spec, SSE.meta_schema(handle)), candidates=FILTER_CANDIDATES(k), stats)
     end
     Telemetry.log_request!(dataset, nothing, "search", index, t0, nothing;
         token=_request_token(req), distance_name=_engine_distance_name(engine), dimension=_engine_dimension(engine),

@@ -7,7 +7,8 @@ using SimilaritySearchEngine
 import SimilaritySearchEngine as SSE
 using SimilaritySearchServer.Server: parse_index_kind, parse_distance, default_textmodel,
                                      engine_error_response, _typed_item, AppState, _guard,
-                                     json_response
+                                     json_response, parse_meta_schema, serialize_meta_schema,
+                                     _filter_predicate
 using SimilaritySearchServer: cli_exit_code, wire_kind
 import SimilaritySearchServer.Tokens as Tokens
 import SimilaritySearchServer.Executors as Executors
@@ -300,4 +301,54 @@ end
     empty_text = join(Telemetry.prometheus_lines(Telemetry.MetricsRegistry()), "\n")
     @test occursin("# TYPE simsearch_requests_total counter", empty_text)
     @test !occursin("simsearch_requests_total{", empty_text)
+end
+
+
+# ---------------------------------------------------------------------------------------
+# The declared meta schema (PLAN.md §4.5) crossing the wire: the engine owns the type, this
+# package only translates the request into it and reports it back.
+# ---------------------------------------------------------------------------------------
+
+@testset "a meta schema crosses the wire as the engine's own declaration" begin
+    declared = parse_meta_schema(Dict{String,Any}("meta_schema" => [
+        Dict("name" => "year", "type" => "int64"),
+        Dict("name" => "lang", "type" => "string"),
+        Dict("name" => "when", "type" => "timestamp"),
+    ]))
+    @test declared isa SSE.MetaSchema
+    @test [f.name for f in declared.fields] == ["year", "lang", "when"]
+    @test [f.type for f in declared.fields] == [:int64, :string, :timestamp]
+
+    # A dataset that declares nothing gets the empty declaration, which is what every one
+    # of them had before this existed
+    @test isempty(parse_meta_schema(Dict{String,Any}()))
+
+    # Malformed declarations are invalid requests, which the handler answers as 400
+    @test_throws SSE.InvalidOption parse_meta_schema(Dict{String,Any}("meta_schema" => "year:int64"))
+    @test_throws SSE.InvalidOption parse_meta_schema(Dict{String,Any}("meta_schema" => [Dict("name" => "year")]))
+    @test_throws SSE.InvalidOption parse_meta_schema(Dict{String,Any}("meta_schema" => [Dict("name" => "year", "type" => "int32")]))
+    @test engine_error_response(SSE.InvalidOption(:meta_schema, "x")).status == 400
+
+    # And it reports back in the shape it arrived in
+    @test serialize_meta_schema(declared) == [
+        Dict("name" => "year", "type" => "int64"),
+        Dict("name" => "lang", "type" => "string"),
+        Dict("name" => "when", "type" => "timestamp"),
+    ]
+    @test serialize_meta_schema(SSE.MetaSchema()) == []
+end
+
+@testset "a filter compares in the declared type" begin
+    record = SSE.Schema.MetadataRecord(Int32(1), 1, "d1", String[], String[])
+    meta = Dict("when" => "2026-01-02T00:00:00")
+    declared = parse_meta_schema(Dict{String,Any}("meta_schema" => [Dict("name" => "when", "type" => "timestamp")]))
+
+    # One instant, two spellings: equal as instants, different as text
+    typed = _filter_predicate(Dict("when" => "2026-01-02T00:00"), declared)
+    untyped = _filter_predicate(Dict("when" => "2026-01-02T00:00"), SSE.MetaSchema())
+    @test typed(record, meta)
+    @test !untyped(record, meta)
+
+    ranged = _filter_predicate(Dict("when" => Dict("gte" => "2026-01-01T00:00:00")), declared)
+    @test ranged(record, meta)
 end

@@ -155,6 +155,10 @@ mutable struct EmbeddedEngine
     store::Persistence.EngineStore
     pending_flush::Base.RefValue{Bool}
     schema_version::Int
+    # What this project declares about `meta` (PLAN.md §4.5). Empty for a project that
+    # declares nothing, which is every project written before this existed and every one
+    # created without the keyword.
+    meta_schema::Schema.MetaSchema
     dense_vectors::Base.RefValue{Union{Nothing,MMapMatrixDatabase}}
     read_only::Bool
     wrote::Base.RefValue{Bool}
@@ -378,7 +382,7 @@ function create_project(workdir::String, dataset::String;
                         distance=nothing, minrecall::Union{Nothing,Real}=0.9,
                         dimension::Union{Nothing,Integer}=nothing,
                         textmodel::Union{Nothing,IndexEngine.AbstractTextModelSpec}=nothing,
-                        index_type=nothing, schema_version::Int=1,
+                        index_type=nothing, schema_version::Int=1, meta_schema=nothing,
                         postings_cache_max::Int=4096, postings_cache_base::Int=2048)
     index_type === nothing || invalid_option(:index_type, """
         `index_type` is gone: a project now names the kind of data it holds and, separately, the
@@ -447,8 +451,10 @@ function create_project(workdir::String, dataset::String;
         IndexEngine.create_sparse_engine(; distance=dist, dimension, on_change, log_io=nothing) :
         IndexEngine.create_engine(back; distance=dist, minrecall, textmodel, on_change, log_io=nothing, adj_factory)
     Persistence.save_fields!(store, IndexEngine.snapshot_state(eng))
+    schema = _as_meta_schema(meta_schema)
+    isempty(schema) || Persistence.save_field!(store, :meta_schema, schema)
     return EmbeddedEngine(workdir, dataset, dir, project, eng, store, pending_flush, schema_version,
-                          dense_vectors, false, Ref(true))
+                          schema, dense_vectors, false, Ref(true))
 end
 
 """
@@ -564,6 +570,7 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
             rebuilt rather than reopened.""")
     end
     return EmbeddedEngine(workdir, dataset, dir, project, engine, store, pending_flush, schema_version,
+                          Persistence.load_field(store, :meta_schema, Schema.MetaSchema()),
                           dense_vectors, read_only, Ref(false))
 end
 
@@ -767,7 +774,7 @@ function append_items!(handle::EmbeddedEngine, items::AbstractVector{<:Schema.Ab
         # An empty `meta` is stored as nothing rather than as an empty JSON object: there is
         # no difference to read back (`get_meta` answers `nothing` either way) and one of them
         # is a write that never had to happen.
-        meta = isempty(item.meta) ? nothing : item.meta
+        meta = isempty(item.meta) ? nothing : Schema.coerce_meta(handle.meta_schema, item.meta)
         put_metadata!(project, Schema.metadata_record(item, _id, handle.schema_version), meta)
     end
 
@@ -1104,6 +1111,77 @@ function ftsearch(handle::EmbeddedEngine, text::AbstractString, k::Int=10; minre
     res_knn = IndexEngine.search_live(handle.engine, text, k; bs_override=nothing, minrecall, policy)
     stats === nothing || (stats.distance_evaluations = res_knn.distance_evaluations)
     return _hydrate_results(handle.project, res_knn)
+end
+
+"""
+    _as_meta_schema(spec) -> Schema.MetaSchema
+
+The declaration a caller wrote, as the type the project stores. A `MetaSchema` passes
+through; `nothing` is the empty declaration; anything else is read as a list of fields, each
+one a `name => type` pair or a `(name, type)` tuple:
+
+```julia
+create_project(w, ds; meta_schema = ["year" => :int64, "lang" => :string])
+```
+"""
+_as_meta_schema(schema::Schema.MetaSchema) = schema
+_as_meta_schema(::Nothing) = Schema.MetaSchema()
+
+function _as_meta_schema(fields)
+    parsed = Schema.MetaField[]
+    for f in fields
+        if f isa Schema.MetaField
+            push!(parsed, f)
+        elseif f isa Pair
+            push!(parsed, Schema.MetaField(String(first(f)), Symbol(last(f))))
+        elseif f isa Tuple && length(f) == 2
+            push!(parsed, Schema.MetaField(String(f[1]), Symbol(f[2])))
+        else
+            invalid_option(:meta_schema, "a declared field is `name => type` or `(name, type)`; got $(repr(f))")
+        end
+    end
+    names = [f.name for f in parsed]
+    length(unique(names)) == length(names) ||
+        invalid_option(:meta_schema, "a field is declared more than once: $(join(unique([n for n in names if count(==(n), names) > 1]), ", "))")
+    return Schema.MetaSchema(parsed)
+end
+
+"""
+    meta_schema(handle::EmbeddedEngine) -> Schema.MetaSchema
+
+What this project declares about the `meta` of its items (PLAN.md §4.5). Empty for a project
+that declares nothing, which is the default and the behavior every project had before this
+existed: `meta` is stored as it arrives.
+
+A declared field is checked and converted when an item is appended, so its value is the type
+it claims. Declaring is additive: an undeclared field is still accepted and stored as it
+arrives. See [`declare_meta_schema!`](@ref) to declare on a project that already exists, and
+[`Schema.MetaSchema`](@ref) for what a declaration is.
+"""
+meta_schema(handle::EmbeddedEngine) = handle.meta_schema
+
+"""
+    declare_meta_schema!(handle::EmbeddedEngine, fields) -> Schema.MetaSchema
+
+Declares what `meta` holds from now on, on a project that already exists, and returns the
+declaration. `fields` takes the same forms as `create_project`'s `meta_schema` keyword.
+
+**Records already written are not read and not checked.** The declaration governs what is
+appended after it, which is what makes declaring cheap on a project of any size. A field
+declared now may therefore hold values of another type in older records; a `rebuild` is what
+rewrites them.
+
+The version of the declaration increases with each call, so `MetadataRecord.schema_version`
+of a record says which declaration was in force when it was written.
+"""
+function declare_meta_schema!(handle::EmbeddedEngine, fields)
+    handle.read_only && unsupported_operation(:declare_meta_schema!, "this project is open read-only")
+    declared = _as_meta_schema(fields)
+    schema = Schema.MetaSchema(handle.meta_schema.version + 1, declared.fields)
+    Persistence.save_field!(handle.store, :meta_schema, schema)
+    handle.meta_schema = schema
+    handle.wrote[] = true
+    return schema
 end
 
 """

@@ -71,6 +71,7 @@ export TextConfig, TextProfile, QueryPolicy, load_profile, save_profile,
 # package-level copy of a submodule one). `fit_profile` is TextSearch's, which IndexEngine adds
 # a `FitFromCorpus` method to -- also one function, for the same reason.
 export text_profile, fit_profile
+export meta_schema, declare_meta_schema!, MetaSchema, MetaField
 
 # The text-model decision a text project is created with: `create_project` refuses to guess,
 # so these two are part of the minimum vocabulary for creating one at all.

@@ -79,7 +79,25 @@ request would cost more than the requests it measures. The log remains the durab
 is read through `GET /api/v1/datasets/{id}/log`.
 
 ### Datasets
-- `POST /api/v1/datasets` — creates one. Accepts `id`, `index_kind` (see above), `distance`, `dimension`, and the join-group fields `join_group`, `holds_metadata`, `key`.
+- `POST /api/v1/datasets` — creates one. Accepts `id`, `index_kind` (see above), `distance`, `dimension`, the join-group fields `join_group`, `holds_metadata`, `key`, and an optional `meta_schema`.
+- `GET /api/v1/datasets/{id}` reports the declaration of a dataset that is open.
+
+`meta_schema` declares which fields of an item's metadata the dataset expects and what each
+one holds:
+
+```json
+{"id": "papers", "index_kind": "bm25_invfile",
+ "meta_schema": [{"name": "year", "type": "int64"},
+                 {"name": "published", "type": "timestamp"}]}
+```
+
+The types are `string`, `int64`, `float64`, `bool` and `timestamp`. An append is refused with
+`400` when a declared field carries another type. Declaring is additive: a field that is not
+declared is stored as it arrives, and a dataset that declares nothing behaves as before. The
+declared fields are not indexed; what the declaration changes is that a filter compares in
+the declared type, so a `timestamp` is compared as an instant rather than as the text that
+stores it. The engine holds the declaration inside the project, which is why it survives a
+restart and travels with `dump`.
 - `DELETE /api/v1/datasets/{id}` — destroys it.
 - `POST /api/v1/datasets/{id}/unload` and `/reload` — closes or reopens a dataset without restarting the server. The `rebuild` subcommand of the command line requires this, because the RocksDB write lock is exclusive per process.
 

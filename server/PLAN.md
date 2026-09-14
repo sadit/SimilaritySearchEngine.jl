@@ -35,7 +35,7 @@ of it exist.
 | 1. Foundation | complete | Three applications under `src/apps/`, one `ArgParseSettings` per command line, `parse_distance` in the place of the proposed `DistanceRegistry`. One index per dataset holds by construction: a project of the engine has one index. |
 | 1.5. Interactive mode | complete, with one deviation | `interactive.jl` introspects the same settings object. `Term.jl` is not a dependency, so the forms are plain `REPL.TerminalMenus`. It is reached through the `interactive` subcommand, not by an `isatty` test, so it also cannot engage inside a job subprocess. |
 | 2. Concurrency | complete, minus the request collector | The engine provides the reader-writer lock and the context pool, and a job runs as a subprocess, which is what keeps queries answerable while it runs. The reserved share is applied since 2026-09-13: `batch_threads_pct` bounds job execution as a number of concurrent processes and a number of threads each (`Executors.job_thread_budget`), and `serve` reports the result at startup. The query side is not bounded by a collector: requests are answered on the server's own thread pool, as Julia schedules them, and §2's `Channel` of pending requests was not built. |
-| 3. Persistence and telemetry | complete except §4.5 | RocksDB, and an `op_log` with elapsed time and a real distance-computation count per request. The declared metadata schema (typed fields plus an `extra` blob) and the `meta_idx_<field>` column families do not exist: `meta` is free-form, and the indexed fields are `doc_id`, `keywords` and `refs`. |
+| 3. Persistence and telemetry | complete | RocksDB, and an `op_log` with elapsed time and a real distance-computation count per request. The declared metadata schema arrived on 2026-09-13, in a different shape from the one proposed below: see the entry for §4.5 in the pending list. |
 | 3.5. Job model and cursors | complete, with a deliberate change of persistence | Job registry with `queued`, `running`, `blocked`, `completed` and `failed`, `kill`, `gc`, `LocalCLIExecutor`, and result cursors. JLD2 snapshots were removed, because the engine persists its own index; Avro remains for `dump` and `load`. |
 | 4. Web layer | complete | 34 routes, `/healthz`, `/readyz`, `/metrics`, join groups, and authentication (below). `/metrics` reports the counters of §5.8 since 2026-09-13. The routes were reorganized on 2026-09-13: the operations of a dataset are under `/api/v1/datasets/{id}/`, the two queries that read more than one dataset are under `/api/v1/search/`, and the prefix `/api/v1/simsearch/` that §5.1 to §5.3 below describe no longer exists. |
 | 5. Full text and hybrid | complete, minus one item | `ftsearch`, fan-out over a join group, `hybrid_search` with reciprocal rank fusion, and `QueryPolicy` for correction and expansion. The stemmer registry of §5.3 was **discarded on 2026-09-13**: what it was for is done by the query pipeline of `TextSearch.jl` — the text profile carries the lemma clusters, and `QueryPolicy` performs the orthographic correction and the expansion at query time — so neither `Snowball` nor `Languages` is a dependency and no stemmer is configured. Vocabulary-drift detection by out-of-vocabulary rate is absent; `rebuild` is the manual procedure. |
@@ -71,8 +71,29 @@ of it exist.
    log grows with every request. They therefore cover the running process and reset when it
    restarts, which is what a Prometheus counter does;
    `simsearch_process_start_time_seconds` reports when that was.
-5. **§4.5**, the declared metadata schema with an index per field. This is the item that
-   requires work in the engine, not only in this package.
+5. ~~**§4.5**, the declared metadata schema~~ Done on 2026-09-13, in a smaller shape than
+   the one this document proposes, decided in that order:
+   - **`meta` is declared, not indexed.** There is no `meta_idx_<field>` column family and no
+     pre-filter over one. Filtering stays a post-filter, and the only indexes are the ones
+     the engine already maintains: `keywords`, `refs`, `doc_id`.
+   - **The declaration is a project-level object, not columns on the record.**
+     `Schema.MetaSchema` is a list of `(name, type)` with `type` in `:string`, `:int64`,
+     `:float64`, `:bool`, `:timestamp`; it is stored in the project and both packages read
+     the same one. `MetadataRecord` keeps its fixed shape: giving it typed columns would make
+     its Julia type vary per dataset, which propagates to every signature that mentions it,
+     to the Avro of `dump`, and to a server that holds several datasets at once. The record's
+     `schema_version`, written and never interpreted until now, says which declaration was in
+     force when the record was written.
+   - **Additive.** An undeclared field is stored as it arrives, a record need not carry every
+     declared field, and `null` is an absent field. Declaring says what a field must hold
+     when it is present.
+   - **No validation of what is already written.** `declare_meta_schema!` reads no record;
+     the declaration governs what is appended from then on. A `rebuild` is what rewrites the
+     rest.
+   - What declaring buys, with no index: the value is the type it claims, so a filter
+     compares in that type. A field declared `:timestamp` compares as an instant rather than
+     as the text that stores it.
+   - `:geopoint` of the section below was dropped with the index that justified it.
 6. **Out-of-vocabulary tracking** (§5), so that a text project reports when its vocabulary no
    longer matches what it is being asked, which is the signal for a `rebuild`. This changes
    the quality of retrieval, not the operation of the server.

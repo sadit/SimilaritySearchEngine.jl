@@ -1,11 +1,14 @@
 module Schema
 
 using JSON3
+using Dates: DateTime
 using SparseArrays: SparseVector, sparsevec, nonzeros, nonzeroinds
+using ..Errors
 
 export AbstractItem, DenseItem, SparseItem, TextItem, MetadataRecord, StoredItem
 export payload, metadata_record, encode_meta, decode_meta, raw_meta
 export get_field, matches_filter
+export MetaSchema, MetaField, META_FIELD_TYPES, coerce_meta, declared_type, typed_value
 export be_key, decode_be_key
 
 """
@@ -295,6 +298,162 @@ also call `decode_meta` on the same underlying data), copy it first.
 raw_meta(bytes::Vector{UInt8}) = isempty(bytes) ? nothing : String(bytes)
 raw_meta(::Nothing) = nothing
 
+
+# ==========================================
+# The declared shape of `meta` (PLAN.md §4.5)
+# ==========================================
+
+"""
+    META_FIELD_TYPES
+
+The types a field of `meta` can be declared as. `:timestamp` is an ISO 8601 instant, stored
+as the string `Dates.DateTime` prints and compared as an instant rather than as text.
+
+`:geopoint` of PLAN.md §4.5 is not here. That type existed to be indexed, and a value-to-ids
+index is the wrong shape for "within a radius" or "inside a box"; a project that stores
+coordinates declares two `:float64` fields or leaves them undeclared.
+"""
+const META_FIELD_TYPES = (:string, :int64, :float64, :bool, :timestamp)
+
+"""
+    MetaField(name, type)
+
+One declared field of a project's `meta`: the key it occupies, and which of
+[`META_FIELD_TYPES`](@ref) its value must have.
+"""
+struct MetaField
+    name::String
+    type::Symbol
+
+    function MetaField(name::AbstractString, type::Symbol)
+        type in META_FIELD_TYPES ||
+            invalid_option(:meta_schema, "unknown field type $(repr(type)) for $(repr(String(name))); " *
+                           "expected one of $(join(map(repr, META_FIELD_TYPES), ", "))")
+        isempty(name) && invalid_option(:meta_schema, "a declared field needs a name")
+        new(String(name), type)
+    end
+end
+
+MetaField(name::AbstractString, type::AbstractString) = MetaField(name, Symbol(type))
+
+"""
+    MetaSchema(fields; version=1)
+
+What a project declares about its `meta`: a list of [`MetaField`](@ref)s, and a version that
+changes when that list changes.
+
+**The declaration is additive.** A field that is not declared is stored as it arrives, which
+is what every project did before any of this existed; declaring a field only says what its
+value must be when it is present. A record is not required to carry every declared field,
+and a project whose schema is declared after it already holds records does not have those
+records checked -- the declaration governs what is written from then on.
+
+What declaring buys is that the value is the type it claims: an `:int64` field cannot hold
+`"2024"` for some records and `2024` for others, so a filter over it compares numbers rather
+than whatever JSON happened to store. The values still live in the `meta` column family as
+JSON; nothing is stored in the record itself, whose shape does not vary by project
+(see [`MetadataRecord`](@ref)).
+"""
+struct MetaSchema
+    version::Int
+    fields::Vector{MetaField}
+end
+
+MetaSchema(fields::AbstractVector{MetaField}; version::Int=1) = MetaSchema(version, collect(fields))
+MetaSchema() = MetaSchema(0, MetaField[])
+
+Base.isempty(schema::MetaSchema) = isempty(schema.fields)
+
+"""
+    declared_type(schema, name) -> Union{Nothing, Symbol}
+
+The declared type of the field `name`, or `nothing` when the project did not declare it.
+"""
+function declared_type(schema::MetaSchema, name::AbstractString)
+    for f in schema.fields
+        f.name == name && return f.type
+    end
+    return nothing
+end
+
+declared_type(::Nothing, ::AbstractString) = nothing
+
+"""
+    coerce_meta(schema::MetaSchema, meta) -> meta
+
+`meta` with every declared field checked, and converted to the declared type where the
+conversion preserves the value. Returns `meta` itself when the schema declares nothing, so a
+project without a schema pays nothing.
+
+Accepted, per declared type:
+
+| declared | accepted | stored as |
+| :--- | :--- | :--- |
+| `:string` | a string | the string |
+| `:int64` | an integer, or a float with no fractional part | `Int64` |
+| `:float64` | any real number | `Float64` |
+| `:bool` | `true` or `false` | `Bool` |
+| `:timestamp` | a `DateTime`, or a string it parses from | the ISO 8601 string |
+
+A declared field that is absent, or `nothing`, is left absent: a record need not carry every
+declared field. Anything else raises [`PayloadMismatch`](@ref), which is an `InvalidRequest`,
+so the frontier reporting it answers 400 rather than storing a value of the wrong type.
+"""
+function coerce_meta(schema::MetaSchema, meta)
+    (isempty(schema) || meta === nothing) && return meta
+    meta isa AbstractDict ||
+        payload_mismatch("a project with a declared meta schema takes `meta` as a dictionary of " *
+                         "field names to values; got $(typeof(meta))")
+    out = Dict{String,Any}(String(k) => v for (k, v) in pairs(meta))
+    for field in schema.fields
+        haskey(out, field.name) || continue
+        value = out[field.name]
+        value === nothing && (delete!(out, field.name); continue)
+        out[field.name] = _coerce_field(field, value)
+    end
+    return out
+end
+
+coerce_meta(::Nothing, meta) = meta
+
+function _coerce_field(field::MetaField, value)
+    t = field.type
+    if t === :string
+        value isa AbstractString && return String(value)
+    elseif t === :int64
+        value isa Integer && !(value isa Bool) && return Int64(value)
+        value isa Real && isinteger(value) && return Int64(value)
+    elseif t === :float64
+        value isa Real && !(value isa Bool) && return Float64(value)
+    elseif t === :bool
+        value isa Bool && return value
+    elseif t === :timestamp
+        value isa DateTime && return string(value)
+        if value isa AbstractString
+            parsed = tryparse(DateTime, String(value))
+            parsed === nothing || return string(parsed)
+        end
+    end
+    payload_mismatch("meta field $(repr(field.name)) is declared $(repr(t)) and got " *
+                     "$(repr(value))::$(typeof(value))")
+end
+
+"""
+    typed_value(schema, name, value) -> Any
+
+`value` read as the type `name` was declared with, for comparing it. A `:timestamp` becomes a
+`DateTime`, so two instants are compared as instants and not as the strings that store them;
+every other declared type is already stored as itself. An undeclared field is returned
+unchanged, which is how a project without a schema compares.
+"""
+function typed_value(schema, name::AbstractString, value)
+    t = declared_type(schema, name)
+    t === :timestamp || return value
+    value isa DateTime && return value
+    value isa AbstractString && return something(tryparse(DateTime, String(value)), value)
+    return value
+end
+
 """
     get_field(record::MetadataRecord, meta, name::String) -> Any
 
@@ -314,27 +473,37 @@ end
 get_field(record::MetadataRecord, name::String) = get_field(record, nothing, name)
 
 """
-    matches_filter(record::MetadataRecord, meta, filter::AbstractDict) -> Bool
+    matches_filter(record::MetadataRecord, meta, filter::AbstractDict, schema) -> Bool
 
 Post-filter predicate for `/search`-family endpoints (PLAN.md §5.4). `filter` maps field
 names to either a bare value (equality) or a spec dict supporting `gte`/`lte`/`gt`/`lt`
 (range), `in`/`nin` (set membership), and `eq`/`neq`. A field missing from the record/meta fails the filter.
+
+`schema` is the project's [`MetaSchema`](@ref), which is what makes a comparison happen in
+the declared type rather than in whatever JSON stored: with a field declared `:timestamp`,
+both the stored value and the operand of the filter are read as instants, so two spellings of
+one instant compare equal. It is a required argument, not an option with a default: a project
+always has a schema, empty when it declares nothing, and `nothing` is accepted as that empty
+declaration. An undeclared field compares exactly as it did before.
 """
-function matches_filter(record::MetadataRecord, meta, filter::AbstractDict)
+function matches_filter(record::MetadataRecord, meta, filter::AbstractDict, schema)
     for (field, spec) in filter
-        value = get_field(record, meta, string(field))
+        name = string(field)
+        value = get_field(record, meta, name)
         value === nothing && return false
+        value = typed_value(schema, name, value)
+        operand(v) = typed_value(schema, name, v)
 
         if spec isa AbstractDict
-            haskey(spec, "gte") && !(value >= spec["gte"]) && return false
-            haskey(spec, "lte") && !(value <= spec["lte"]) && return false
-            haskey(spec, "gt") && !(value > spec["gt"]) && return false
-            haskey(spec, "lt") && !(value < spec["lt"]) && return false
-            haskey(spec, "in") && !(value in spec["in"]) && return false
-            haskey(spec, "nin") && (value in spec["nin"]) && return false
-            haskey(spec, "eq") && !(value == spec["eq"]) && return false
-            haskey(spec, "neq") && !(value != spec["neq"]) && return false
-        elseif value != spec
+            haskey(spec, "gte") && !(value >= operand(spec["gte"])) && return false
+            haskey(spec, "lte") && !(value <= operand(spec["lte"])) && return false
+            haskey(spec, "gt") && !(value > operand(spec["gt"])) && return false
+            haskey(spec, "lt") && !(value < operand(spec["lt"])) && return false
+            haskey(spec, "in") && !(value in map(operand, collect(spec["in"]))) && return false
+            haskey(spec, "nin") && (value in map(operand, collect(spec["nin"]))) && return false
+            haskey(spec, "eq") && !(value == operand(spec["eq"])) && return false
+            haskey(spec, "neq") && !(value != operand(spec["neq"])) && return false
+        elseif value != operand(spec)
             return false
         end
     end
