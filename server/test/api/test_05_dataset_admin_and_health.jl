@@ -25,7 +25,7 @@ using JSON3
         resp = HTTP.post("$base_url/datasets/admin_test_ds/append", [], JSON3.write(Dict("items" => docs)))
         @test resp.status == 200
 
-        resp = HTTP.post("$base_url/datasets/admin_test_ds/delete", [], JSON3.write(Dict("doc_id" => 1)))
+        resp = HTTP.post("$base_url/datasets/admin_test_ds/delete", [], JSON3.write(Dict("_id" => 1)))
         @test resp.status == 200
 
         # 2b. /metrics now carries the counters the operation log feeds (PLAN.md §5.8): the

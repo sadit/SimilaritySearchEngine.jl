@@ -38,7 +38,7 @@ using JSON3
         parsed = JSON3.read(String(resp.body))
         @test haskey(parsed, :results)
         @test length(parsed.results) > 0
-        @test parsed.results[1].id == docs[1].doc_id
+        @test parsed.results[1].doc_id == docs[1].doc_id
 
         # 1b. Hybrid search with both modalities.
         hybrid_req_both = JSON3.write(Dict(

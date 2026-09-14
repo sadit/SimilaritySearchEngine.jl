@@ -113,7 +113,7 @@ def hybrid_search(dense_index, lexical_index, vector=None, text=None, k=10, alph
 
 
 def delete_item(index, doc_id):
-    return "POST", f"/api/v1/datasets/{index}/delete", {"doc_id": doc_id}, None
+    return "POST", f"/api/v1/datasets/{index}/delete", {"_id": doc_id}, None
 
 
 def fetch(index, ids):

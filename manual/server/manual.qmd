@@ -71,11 +71,14 @@ Every response of this API is JSON. A response that succeeded carries `status`; 
 failed carries `error` and `kind` (section 5). The bodies below are real responses, not
 sketches.
 
-Two names appear throughout and mean opposite things in two places. In a **search result**,
-`id` is the identifier the caller gave the item and `doc_id` is the internal one the engine
-assigned. In a **stored record** (`/fetch`, the operation log), `doc_id` is the caller's and
-`_id` is the internal one. The inversion in search results is older than the rest of the API
-and has not been corrected.
+Two names identify an item, everywhere and with one meaning each: **`doc_id`** is the
+identifier the caller gave it, which may be absent, and **`_id`** is the integer the engine
+assigned, which is always there. A search result, a stored record and the operation log all
+use them that way. Until 2026-09-14 a search result called the first `id` and the second
+`doc_id`, so `result.doc_id` and `record.doc_id` were different things; that is corrected,
+with no alias for the old names.
+
+At the top level of a response, `id` is the dataset: `{"status":"appended","id":"ds"}`.
 
 ### Control
 
@@ -159,42 +162,44 @@ restart and travels with `dump`.
 - `POST /api/v1/datasets/{id}/ftsearch` — text search.
 - `POST /api/v1/datasets/{id}/fetch` and `GET /api/v1/datasets/{id}/exists?ids=` — records by
   identifier, and whether an identifier exists.
-- `POST /api/v1/datasets/{id}/delete` — logical deletion.
+- `POST /api/v1/datasets/{id}/delete` — logical deletion. Takes `_id`, the integer a search
+  or a fetch reported.
 - `POST /api/v1/datasets/{id}/calibrate` — recall calibration for a graph-backed project.
 - `POST /api/v1/search/hybrid` and `POST /api/v1/search/group` — reciprocal rank fusion over
   two datasets, and a text query sent to every dataset of a join group.
 
 ```json
 POST .../append     {"status":"appended","id":"ds","inserted":5}
-POST .../delete     {"status":"soft_deleted","id":"ds","doc_id":1}
+POST .../delete     {"status":"soft_deleted","id":"ds","_id":1}
 POST .../calibrate  {"status":"calibrated","id":"ds",
                      "baseline":{"bsize":4,"delta":1,"maxvisits":1000000}}
 
 POST .../search  and  POST .../ftsearch
 {"status":"searched","id":"ds",
- "results":[{"id":"d1","doc_id":1,"distance":0},
-            {"id":"d2","doc_id":2,"distance":1}]}
+ "results":[{"doc_id":"d1","_id":1,"distance":0},
+            {"doc_id":"d2","_id":2,"distance":1}]}
 
 POST .../fetch
 {"status":"fetched","id":"ds",
- "results":[{"id":"d1","doc_id":"d1","_id":1,"keywords":["k1"],"refs":[],
+ "results":[{"doc_id":"d1","_id":1,"keywords":["k1"],"refs":[],
              "schema_version":1,"year":2021}]}
 
 GET .../exists?ids=d1,nope
 {"status":"ok","id":"ds",
- "results":[{"id":"d1","exists":true,"deleted":false},
-            {"id":"nope","exists":false,"deleted":false}]}
+ "results":[{"id":"d1","doc_id":"d1","_id":1,"exists":true,"deleted":false},
+            {"id":"nope","doc_id":null,"_id":null,"exists":false,"deleted":false}]}
 
 POST /api/v1/search/hybrid
-{"status":"searched","results":[{"id":"d1","doc_id":1,"score":0.0327}]}
+{"status":"searched","results":[{"doc_id":"d1","_id":1,"score":0.0327}]}
 
 POST /api/v1/search/group
 {"status":"searched","join_group":"g",
- "results":{"body":[{"id":"t1","doc_id":1,"score":-0.267}]}}
+ "results":{"body":[{"doc_id":"t1","_id":1,"score":-0.267}]}}
 ```
 
 A `fetch` result merges the item's metadata into the record, which is why `year` sits beside
-`keywords` above. A `search` over a text dataset reports a BM25 score with its sign inverted,
+`keywords` above. In `exists`, `id` is the string that was asked about, which may be either
+identifier; `doc_id` and `_id` are what it resolved to, and are `null` when nothing did. A `search` over a text dataset reports a BM25 score with its sign inverted,
 under the name `distance`, which is the convention of the library: a smaller value is a closer
 match. A filtered search that could not fill `k` adds `"insufficient_results":true`, since it
 reads a bounded number of candidates before applying the filter.
@@ -241,7 +246,7 @@ which on a large dataset takes minutes and is better asked for offline with `des
 ```json
 {"status":"ok","total":4,"offset":0,"limit":1,
  "entries":[{"operation":"delete","timestamp":"2026-09-14T19:42:11.195",
-             "details":{"index_uuid":"ds","doc_id":1,"token":null}}]}
+             "details":{"index_uuid":"ds","_id":1,"token":null}}]}
 ```
 
 A `search` entry carries more in `details`: `distance_name`, `dimension`,

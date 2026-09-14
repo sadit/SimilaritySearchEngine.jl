@@ -96,7 +96,7 @@ using JSON3
             @test haskey(parsed.results, :title)
             @test !haskey(parsed.results, :body)
             @test length(parsed.results.title) > 0
-            @test parsed.results.title[1].id == docs[1].doc_id
+            @test parsed.results.title[1].doc_id == docs[1].doc_id
 
             # 7. ftsearch key="*" fans out to every text member, grouped by key (not fused).
             resp2 = HTTP.post("$base_url/search/group", [], JSON3.write(Dict("join_group" => "jg_books", "key" => "*", "text" => docs[1].text, "k" => 3)))

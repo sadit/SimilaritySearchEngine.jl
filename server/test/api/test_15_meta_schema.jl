@@ -63,19 +63,17 @@ using JSON3
             Dict("doc_id" => "c", "vector" => [0.0, 0.0, 1.0, 0.0], "year" => "2024")]))).status == 200
 
         # --- what the declaration does for a filter ---------------------------------------
-        # In a search result, `id` is the caller's identifier and `doc_id` is the internal
-        # one: the two names sit the opposite way round from the record they come from.
         query(filter) = JSON3.write(Dict("vector" => [1.0, 0.0, 0.0, 0.0], "k" => 5, "filter" => filter))
 
         hits = JSON3.read(String(HTTP.post("$base_url/datasets/schema_ds/search", [], query(Dict("year" => Dict("gte" => 2020)))).body)).results
-        @test [h.id for h in hits] == ["a"]
+        @test [h.doc_id for h in hits] == ["a"]
 
         # An instant compares as an instant: the same moment written without seconds matches
         hits = JSON3.read(String(HTTP.post("$base_url/datasets/schema_ds/search", [], query(Dict("when" => "2026-01-02T00:00"))).body)).results
-        @test [h.id for h in hits] == ["a"]
+        @test [h.doc_id for h in hits] == ["a"]
 
         hits = JSON3.read(String(HTTP.post("$base_url/datasets/schema_ds/search", [], query(Dict("when" => Dict("lt" => "2000-01-01T00:00:00")))).body)).results
-        @test [h.id for h in hits] == ["b"]
+        @test [h.doc_id for h in hits] == ["b"]
 
         # --- the declaration survives a restart of the dataset ----------------------------
         @test HTTP.post("$base_url/admin/datasets/schema_ds/unload", [], "").status == 200

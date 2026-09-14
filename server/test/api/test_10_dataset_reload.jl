@@ -18,7 +18,7 @@ using JSON3
         @test resp.status == 200
         @test JSON3.read(String(resp.body)).inserted == 10
 
-        resp = HTTP.post("$base_url/datasets/reload_ds1/delete", [], JSON3.write(Dict("doc_id" => 3)))
+        resp = HTTP.post("$base_url/datasets/reload_ds1/delete", [], JSON3.write(Dict("_id" => 3)))
         @test resp.status == 200
 
         # --- Dataset 2: text (bm25_invfile), created but never appended to -- no snapshot exists yet ---
@@ -68,7 +68,7 @@ using JSON3
         @test resp.status == 200
         results = JSON3.read(String(resp.body)).results
         @test length(results) == 9
-        @test !any(r -> r.doc_id == 3, results)
+        @test !any(r -> r._id == 3, results)
 
         resp = HTTP.post("$base_url/datasets/reload_ds2/append", [], JSON3.write(Dict("items" => docs[1:3])))
         @test resp.status == 200

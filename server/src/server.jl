@@ -782,7 +782,12 @@ function handle_exists(req::HTTP.Request, app::AppState, index::String)
 
         exists = record !== nothing
         deleted = exists && engine !== nothing && (record._id in engine.deleted_ids)
-        push!(results, Dict("id" => id_str, "exists" => exists, "deleted" => deleted))
+        # `id` is the string that was asked about, which is neither of the other two names: a
+        # caller may ask with a `doc_id` or with an internal id, and gets back both of them.
+        push!(results, Dict("id" => id_str,
+                            "doc_id" => exists ? record.doc_id : nothing,
+                            "_id" => exists ? record._id : nothing,
+                            "exists" => exists, "deleted" => deleted))
     end
 
     return json_response(200, Dict("status" => "ok", "id" => index, "results" => results))
@@ -882,11 +887,13 @@ them with `deleted=true` and no `doc_id`, on purpose, and it is this API's choic
 them.
 """
 function _format_results(hits, k::Int)
+    # `doc_id` is the caller's identifier and `_id` the engine's, the same way round as the
+    # record they come from. Until 2026-09-14 this function answered `id` for the first and
+    # `doc_id` for the second, which made `result.doc_id` and `record.doc_id` different things.
     results = Any[]
     for hit in hits
         hit.deleted && continue
-        orig_id = hit.doc_id === nothing ? string(hit._id) : hit.doc_id
-        push!(results, Dict("id" => orig_id, "doc_id" => hit._id, "distance" => hit.distance))
+        push!(results, Dict("doc_id" => hit.doc_id, "_id" => hit._id, "distance" => hit.distance))
     end
     return results, length(results) < k
 end
@@ -1171,13 +1178,14 @@ as a separate subprocess that reads only what is on disk.
 function handle_delete_item(req::HTTP.Request, app::AppState, index::String)
     haskey(app.handles, index) || return json_response(404, Dict("error" => "dataset_not_found"))
     data = JSON3.read(String(req.body), Dict{String, Any})
-    haskey(data, "doc_id") || return json_response(400, Dict("error" => "delete requires a 'doc_id' field"))
+    haskey(data, "_id") || return json_response(400, Dict(
+        "error" => "delete requires an '_id' field: the internal identifier of the item, as reported by search and fetch"))
 
-    doc_id = Int(data["doc_id"])
+    _id = Int(data["_id"])
     # `delete_item!` persists the deletion mark itself. This handler used to write a snapshot
     # file afterwards, which was necessary only while the engine did not persist its own state.
     try
-        SSE.delete_item!(app.handles[index], doc_id)
+        SSE.delete_item!(app.handles[index], _id)
     catch e
         e isa SSE.EngineError || rethrow()
         return engine_error_response(e)
@@ -1186,10 +1194,10 @@ function handle_delete_item(req::HTTP.Request, app::AppState, index::String)
     # No ctx/timing ceremony here (unlike search/append) -- a soft-delete doesn't evaluate
     # any distances, so log_operation directly rather than through log_request!.
     Telemetry.log_operation(app.handles[index].project, "delete",
-                            Dict{String, Any}("index_uuid" => index, "doc_id" => doc_id, "token" => _request_token(req));
+                            Dict{String, Any}("index_uuid" => index, "_id" => _id, "token" => _request_token(req));
                             metrics=app.metrics)
 
-    return json_response(200, Dict("status" => "soft_deleted", "id" => index, "doc_id" => doc_id))
+    return json_response(200, Dict("status" => "soft_deleted", "id" => index, "_id" => _id))
 end
 
 """
@@ -1220,7 +1228,6 @@ function handle_fetch(req::HTTP.Request, app::AppState, index::String)
         meta = Project.get_meta(dataset, record._id; lazy=false)
         meta_dict = meta isa AbstractDict ? Dict{String, Any}(string(k) => v for (k, v) in meta) : Dict{String, Any}()
         entry = merge(Dict{String, Any}(
-            "id" => something(record.doc_id, record._id),
             "doc_id" => record.doc_id,
             "_id" => record._id,
             "keywords" => record.keywords,
@@ -1288,8 +1295,8 @@ function handle_hybrid_search(req::HTTP.Request, app::AppState)
     for id in top_ids
         record = Project.get_metadata(app.handles[dense_id].project, id)
         record === nothing && (record = Project.get_metadata(app.handles[lexical_id].project, id))
-        orig_id = record === nothing ? string(id) : something(record.doc_id, string(id))
-        push!(results, Dict("id" => orig_id, "doc_id" => id, "score" => scores[id]))
+        push!(results, Dict("doc_id" => record === nothing ? nothing : record.doc_id,
+                            "_id" => id, "score" => scores[id]))
     end
 
     return json_response(200, Dict("status" => "searched", "results" => results))
@@ -1364,8 +1371,8 @@ function handle_ftsearch_group(req::HTTP.Request, app::AppState)
         entries = Any[]
         for hit in hits
             hit.deleted && continue
-            orig_id = _hydrate_join_id(app, ordered_members, hit._id)
-            push!(entries, Dict("id" => orig_id, "doc_id" => hit._id, "score" => hit.distance))
+            push!(entries, Dict("doc_id" => _hydrate_join_id(app, ordered_members, hit._id),
+                                "_id" => hit._id, "score" => hit.distance))
         end
         grouped[something(get(m, "key", nothing), m["id"])] = entries
     end

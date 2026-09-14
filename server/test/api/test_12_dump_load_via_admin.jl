@@ -12,7 +12,7 @@ using JSON3
         resp = HTTP.post("$base_url/datasets/dump_admin_ds/append", [], JSON3.write(Dict("items" => docs)))
         @test resp.status == 200
 
-        resp = HTTP.post("$base_url/datasets/dump_admin_ds/delete", [], JSON3.write(Dict("doc_id" => 6)))
+        resp = HTTP.post("$base_url/datasets/dump_admin_ds/delete", [], JSON3.write(Dict("_id" => 6)))
         @test resp.status == 200
 
         # dump/load need exclusive access to write a fresh target and (for the source) a
@@ -50,6 +50,6 @@ using JSON3
         @test resp.status == 200
         results = JSON3.read(String(resp.body)).results
         @test length(results) == 9
-        @test !any(r -> r.doc_id == 6, results)
+        @test !any(r -> r._id == 6, results)
     end
 end

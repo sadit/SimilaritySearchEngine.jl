@@ -47,7 +47,7 @@ using JSON3
         @test !any(h -> h.first == "X-Beamsearch-Warning", resp.headers)
         plain = JSON3.read(String(resp.body))
         @test length(plain.results) == 5
-        @test plain.results[1].id == docs[1].doc_id
+        @test plain.results[1].doc_id == docs[1].doc_id
 
         # 5. An override AT the calibrated baseline (not above it) -> no warning header.
         resp = HTTP.post("$base_url/datasets/calib_test_ds/search", [], JSON3.write(Dict(

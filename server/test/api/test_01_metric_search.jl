@@ -34,7 +34,7 @@ using JSON3
         @test resp.status == 200
         parsed = JSON3.read(String(resp.body))
         @test length(parsed.results) == 5
-        @test parsed.results[1].id == docs[1].doc_id
+        @test parsed.results[1].doc_id == docs[1].doc_id
         @test parsed.results[1].distance ≈ 0.0 atol=1e-6
 
         # 4. Fetch by original id round-trips the appended vector/metadata.
@@ -43,16 +43,16 @@ using JSON3
         @test resp.status == 200
         fetched = JSON3.read(String(resp.body)).results
         @test length(fetched) == 1
-        @test fetched[1].id == docs[1].doc_id
+        @test fetched[1].doc_id == docs[1].doc_id
 
         # 5. Soft delete: the deleted doc must no longer be returned by search.
-        del_req = JSON3.write(Dict("doc_id" => 1))
+        del_req = JSON3.write(Dict("_id" => 1))
         resp = HTTP.post("$base_url/datasets/metric_ds/delete", [], del_req)
         @test resp.status == 200
 
         resp = HTTP.post("$base_url/datasets/metric_ds/search", [], search_req)
         @test resp.status == 200
         parsed = JSON3.read(String(resp.body))
-        @test !any(r -> r.doc_id == 1, parsed.results)
+        @test !any(r -> r._id == 1, parsed.results)
     end
 end

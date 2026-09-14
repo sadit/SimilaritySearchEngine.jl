@@ -17,7 +17,7 @@ using JSON3
         # tombstone at all (there's no CLI delete command). handle_delete_item now resaves
         # the snapshot precisely so a separate CLI process (describe/rebuild below) can see it.
         for doc_id in (2, 5, 11)
-            resp = HTTP.post("$base_url/datasets/rebuild_http_ds/delete", [], JSON3.write(Dict("doc_id" => doc_id)))
+            resp = HTTP.post("$base_url/datasets/rebuild_http_ds/delete", [], JSON3.write(Dict("_id" => doc_id)))
             @test resp.status == 200
         end
 

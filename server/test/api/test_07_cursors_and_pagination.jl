@@ -32,7 +32,7 @@ using JSON3
 
         # 3. Poll the remaining pages (5 + 5 + 3 = 13) until exhausted, and check every
         # doc_id across all pages together is the full, non-overlapping candidate set.
-        seen_doc_ids = Set(r.doc_id for r in first_page.results)
+        seen_ids = Set(r._id for r in first_page.results)
         exhausted = first_page.exhausted
         pages_polled = 0
         while !exhausted
@@ -40,14 +40,14 @@ using JSON3
             @test resp.status == 200
             page = JSON3.read(String(resp.body))
             for r in page.results
-                @test !(r.doc_id in seen_doc_ids)  # no page repeats an earlier id
-                push!(seen_doc_ids, r.doc_id)
+                @test !(r._id in seen_ids)  # no page repeats an earlier id
+                push!(seen_ids, r._id)
             end
             exhausted = page.exhausted
             pages_polled += 1
             @test pages_polled <= 10  # guard against an infinite loop if exhaustion logic regresses
         end
-        @test length(seen_doc_ids) == 13
+        @test length(seen_ids) == 13
 
         # 4. Polling an already-exhausted cursor -> 409, not a silent empty page.
         resp = try

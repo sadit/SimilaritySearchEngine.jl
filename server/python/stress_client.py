@@ -18,7 +18,9 @@ def _load_docs(n=30):
     """Real dense+text docs from this repo's own test fixtures (128-dim LSI vectors,
     see PLAN.md's chunk on regenerating test/data/*.jsonl) -- not synthetic random data,
     so search/hybrid_search actually return meaningful, checkable hits."""
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # `server/python/` -> `server/` -> the repository root, where the fixtures live: they
+    # belong to the engine's own test data and are shared by both packages.
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     path = os.path.join(repo_root, "test", "data", "frankenstein.jsonl")
     docs = []
     with open(path) as f:
@@ -44,7 +46,7 @@ def run(base_url):
         print("Appended:", resp)
         results = c.search("stress_dense", docs[0]["vector"], k=5)["results"]
         assert results, "search returned no results"
-        assert results[0]["id"] == docs[0]["id"], "self-search didn't return itself first"
+        assert results[0]["doc_id"] == docs[0]["doc_id"], "self-search didn't return itself first"
         print(f"Search top hit: {results[0]}")
 
         # 3. text dataset: create, append, ftsearch
@@ -61,7 +63,7 @@ def run(base_url):
         print(f"hybrid_search results: {len(hybrid['results'])}")
 
         # 5. fetch / delete / exists
-        fetched = c.fetch("stress_dense", [docs[0]["id"]])
+        fetched = c.fetch("stress_dense", [docs[0]["doc_id"]])
         assert fetched["results"], "fetch found nothing for a known id"
         c.delete_item("stress_dense", 1)
         exists = c.exists("stress_dense", ["1"])

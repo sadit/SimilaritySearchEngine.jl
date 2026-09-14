@@ -111,7 +111,15 @@ of it exist.
    vocabulary, which is exactly what refitting corrects. `GET /api/v1/datasets/{id}/vocab`
    reports both (§5.8's vocabulary endpoint), and `describe`'s own copy of the computation
    was removed in favour of the engine's.
-7. **The request collector of §2**, the query side of the concurrency model: a `Channel` that
+7. ~~**The inverted `id`/`doc_id` of the wire**~~ Corrected on 2026-09-14. A search result
+   reported the caller's identifier as `id` and the engine's as `doc_id`, which is the
+   opposite of the record it came from and of what `/fetch` answered; `POST .../delete` took
+   the internal identifier under the name `doc_id`. An item is now `doc_id` (the caller's,
+   possibly null) and `_id` (the engine's, always present) everywhere, `delete` takes `_id`,
+   `exists` reports both alongside the `id` that was asked about, and `/fetch` no longer
+   repeats one of them as `id`. No aliases: nothing is released, and two names for one field
+   is how the confusion started.
+8. **The request collector of §2**, the query side of the concurrency model: a `Channel` that
    holds incoming requests and releases them as the pool frees up, instead of answering each
    one on the thread pool as Julia schedules it. It is written here as a decision still to be
    taken, not as work waiting to start. What it would prevent is a server accepting more

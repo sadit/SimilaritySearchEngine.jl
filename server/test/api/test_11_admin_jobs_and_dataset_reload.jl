@@ -120,7 +120,7 @@ using Dates
         resp = HTTP.post("$base_url/datasets/admin_reload_ds/append", [], JSON3.write(Dict("items" => docs)))
         @test resp.status == 200
 
-        resp = HTTP.post("$base_url/datasets/admin_reload_ds/delete", [], JSON3.write(Dict("doc_id" => 4)))
+        resp = HTTP.post("$base_url/datasets/admin_reload_ds/delete", [], JSON3.write(Dict("_id" => 4)))
         @test resp.status == 200
 
         # Unload releases the RocksDB write lock (and drops the live engine)...
