@@ -6,7 +6,7 @@ using Dates
 using SimilaritySearch
 using ..Project
 
-export log_operation, snapshot_costs, log_request!
+export log_operation, snapshot_costs, log_request!, identity_fields
 export MetricsRegistry, record_metric!, prometheus_lines, LATENCY_BUCKETS
 
 """
@@ -58,6 +58,16 @@ instead (`SimilaritySearchEngine.SearchStats`) and passes it to `log_request!` d
 snapshot_costs(ctx) = ctx === nothing ? nothing : copy(ctx.costdists)
 
 """
+    identity_fields(identity) -> Dict{String,Any}
+
+The `(user, token_fingerprint)` pair as the two fields of a log record: `user` and
+`token_fingerprint`. Written by every operation that records one, so a record identifies who
+acted without carrying what they acted with.
+"""
+identity_fields(identity::Tuple) = Dict{String, Any}("user" => identity[1], "token_fingerprint" => identity[2])
+identity_fields(::Nothing) = Dict{String, Any}("user" => nothing, "token_fingerprint" => nothing)
+
+"""
     log_request!(manager, ctx, op_type, index_uuid, t0, snapshot; token=nothing, distance_name=nothing, dimension=nothing, extra=Dict{String,Any}())
 
 Logs one `op_log` record for a request that just finished: elapsed wall-clock time since
@@ -65,14 +75,18 @@ Logs one `op_log` record for a request that just finished: elapsed wall-clock ti
 distance-evaluation count for *this* operation via `SimilaritySearch.distance_evaluations`
 diffed against `snapshot` (from `snapshot_costs`, taken before the operation ran) -- 0 if
 `ctx`/`snapshot` is `nothing` rather than erroring, since not every op touches an index
-context (e.g. a soft-delete). `token`/`distance_name`/`dimension` are `nothing` when not
-meaningful for `op_type` (see call sites in `server.jl`) or not yet available (no request
-authentication is wired up anywhere in this codebase yet -- `token` reports whatever the
-caller passed, unauthenticated, not a verified identity). `extra` merges in any
-op-type-specific fields (e.g. `append`'s `items_inserted`).
+context (e.g. a soft-delete). `identity` is the pair `Server._request_identity` produces, `(user, token_fingerprint)`:
+who made the request, when its token was valid, and a fingerprint of the token presented.
+`distance_name`/`dimension` are `nothing` when not meaningful for `op_type` (see the call
+sites in `server.jl`). `extra` merges in any op-type-specific fields (e.g. `append`'s
+`items_inserted`).
+
+Until 2026-09-14 this recorded the `Authorization` header verbatim. That put live credentials
+in a column family of the project, in every `dump` of it, and in front of anyone allowed to
+read the log.
 """
 function log_request!(manager::Project.ProjectManager, ctx, op_type::String, index_uuid::String, t0::Float64, snapshot;
-                       token=nothing, distance_name=nothing, dimension=nothing, distance_evaluations=nothing,
+                       identity=(nothing, nothing), distance_name=nothing, dimension=nothing, distance_evaluations=nothing,
                        metrics=nothing, extra::Dict{String, Any}=Dict{String, Any}())
     elapsed_seconds = time() - t0
     evals = distance_evaluations !== nothing ? distance_evaluations :
@@ -80,12 +94,12 @@ function log_request!(manager::Project.ProjectManager, ctx, op_type::String, ind
 
     details = Dict{String, Any}(
         "index_uuid" => index_uuid,
-        "token" => token,
         "distance_name" => distance_name,
         "dimension" => dimension,
         "distance_evaluations" => evals,
         "elapsed_seconds" => elapsed_seconds,
     )
+    merge!(details, identity_fields(identity))
     merge!(details, extra)
 
     log_operation(manager, op_type, details; metrics)

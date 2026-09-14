@@ -1,6 +1,7 @@
 module Server
 
 using HTTP
+using SHA: sha256
 using Oxygen
 using JSON3
 using Dates
@@ -869,7 +870,7 @@ function handle_append(req::HTTP.Request, app::AppState, index::String)
     end
 
     Telemetry.log_request!(dataset, engine.backend.ctx, "append", index, t0, snapshot; metrics=app.metrics,
-        token=_request_token(req), distance_name=_engine_distance_name(engine), dimension=_engine_dimension(engine),
+        identity=_request_identity(app, req), distance_name=_engine_distance_name(engine), dimension=_engine_dimension(engine),
         extra=Dict{String, Any}("items_inserted" => inserted))
 
     return json_response(200, Dict("status" => "appended", "id" => index, "inserted" => inserted))
@@ -945,6 +946,41 @@ function _request_token(req::HTTP.Request)
 end
 
 """
+    token_fingerprint(token) -> Union{Nothing, String}
+
+A token as it may be written down: the first eight bytes of its SHA-256, in hexadecimal.
+
+Enough to tell two tokens apart in a log and to match a record against a token someone holds,
+and not enough to present as one. `nothing` for no token.
+"""
+token_fingerprint(::Nothing) = nothing
+token_fingerprint(token::AbstractString) = bytes2hex(sha256(String(token)))[1:16]
+
+"""
+    _request_identity(app, req) -> (user, token_fingerprint)
+
+Who a request is logged as. The operation log used to store the `Authorization` header
+verbatim, which put live credentials in a column family of the project, in every `dump` of
+it, and in front of anyone allowed to read the log.
+
+`user` is the name on the token, and is present when the token is valid -- the log then says
+who did something rather than with what. `token_fingerprint` is
+[`token_fingerprint`](@ref) of what was presented, which distinguishes two tokens of the same
+user and is the only identification available when authentication is disabled and a token is
+presented anyway.
+
+The token is looked up again here rather than carried over from [`_guard`](@ref): a point
+read of RocksDB costs microseconds, and a handler that reads its own identity does not depend
+on having been reached through a particular guard.
+"""
+function _request_identity(app::AppState, req::HTTP.Request)
+    token = _request_token(req)
+    token === nothing && return (nothing, nothing)
+    record = Tokens.validate_token(app.token_mgr, token)
+    return (record === nothing ? nothing : record.user, token_fingerprint(token))
+end
+
+"""
     _engine_distance_name(engine::AbstractSearchEngine) -> Union{Nothing, String}
 
 The index's distance function name (e.g. `"SqL2"`), for `op_log`'s `distance_name` field
@@ -994,7 +1030,7 @@ function _hydrate_raw(handle, raw)
 end
 
 """
-    _run_search(handle, index, req, query, k; filter_spec, bs_override, text, metrics) -> Vector{SSE.SearchResult}
+    _run_search(handle, index, req, query, k; filter_spec, bs_override, text, metrics, identity) -> Vector{SSE.SearchResult}
 
 Shared search call site for `handle_search` (dense, optionally post-filtered) and
 `handle_ftsearch` (single-index text): runs the search and logs exactly one `op_log`
@@ -1009,7 +1045,8 @@ calibrated target, rather than raw beam parameters). That one path still calls
 `IndexEngine.search_live`; it is the last search-side internal this module reaches for.
 """
 function _run_search(handle, index::String, req::HTTP.Request, query, k::Int;
-                     filter_spec=nothing, bs_override=nothing, text::Bool=false, metrics=nothing)
+                     filter_spec=nothing, bs_override=nothing, text::Bool=false, metrics=nothing,
+                     identity=(nothing, nothing))
     engine = handle.engine
     dataset = handle.project
     # The cost of this one search, reported by the engine itself. It cannot be recovered by
@@ -1031,8 +1068,8 @@ function _run_search(handle, index::String, req::HTTP.Request, query, k::Int;
         SSE.search(handle, query, k; filter=_filter_predicate(filter_spec, SSE.meta_schema(handle)), candidates=FILTER_CANDIDATES(k), stats)
     end
     Telemetry.log_request!(dataset, nothing, "search", index, t0, nothing;
-        token=_request_token(req), distance_name=_engine_distance_name(engine), dimension=_engine_dimension(engine),
-        distance_evaluations=stats.distance_evaluations, metrics)
+        identity, distance_name=_engine_distance_name(engine),
+        dimension=_engine_dimension(engine), distance_evaluations=stats.distance_evaluations, metrics)
     return hits
 end
 
@@ -1078,7 +1115,8 @@ function handle_search(req::HTTP.Request, app::AppState, index::String)
     end
 
     hits = try
-        _run_search(app.handles[index], index, req, query, k; filter_spec, bs_override, metrics=app.metrics)
+        _run_search(app.handles[index], index, req, query, k; filter_spec, bs_override,
+                    metrics=app.metrics, identity=_request_identity(app, req))
     catch e
         e isa SSE.EngineError || rethrow()
         return engine_error_response(e)
@@ -1154,7 +1192,8 @@ function handle_ftsearch(req::HTTP.Request, app::AppState, index::String)
     k = get(data, "k", 10)
 
     hits = try
-        _run_search(app.handles[index], index, req, data["text"], k; text=true, metrics=app.metrics)
+        _run_search(app.handles[index], index, req, data["text"], k; text=true,
+                    metrics=app.metrics, identity=_request_identity(app, req))
     catch e
         e isa SSE.EngineError || rethrow()
         return engine_error_response(e)
@@ -1194,7 +1233,8 @@ function handle_delete_item(req::HTTP.Request, app::AppState, index::String)
     # No ctx/timing ceremony here (unlike search/append) -- a soft-delete doesn't evaluate
     # any distances, so log_operation directly rather than through log_request!.
     Telemetry.log_operation(app.handles[index].project, "delete",
-                            Dict{String, Any}("index_uuid" => index, "_id" => _id, "token" => _request_token(req));
+                            merge(Dict{String, Any}("index_uuid" => index, "_id" => _id),
+                                  Telemetry.identity_fields(_request_identity(app, req)));
                             metrics=app.metrics)
 
     return json_response(200, Dict("status" => "soft_deleted", "id" => index, "_id" => _id))

@@ -96,7 +96,12 @@ using JSON3
 
         search_entry = log_body.entries[1]
         @test search_entry.details.index_uuid == "admin_test_ds"
-        @test search_entry.details.token == "admin-log-test-token"
+        # The log identifies the caller without carrying what they presented: the token of
+        # that request appears as its fingerprint, and never as itself.
+        @test search_entry.details.token_fingerprint == "484fe328e19dd3b7"
+        @test !occursin("admin-log-test-token", String(resp.body))
+        # Authentication is disabled in this suite, so the token resolves to no user
+        @test search_entry.details.user === nothing
         @test search_entry.details.distance_name !== nothing
         @test search_entry.details.dimension == length(docs[1].vector)
         @test search_entry.details.distance_evaluations > 0
@@ -104,7 +109,8 @@ using JSON3
 
         append_entry = log_body.entries[3]
         @test append_entry.details.items_inserted == 5
-        @test append_entry.details.token === nothing # no Authorization header on that original request
+        @test append_entry.details.token_fingerprint === nothing # no Authorization header on that request
+        @test append_entry.details.user === nothing
 
         # The same search is in /metrics, with the distance computations it performed: the
         # figure §5.8 asked for, which the engine reports through SearchStats.

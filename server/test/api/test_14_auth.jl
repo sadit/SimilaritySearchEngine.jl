@@ -96,6 +96,15 @@ using JSON3
             @test body.required == "admin:*"
             @test body.kind == "Forbidden"
 
+            # A request made with a valid token is logged under the name on it, and the token
+            # itself is not in the log at all.
+            @test status(() -> HTTP.post("$base_url/datasets/auth_ds/search", bearer(writer), query)) == 200
+            log_body = String(HTTP.get("$base_url/datasets/auth_ds/log", bearer(admin)).body)
+            @test !occursin(writer, log_body)
+            entry = JSON3.read(log_body).entries[1]
+            @test entry.details.user == "writer"
+            @test length(entry.details.token_fingerprint) == 16
+
             # --- admin ----------------------------------------------------------------------
             @test status(() -> HTTP.get("$base_url/admin/tokens", bearer(admin))) == 200
             @test status(() -> HTTP.get("$base_url/datasets/auth_ds/log", bearer(admin))) == 200

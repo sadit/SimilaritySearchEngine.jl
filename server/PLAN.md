@@ -119,7 +119,20 @@ of it exist.
    `exists` reports both alongside the `id` that was asked about, and `/fetch` no longer
    repeats one of them as `id`. No aliases: nothing is released, and two names for one field
    is how the confusion started.
-8. **The request collector of §2**, the query side of the concurrency model: a `Channel` that
+8. ~~**The token in the operation log**~~ Done on 2026-09-14. Every record stored the
+   `Authorization` header verbatim, so the log of a dataset held live credentials, `dump`
+   copied them into every bundle, and reading the log meant being able to impersonate the
+   callers in it. A record now carries `user`, the name on the token when it was valid, and
+   `token_fingerprint`, the first eight bytes of its SHA-256. The endpoint keeps requiring
+   `admin`: the log no longer carries a credential, but it does say who did what, which is
+   an audit surface rather than a reading of the dataset.
+
+   **Still open, and of the same family:** the token database stores each token as its own
+   RocksDB key, and `GET /api/v1/admin/tokens` returns them in full. Storing a hash instead
+   would mean the token is shown once, when it is created -- which is what
+   `similarity-search add-token` already does -- and that revoking one takes the fingerprint
+   rather than the token, since the listing would no longer contain it.
+9. **The request collector of §2**, the query side of the concurrency model: a `Channel` that
    holds incoming requests and releases them as the pool frees up, instead of answering each
    one on the thread pool as Julia schedules it. It is written here as a decision still to be
    taken, not as work waiting to start. What it would prevent is a server accepting more

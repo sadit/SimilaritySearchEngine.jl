@@ -246,11 +246,20 @@ which on a large dataset takes minutes and is better asked for offline with `des
 ```json
 {"status":"ok","total":4,"offset":0,"limit":1,
  "entries":[{"operation":"delete","timestamp":"2026-09-14T19:42:11.195",
-             "details":{"index_uuid":"ds","_id":1,"token":null}}]}
+             "details":{"index_uuid":"ds","_id":1,
+                        "user":"alice","token_fingerprint":"703ffec26b6db7b1"}}]}
 ```
 
 A `search` entry carries more in `details`: `distance_name`, `dimension`,
 `distance_evaluations` and `elapsed_seconds`; an `append` entry carries `items_inserted`.
+
+`user` is the name on the token the request carried, and is present when that token was
+valid. `token_fingerprint` is the first eight bytes of the token's SHA-256: enough to tell
+two tokens of one user apart and to match an entry against a token someone holds, and not
+enough to present as one. Until 2026-09-14 this field was the token itself, which put live
+credentials in a column family of the dataset and in every `dump` of it. The endpoint still
+requires `admin`, because the log says who did what, which is an audit surface rather than a
+reading of the dataset.
 
 The number of distance computations of a search is obtained from the engine, in a
 `SimilaritySearchEngine.SearchStats` instance that `_run_search` passes to `search` and to
