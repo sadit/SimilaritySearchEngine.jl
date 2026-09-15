@@ -64,6 +64,10 @@ cd "$ROOT"
 }
 
 echo "==> building the API reference (both packages)"
+# Resolved first: docs/Manifest.toml is not committed, and a dependency added to either
+# package since the last build leaves it stale -- the build then fails with "Package X does
+# not have Y in its dependencies", after the manual has already been checked.
+julia --project=docs -e 'using Pkg; Pkg.instantiate()'
 julia --project=docs docs/make.jl
 
 STAGE="$(mktemp -d)"
