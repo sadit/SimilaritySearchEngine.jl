@@ -37,6 +37,11 @@ query_threads_pct = 80
 # Percentage of threads dedicated to batch or heavy jobs. This is the one that applies when
 # both are present and they do not add up to 100.
 batch_threads_pct = 20
+# How many searches may run at once. 0 derives it from the split above: the threads not
+# reserved for jobs. A request that arrives when every slot is taken waits for one; `/metrics`
+# reports how many are running, how many are waiting, and the time spent waiting, which is
+# what says whether this bound is ever reached.
+max_concurrent_queries = 0
 
 [server]
 # Listen address

@@ -423,6 +423,9 @@ function run_interactive_serve(config_path::String)
     end
 
     auth_enabled = get(get(config, "auth", Dict{String, Any}()), "enabled", false) === true
-    batch_threads_pct = resolve_batch_threads_pct(get(config, "resources", Dict{String, Any}()))
-    return run_serve(host, port, workdir; auth_enabled, batch_threads_pct)
+    resources_cfg = get(config, "resources", Dict{String, Any}())
+    batch_threads_pct = resolve_batch_threads_pct(resources_cfg)
+    configured_slots = get(resources_cfg, "max_concurrent_queries", 0)
+    max_concurrent_queries = configured_slots isa Integer ? Int(configured_slots) : 0
+    return run_serve(host, port, workdir; auth_enabled, batch_threads_pct, max_concurrent_queries)
 end

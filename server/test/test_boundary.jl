@@ -8,7 +8,8 @@ import SimilaritySearchEngine as SSE
 using SimilaritySearchServer.Server: parse_index_kind, parse_distance, default_textmodel,
                                      engine_error_response, _typed_item, AppState, _guard,
                                      json_response, parse_meta_schema, serialize_meta_schema,
-                                     _filter_predicate
+                                     _filter_predicate, query_slot_count, _with_query_slot,
+                                     token_fingerprint
 using SimilaritySearchServer: cli_exit_code, wire_kind
 import SimilaritySearchServer.Tokens as Tokens
 import SimilaritySearchServer.Executors as Executors
@@ -351,4 +352,59 @@ end
 
     ranged = _filter_predicate(Dict("when" => Dict("gte" => "2026-01-01T00:00:00")), declared)
     @test ranged(record, meta)
+end
+
+
+# ---------------------------------------------------------------------------------------
+# The bound on concurrent searches (PLAN.md §2). No server: the bound is a semaphore and a
+# derivation, and both can be exercised directly.
+# ---------------------------------------------------------------------------------------
+
+@testset "how many searches run at once" begin
+    # Derived from the split: the threads that job execution did not reserve
+    @test query_slot_count(64, 20, 0) == 52
+    @test query_slot_count(8, 25, 0) == 6
+    @test query_slot_count(1, 20, 0) == 1
+    # A share that would leave nothing still answers, one search at a time
+    @test query_slot_count(2, 100, 0) == 1
+    @test query_slot_count(0, 20, 0) == 1
+    # A configured value is used as given, whatever the split says
+    @test query_slot_count(64, 20, 4) == 4
+    @test query_slot_count(2, 20, 100) == 100
+end
+
+@testset "a search waits for a slot instead of joining an unbounded crowd" begin
+    workdir = mktempdir()
+    mgr = Tokens.open_token_manager(workdir)
+    app = AppState(workdir, nothing, nothing, nothing, mgr,
+                   Dict{String, SSE.EmbeddedEngine}(), ReentrantLock(), false, 3)
+
+    running = Threads.Atomic{Int}(0)
+    peak = Threads.Atomic{Int}(0)
+    done = Threads.Atomic{Int}(0)
+    @sync for _ in 1:24
+        Threads.@spawn _with_query_slot(app) do
+            n = Threads.atomic_add!(running, 1) + 1
+            Threads.atomic_max!(peak, n)
+            sleep(0.01)                      # long enough for the others to pile up
+            Threads.atomic_sub!(running, 1)
+            Threads.atomic_add!(done, 1)
+        end
+    end
+
+    @test done[] == 24                        # every request ran: waiting, not refused
+    @test peak[] <= 3                         # ... and never more than the bound at once
+    @test app.queries_running[] == 0          # the gauges return to zero
+    @test app.queries_waiting[] == 0
+    # Every request asked for a slot, and the ones that waited are visible as time
+    @test app.metrics.waits[] == 24
+    @test app.metrics.wait_seconds[] > 0
+
+    # A slot is released even when the body fails, or one failure would shrink the server
+    @test_throws ErrorException _with_query_slot(() -> error("boom"), app)
+    @test app.queries_running[] == 0
+    @test _with_query_slot(() -> :ok, app) === :ok
+
+    Tokens.close_token_manager(mgr)
+    rm(workdir; recursive=true, force=true)
 end

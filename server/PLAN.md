@@ -132,14 +132,19 @@ of it exist.
    would mean the token is shown once, when it is created -- which is what
    `similarity-search add-token` already does -- and that revoking one takes the fingerprint
    rather than the token, since the listing would no longer contain it.
-9. **The request collector of §2**, the query side of the concurrency model: a `Channel` that
-   holds incoming requests and releases them as the pool frees up, instead of answering each
-   one on the thread pool as Julia schedules it. It is written here as a decision still to be
-   taken, not as work waiting to start. What it would prevent is a server accepting more
-   concurrent searches than it can serve, and nothing has measured that this happens; what it
-   costs is certain, a queue in the path of every search. Measure first: the operation log
-   now carries the elapsed time of every request, so the question "does latency degrade with
-   concurrency, and from which point" can be answered with data before anything is built.
+9. **The request collector of §2** — its purpose is served, its structure is not built.
+   On 2026-09-15 the query side gained a bound: `max_concurrent_queries` searches run at
+   once, derived by default from the thread split, and a request that finds every slot taken
+   waits for one. That is a semaphore around the four search handlers, ten lines, not the
+   collector this document describes: a channel of pending requests and a pool of worker
+   tasks that every search passes through.
+
+   What is still open is whether the collector adds anything over the bound. It would allow
+   ordering or dropping the queue, which a semaphore cannot, and it would move every search
+   onto a worker task, which costs a channel round trip on a server that is not busy. The
+   measurements that would answer this are now reported: `simsearch_queries_waiting`,
+   `simsearch_query_wait_seconds_total`, and the histogram of request durations. A server
+   whose waiting count stays at zero does not need either.
 
 The stemmer registry of §5.3 and §9's phase 5 is not on this list: it was discarded. Stemming
 was the way this specification proposed to make a query match a word it does not equal. That

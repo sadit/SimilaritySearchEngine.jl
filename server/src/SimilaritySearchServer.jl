@@ -86,7 +86,8 @@ handler mapping regardless of how the arguments were collected" principle
 `dispatch_command`/`dispatch_ctl_command` already apply to their own binaries.
 """
 function run_serve(host::String, port::Int, workdir::String;
-                   auth_enabled::Bool=false, batch_threads_pct::Real=20)::Cint
+                   auth_enabled::Bool=false, batch_threads_pct::Real=20,
+                   max_concurrent_queries::Int=0)::Cint
     job_mgr = Jobs.init_job_manager(workdir)
     cursor_mgr = Cursors.init_cursor_manager(workdir)
     executor = Executors.LocalCLIExecutor()
@@ -112,7 +113,8 @@ function run_serve(host::String, port::Int, workdir::String;
         token_mgr,
         Dict{String, SimilaritySearchEngine.EmbeddedEngine}(),
         ReentrantLock(),
-        auth_enabled
+        auth_enabled,
+        Server.query_slot_count(Threads.nthreads(), batch_threads_pct, max_concurrent_queries)
     )
 
     # Reopen every dataset already on disk (from a previous run of this same server)
@@ -130,6 +132,8 @@ function run_serve(host::String, port::Int, workdir::String;
     # its own process, so the share is spent as a number of processes and a number of threads
     # each; `Base.julia_cmd()` does not carry this process's `--threads`, so without this every
     # job would run on one thread whatever the machine has.
+    slots = Server.query_slot_count(Threads.nthreads(), batch_threads_pct, max_concurrent_queries)
+    println("Queries: at most $slots at once; a request that finds every slot taken waits for one.")
     max_concurrent, threads_per_job = Executors.job_thread_budget(Threads.nthreads(), batch_threads_pct)
     println("Job execution: at most $max_concurrent concurrent job(s), $threads_per_job thread(s) each ",
             "($(batch_threads_pct)% of this server's $(Threads.nthreads()) thread(s)). Queries use the rest.")
@@ -222,8 +226,10 @@ function main_serve(args::Vector{String})::Cint
     workdir = something(get(serve_args, "workdir", nothing), get(paths_cfg, "workdir", "data"))
     auth_enabled = get(auth_cfg, "enabled", false) === true
     batch_threads_pct = resolve_batch_threads_pct(resources_cfg)
+    configured_slots = get(resources_cfg, "max_concurrent_queries", 0)
+    max_concurrent_queries = configured_slots isa Integer ? Int(configured_slots) : 0
 
-    return run_serve(host, port, workdir; auth_enabled, batch_threads_pct)
+    return run_serve(host, port, workdir; auth_enabled, batch_threads_pct, max_concurrent_queries)
 end
 
 end # module

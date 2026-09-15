@@ -85,8 +85,9 @@ At the top level of a response, `id` is the dataset: `{"status":"appended","id":
 - `GET /healthz` — the process answers HTTP.
 - `GET /readyz` — the process is ready to serve. `{"status":"ok"}`.
 - `GET /metrics` — metrics in Prometheus text format: documents and deleted records per
-  dataset, jobs in progress, and the counters the operation log feeds — requests per dataset
-  and operation, distance computations, items inserted, and a histogram of request durations.
+  dataset, jobs in progress, searches running and waiting, and the counters the operation log
+  feeds — requests per dataset and operation, distance computations, items inserted, and a
+  histogram of request durations.
 
 The counters cover the running process and start at zero when it starts, which is what a
 Prometheus counter is expected to do; `simsearch_process_start_time_seconds` reports when
@@ -384,7 +385,23 @@ port = 8080
 [resources]
 query_threads_pct = 80
 batch_threads_pct = 20
+max_concurrent_queries = 0
 ```
+
+`max_concurrent_queries` bounds how many searches run at once. `0` derives it from the split
+below: the threads that job execution did not reserve. A request that arrives when every slot
+is taken waits for one; it is not refused, because a caller that asked for a search wants the
+search. `/metrics` reports `simsearch_queries_running`, `simsearch_queries_waiting`,
+`simsearch_query_slots` and `simsearch_query_wait_seconds_total`, which is what says whether
+the bound is ever reached.
+
+The bound exists because unbounded concurrency buys no throughput and does cost memory. Past
+the number of threads, more concurrent searches share the same cores and each one gets
+slower; and every concurrent search holds a context from the engine's pool, which grows to
+the highest concurrency ever reached and does not shrink. PLAN.md §2 proposed a request
+collector for this: a channel and a pool of worker tasks that every search would pass
+through. This is the bound without that structure, and the measurements a collector would be
+justified by are the ones above.
 
 `[resources]` divides this server's threads between answering queries and executing jobs. A
 job runs as its own process, so the reserved share is spent as a number of processes and a

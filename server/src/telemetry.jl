@@ -7,7 +7,7 @@ using SimilaritySearch
 using ..Project
 
 export log_operation, snapshot_costs, log_request!, identity_fields
-export MetricsRegistry, record_metric!, prometheus_lines, LATENCY_BUCKETS
+export MetricsRegistry, record_metric!, record_wait!, prometheus_lines, LATENCY_BUCKETS
 
 """
     log_operation(manager::ProjectManager, op_type::String, details::Dict{String, Any})
@@ -139,6 +139,10 @@ struct MetricsRegistry
     duration_buckets::Dict{Tuple{String, String}, Vector{Int}}
     evaluations::Dict{String, Int}                          # dataset => distance computations
     items_inserted::Dict{String, Int}                       # dataset => items
+    # Time spent waiting for a query slot (PLAN.md §2, see `Server._with_query_slot`). Zero on
+    # a server that never reaches its bound, which is what says the bound is not binding.
+    wait_seconds::Base.RefValue{Float64}
+    waits::Base.RefValue{Int}
     started_at::Float64
 end
 
@@ -148,6 +152,7 @@ MetricsRegistry() = MetricsRegistry(ReentrantLock(),
                                     Dict{Tuple{String, String}, Vector{Int}}(),
                                     Dict{String, Int}(),
                                     Dict{String, Int}(),
+                                    Ref(0.0), Ref(0),
                                     time())
 
 """
@@ -178,6 +183,22 @@ end
 
 record_metric!(::Nothing, args...; kwargs...) = nothing
 
+"""
+    record_wait!(registry, seconds)
+
+Adds one wait for a query slot. A wait of zero counts too: it is the common case on a server
+below its bound, and counting it keeps the average honest.
+"""
+function record_wait!(registry::MetricsRegistry, seconds::Real)
+    lock(registry.lock) do
+        registry.waits[] += 1
+        registry.wait_seconds[] += max(0.0, Float64(seconds))
+    end
+    return nothing
+end
+
+record_wait!(::Nothing, ::Real) = nothing
+
 _escape_label(s::AbstractString) = replace(String(s), "\\" => "\\\\", "\"" => "\\\"", "\n" => "\\n")
 
 """
@@ -195,6 +216,13 @@ function prometheus_lines(registry::MetricsRegistry)
         push!(lines, "# HELP simsearch_process_start_time_seconds Start time of this process, in seconds since the epoch.")
         push!(lines, "# TYPE simsearch_process_start_time_seconds gauge")
         push!(lines, "simsearch_process_start_time_seconds $(registry.started_at)")
+
+        push!(lines, "# HELP simsearch_query_wait_seconds_total Time requests spent waiting for a query slot.")
+        push!(lines, "# TYPE simsearch_query_wait_seconds_total counter")
+        push!(lines, "simsearch_query_wait_seconds_total $(registry.wait_seconds[])")
+        push!(lines, "# HELP simsearch_query_waits_total Requests that asked for a query slot.")
+        push!(lines, "# TYPE simsearch_query_waits_total counter")
+        push!(lines, "simsearch_query_waits_total $(registry.waits[])")
 
         push!(lines, "# HELP simsearch_requests_total Requests recorded in the operation log since this process started.")
         push!(lines, "# TYPE simsearch_requests_total counter")

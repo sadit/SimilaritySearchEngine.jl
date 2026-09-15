@@ -154,17 +154,79 @@ struct AppState
 
     # What `/metrics` reports, accumulated as requests are recorded in the operation log.
     metrics::Telemetry.MetricsRegistry
+
+    # How many searches may run at once (PLAN.md §2), and how many are waiting for a slot.
+    # See `_with_query_slot`.
+    query_slots::Base.Semaphore
+    queries_running::Threads.Atomic{Int}
+    queries_waiting::Threads.Atomic{Int}
 end
 
-AppState(workdir, job_mgr, cursor_mgr, executor, token_mgr, handles, lock, auth_enabled::Bool) =
+AppState(workdir, job_mgr, cursor_mgr, executor, token_mgr, handles, lock, auth_enabled::Bool,
+         query_slots::Int=query_slot_count(Threads.nthreads(), 20, 0)) =
     AppState(workdir, job_mgr, cursor_mgr, executor, token_mgr, handles, lock, Ref(auth_enabled),
-             Telemetry.MetricsRegistry())
+             Telemetry.MetricsRegistry(), Base.Semaphore(query_slots),
+             Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
 
 # The seven-argument form is the one every existing caller uses, and it leaves authentication
 # off, which is the default of `[auth] enabled`.
 AppState(workdir, job_mgr, cursor_mgr, executor, token_mgr, handles, lock) =
-    AppState(workdir, job_mgr, cursor_mgr, executor, token_mgr, handles, lock, Ref(false),
-             Telemetry.MetricsRegistry())
+    AppState(workdir, job_mgr, cursor_mgr, executor, token_mgr, handles, lock, false)
+
+"""
+    query_slot_count(total_threads, batch_pct, configured) -> Int
+
+How many searches this server runs at once (PLAN.md §2).
+
+`configured` is `[resources] max_concurrent_queries`, and any positive value is used as
+given. Zero derives it from the thread split: the threads not reserved for job execution,
+which is what the rest of the machine is for. At least one, so a server with a tiny share
+still answers.
+
+The bound exists because unbounded concurrency does not buy throughput and does cost memory.
+Past the number of threads, more concurrent searches share the same cores and every one of
+them gets slower; and each concurrent search holds a context from the engine's pool, which
+grows to the highest concurrency ever reached and does not shrink.
+"""
+function query_slot_count(total_threads::Int, batch_pct::Real, configured::Int)
+    configured > 0 && return configured
+    reserved = floor(Int, max(total_threads, 1) * clamp(batch_pct, 0, 100) / 100)
+    return max(1, max(total_threads, 1) - reserved)
+end
+
+"""
+    _with_query_slot(f, app::AppState)
+
+Runs `f` holding one of the server's query slots, waiting for one if all are taken.
+
+A request waits rather than being refused: a caller that asked for a search wants the search,
+and the wait is bounded by the searches ahead of it rather than by anything unbounded. What
+the waiting says is reported, not hidden -- `/metrics` carries how many searches are running
+and how many are waiting, which is what tells an operator whether this bound is binding at
+all, and `simsearch_query_wait_seconds_total` accumulates the time spent waiting.
+
+This is the semaphore, not §2's request collector. The collector would move every search onto
+a pool of worker tasks fed by a channel; this bounds admission and leaves the request on the
+task that received it. The two answer the same question about overload, and one of them is
+ten lines.
+"""
+function _with_query_slot(f, app::AppState)
+    Threads.atomic_add!(app.queries_waiting, 1)
+    t0 = time()
+    try
+        Base.acquire(app.query_slots)
+    finally
+        Threads.atomic_sub!(app.queries_waiting, 1)
+    end
+    Telemetry.record_wait!(app.metrics, time() - t0)
+    Threads.atomic_add!(app.queries_running, 1)
+    try
+        return f()
+    finally
+        Threads.atomic_sub!(app.queries_running, 1)
+        Base.release(app.query_slots)
+    end
+end
 
 """
     _guard(handler, req, app, op::Symbol, dataset::AbstractString) -> HTTP.Response
@@ -266,6 +328,18 @@ function handle_metrics(req::HTTP.Request, app::AppState)
     push!(lines, "simsearch_threads $(Threads.nthreads())")
 
     active = length(Jobs.list_jobs(app.job_mgr, Jobs.Queued)) + length(Jobs.list_jobs(app.job_mgr, Jobs.Running))
+    push!(lines, "# HELP simsearch_queries_running Searches executing right now.")
+    push!(lines, "# TYPE simsearch_queries_running gauge")
+    push!(lines, "simsearch_queries_running $(app.queries_running[])")
+
+    push!(lines, "# HELP simsearch_queries_waiting Searches waiting for a query slot.")
+    push!(lines, "# TYPE simsearch_queries_waiting gauge")
+    push!(lines, "simsearch_queries_waiting $(app.queries_waiting[])")
+
+    push!(lines, "# HELP simsearch_query_slots How many searches may run at once.")
+    push!(lines, "# TYPE simsearch_query_slots gauge")
+    push!(lines, "simsearch_query_slots $(app.query_slots.sem_size)")
+
     push!(lines, "# HELP simsearch_active_jobs Jobs currently queued or running.")
     push!(lines, "# TYPE simsearch_active_jobs gauge")
     push!(lines, "simsearch_active_jobs $active")
@@ -1115,8 +1189,10 @@ function handle_search(req::HTTP.Request, app::AppState, index::String)
     end
 
     hits = try
-        _run_search(app.handles[index], index, req, query, k; filter_spec, bs_override,
-                    metrics=app.metrics, identity=_request_identity(app, req))
+        _with_query_slot(app) do
+            _run_search(app.handles[index], index, req, query, k; filter_spec, bs_override,
+                        metrics=app.metrics, identity=_request_identity(app, req))
+        end
     catch e
         e isa SSE.EngineError || rethrow()
         return engine_error_response(e)
@@ -1192,8 +1268,10 @@ function handle_ftsearch(req::HTTP.Request, app::AppState, index::String)
     k = get(data, "k", 10)
 
     hits = try
-        _run_search(app.handles[index], index, req, data["text"], k; text=true,
-                    metrics=app.metrics, identity=_request_identity(app, req))
+        _with_query_slot(app) do
+            _run_search(app.handles[index], index, req, data["text"], k; text=true,
+                        metrics=app.metrics, identity=_request_identity(app, req))
+        end
     catch e
         e isa SSE.EngineError || rethrow()
         return engine_error_response(e)
@@ -1315,14 +1393,13 @@ function handle_hybrid_search(req::HTTP.Request, app::AppState)
 
     k = get(data, "k", 10)
 
-    dense_hits = try
-        haskey(data, "vector") ? SSE.search(app.handles[dense_id], convert(Vector{Float32}, data["vector"]), k) : SSE.SearchResult[]
-    catch e
-        e isa SSE.EngineError || rethrow()
-        return engine_error_response(e)
-    end
-    lexical_hits = try
-        haskey(data, "text") ? SSE.ftsearch(app.handles[lexical_id], data["text"], k) : SSE.SearchResult[]
+    # One slot for the request, not one per search it runs: a request that took two would
+    # deadlock against itself on a server whose bound is one.
+    dense_hits, lexical_hits = try
+        _with_query_slot(app) do
+            (haskey(data, "vector") ? SSE.search(app.handles[dense_id], convert(Vector{Float32}, data["vector"]), k) : SSE.SearchResult[],
+             haskey(data, "text") ? SSE.ftsearch(app.handles[lexical_id], data["text"], k) : SSE.SearchResult[])
+        end
     catch e
         e isa SSE.EngineError || rethrow()
         return engine_error_response(e)
@@ -1403,7 +1480,9 @@ function handle_ftsearch_group(req::HTTP.Request, app::AppState)
     grouped = Dict{String, Any}()
     for m in text_members
         hits = try
-            SSE.ftsearch(app.handles[m["id"]], data["text"], k)
+            _with_query_slot(app) do
+                SSE.ftsearch(app.handles[m["id"]], data["text"], k)
+            end
         catch e
             e isa SSE.EngineError || rethrow()
             return engine_error_response(e)
