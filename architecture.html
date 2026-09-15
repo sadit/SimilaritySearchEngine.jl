@@ -1,0 +1,1164 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en-US" xml:lang="en-US"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.9.38">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>Architecture – SimilaritySearchEngine.jl</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="site_libs/quarto-nav/headroom.min.js"></script>
+<script src="site_libs/clipboard/clipboard.min.js"></script>
+<script src="site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="site_libs/quarto-search/fuse.min.js"></script>
+<script src="site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="./">
+<script src="site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="site_libs/quarto-html/popper.min.js"></script>
+<script src="site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="site_libs/quarto-html/anchor.min.js"></script>
+<link href="site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="site_libs/quarto-html/quarto-syntax-highlighting-15634bcf2e68342d4ad2dfa704d543f6.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="site_libs/bootstrap/bootstrap-3e7735b7b22659e5fa437aca0bb49075.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+<meta name="mermaid-theme" content="neutral">
+<script src="site_libs/quarto-diagram/mermaid.min.js"></script>
+<script src="site_libs/quarto-diagram/mermaid-init.js"></script>
+<link href="site_libs/quarto-diagram/mermaid.css" rel="stylesheet">
+
+  <script src="https://cdnjs.cloudflare.com/polyfill/v3/polyfill.min.js?features=es6"></script>
+  <script defer="" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml-full.js" type="text/javascript"></script>
+
+<script type="text/javascript">
+const typesetMath = (el) => {
+  if (window.MathJax) {
+    // MathJax Typeset
+    window.MathJax.typeset([el]);
+  } else if (window.katex) {
+    // KaTeX Render
+    var mathElements = el.getElementsByClassName("math");
+    var macros = [];
+    for (var i = 0; i < mathElements.length; i++) {
+      var texText = mathElements[i].firstChild;
+      if (mathElements[i].tagName == "SPAN" && texText && texText.data) {
+        window.katex.render(texText.data, mathElements[i], {
+          displayMode: mathElements[i].classList.contains('display'),
+          throwOnError: false,
+          macros: macros,
+          fleqn: false
+        });
+      }
+    }
+  }
+}
+window.Quarto = {
+  typesetMath
+};
+</script>
+
+<link rel="stylesheet" href="styles.css">
+</head>
+
+<body class="nav-fixed quarto-light">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a class="navbar-brand" href="./index.html">
+    <span class="navbar-title">SimilaritySearchEngine.jl</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="Search"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" role="menu" aria-expanded="false" aria-label="Toggle navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="./index.html"> 
+<span class="menu-text">Home</span></a>
+  </li>  
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-engine" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">Engine</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-engine">    
+        <li>
+    <a class="dropdown-item" href="./architecture.html">
+ <span class="dropdown-text">Architecture</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./tutorials/index.html">
+ <span class="dropdown-text">Tutorials</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./tutorials/getting-started.html">
+ <span class="dropdown-text">Getting started</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./tutorials/paragraph-search.html">
+ <span class="dropdown-text">Paragraph search</span></a>
+  </li>  
+    </ul>
+  </li>
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-server" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">Server</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-server">    
+        <li>
+    <a class="dropdown-item" href="./server/manual.html">
+ <span class="dropdown-text">Manual</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./server/tutorial.html">
+ <span class="dropdown-text">Tutorial</span></a>
+  </li>  
+    </ul>
+  </li>
+</ul>
+            <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-api-reference" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">API reference</span>
+    </a>
+    <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="nav-menu-api-reference">    
+        <li>
+    <a class="dropdown-item" href="https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html">
+ <span class="dropdown-text">Engine API</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html">
+ <span class="dropdown-text">Server API</span></a>
+  </li>  
+    </ul>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link" href="https://github.com/sadit/SimilaritySearchEngine.jl"> 
+<span class="menu-text">GitHub</span></a>
+  </li>  
+</ul>
+          </div> <!-- /navcollapse -->
+            <div class="quarto-navbar-tools">
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+</header>
+<!-- content -->
+<div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">On this page</h2>
+   
+  <ul>
+  <li><a href="#subsystem-architecture-and-module-map" id="toc-subsystem-architecture-and-module-map" class="nav-link active" data-scroll-target="#subsystem-architecture-and-module-map">Subsystem Architecture and Module Map</a>
+  <ul class="collapse">
+  <li><a href="#decoupling-of-subsystems" id="toc-decoupling-of-subsystems" class="nav-link" data-scroll-target="#decoupling-of-subsystems">Decoupling of Subsystems</a></li>
+  <li><a href="#uniform-metadata-contract" id="toc-uniform-metadata-contract" class="nav-link" data-scroll-target="#uniform-metadata-contract">Uniform Metadata Contract</a></li>
+  <li><a href="#the-declared-shape-of-meta" id="toc-the-declared-shape-of-meta" class="nav-link" data-scroll-target="#the-declared-shape-of-meta">The Declared Shape of <code>meta</code></a></li>
+  </ul></li>
+  <li><a href="#engine-type-hierarchy" id="toc-engine-type-hierarchy" class="nav-link" data-scroll-target="#engine-type-hierarchy">Engine Type Hierarchy</a>
+  <ul class="collapse">
+  <li><a href="#properties-of-the-hierarchy" id="toc-properties-of-the-hierarchy" class="nav-link" data-scroll-target="#properties-of-the-hierarchy">Properties of the Hierarchy</a></li>
+  </ul></li>
+  <li><a href="#decoupled-lifecycle-staging-vs.-indexing" id="toc-decoupled-lifecycle-staging-vs.-indexing" class="nav-link" data-scroll-target="#decoupled-lifecycle-staging-vs.-indexing">Decoupled Lifecycle: Staging vs.&nbsp;Indexing</a>
+  <ul class="collapse">
+  <li><a href="#behavior-of-each-engine-type" id="toc-behavior-of-each-engine-type" class="nav-link" data-scroll-target="#behavior-of-each-engine-type">Behavior of Each Engine Type</a></li>
+  </ul></li>
+  <li><a href="#concurrency-model" id="toc-concurrency-model" class="nav-link" data-scroll-target="#concurrency-model">Concurrency Model</a>
+  <ul class="collapse">
+  <li><a href="#reader-writer-synchronization-readwritelock" id="toc-reader-writer-synchronization-readwritelock" class="nav-link" data-scroll-target="#reader-writer-synchronization-readwritelock">Reader-Writer Synchronization: <code>ReadWriteLock</code></a></li>
+  <li><a href="#context-isolation-contextpool" id="toc-context-isolation-contextpool" class="nav-link" data-scroll-target="#context-isolation-contextpool">Context Isolation: <code>ContextPool</code></a></li>
+  <li><a href="#measuring-the-cost-of-a-query" id="toc-measuring-the-cost-of-a-query" class="nav-link" data-scroll-target="#measuring-the-cost-of-a-query">Measuring the Cost of a Query</a></li>
+  </ul></li>
+  <li><a href="#persistence-architecture" id="toc-persistence-architecture" class="nav-link" data-scroll-target="#persistence-architecture">Persistence Architecture</a>
+  <ul class="collapse">
+  <li><a href="#the-persisted-text-index" id="toc-the-persisted-text-index" class="nav-link" data-scroll-target="#the-persisted-text-index">The Persisted Text Index</a></li>
+  <li><a href="#external-identifier-resolution" id="toc-external-identifier-resolution" class="nav-link" data-scroll-target="#external-identifier-resolution">External Identifier Resolution</a></li>
+  <li><a href="#compaction" id="toc-compaction" class="nav-link" data-scroll-target="#compaction">Compaction</a></li>
+  <li><a href="#storage-subsystems" id="toc-storage-subsystems" class="nav-link" data-scroll-target="#storage-subsystems">Storage Subsystems</a></li>
+  <li><a href="#project-reopening-lifecycle" id="toc-project-reopening-lifecycle" class="nav-link" data-scroll-target="#project-reopening-lifecycle">Project Reopening Lifecycle</a></li>
+  </ul></li>
+  <li><a href="#failure-reporting-typed-errors-and-their-boundaries" id="toc-failure-reporting-typed-errors-and-their-boundaries" class="nav-link" data-scroll-target="#failure-reporting-typed-errors-and-their-boundaries">Failure Reporting: Typed Errors and Their Boundaries</a></li>
+  <li><a href="#logging-channels-reporters-and-observers" id="toc-logging-channels-reporters-and-observers" class="nav-link" data-scroll-target="#logging-channels-reporters-and-observers">Logging Channels: Reporters and Observers</a></li>
+  <li><a href="#soft-deletions-and-dataset-operations" id="toc-soft-deletions-and-dataset-operations" class="nav-link" data-scroll-target="#soft-deletions-and-dataset-operations">Soft Deletions and Dataset Operations</a></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default">
+<div class="quarto-title">
+<h1 class="title">Architecture</h1>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<p>This document describes the internal design of <code>SimilaritySearchEngine.jl</code>: the organization of its modules, the engine type hierarchy, the separation between staging and indexing, the concurrency model, and the storage layout, which combines RocksDB column families with memory-mapped files.</p>
+<hr>
+<section id="subsystem-architecture-and-module-map" class="level2">
+<h2 class="anchored" data-anchor-id="subsystem-architecture-and-module-map">Subsystem Architecture and Module Map</h2>
+<p>The package is structured into four core submodules and an embedded orchestration layer:</p>
+<ul>
+<li><strong><code>Schema</code></strong>: Defines the metadata record contract (<code>Schema.MetadataRecord</code>) and serialization interfaces.</li>
+<li><strong><code>Project</code></strong>: Implements project metadata storage (<code>ProjectManager</code>), document ID indexing, and secondary key lookups.</li>
+<li><strong><code>IndexEngine</code></strong>: Implements the <code>AbstractSearchEngine</code> hierarchy, encapsulating indexing algorithms from <code>SimilaritySearch.jl</code> and <code>TextSearch.jl</code>.</li>
+<li><strong><code>Persistence</code></strong>: Provides storage adapters for RocksDB column families and memory-mapped files.</li>
+<li><strong><code>embedded.jl</code></strong>: Implements <code>EmbeddedEngine</code> and exports the public API (<code>create_project</code>, <code>append_items!</code>, <code>search</code>, and others).</li>
+</ul>
+<div class="cell" data-layout-align="default">
+<div class="cell-output-display">
+<div>
+<p></p><figure class="figure"><p></p>
+<div>
+<pre class="mermaid mermaid-js">flowchart LR
+    Schema["Schema&lt;br/&gt;&lt;small&gt;MetadataRecord (_id, doc_id,&lt;br/&gt;keywords, refs), meta JSON&lt;/small&gt;"]
+    Project["Project&lt;br/&gt;&lt;small&gt;ProjectManager, metadata CRUD&lt;/small&gt;"]
+    IndexEngine["IndexEngine&lt;br/&gt;&lt;small&gt;AbstractSearchEngine hierarchy&lt;/small&gt;"]
+    Persistence["Persistence&lt;br/&gt;&lt;small&gt;EngineStore, AdjacencyStore, ...&lt;/small&gt;"]
+    Embedded["embedded.jl&lt;br/&gt;&lt;small&gt;EmbeddedEngine + top-level API&lt;/small&gt;"]
+    Caller(["Host Julia script, or&lt;br/&gt;SimilaritySearchServer"])
+
+    Schema --&gt; Project
+    Schema --&gt; Embedded
+    Project --&gt; Embedded
+    IndexEngine --&gt; Embedded
+    Persistence --&gt; Embedded
+    Embedded --&gt; Caller
+</pre>
+</div>
+<p></p></figure><p></p>
+</div>
+</div>
+</div>
+<section id="decoupling-of-subsystems" class="level3">
+<h3 class="anchored" data-anchor-id="decoupling-of-subsystems">Decoupling of Subsystems</h3>
+<p><code>IndexEngine</code> and <code>Persistence</code> operate independently of <code>Project</code> and <code>Schema</code>: - <code>IndexEngine</code> does not depend on RocksDB. It communicates with persistence only through callbacks of the form <code>(index, sp, ep) -&gt; nothing</code>. - <code>Persistence</code> stores serialized Julia objects through key-value interfaces, and does not interpret the contents of an index. - <code>embedded.jl</code> combines these components into one engine.</p>
+</section>
+<section id="uniform-metadata-contract" class="level3">
+<h3 class="anchored" data-anchor-id="uniform-metadata-contract">Uniform Metadata Contract</h3>
+<p>Projects use a standardized metadata record structure, <code>Schema.MetadataRecord</code>: - <code>_id</code>: Internal, sequential, zero-based or 1-based integer identifier aligned with vector storage indices. - <code>schema_version</code>: Which declaration of <code>meta</code> was in force when the record was written (see below). - <code>doc_id</code>: Caller-provided external string identifier. - <code>keywords</code>: Indexed string tags mapped via the secondary index <code>idx_keywords</code>. - <code>refs</code>: Indexed document reference links mapped via <code>idx_refs</code>. - <code>meta</code>: Metadata stored as a serialized JSON object, in its own column family.</p>
+<p>The record has the same shape in every project. What varies is <code>meta</code>, and a project may declare part of it.</p>
+</section>
+<section id="the-declared-shape-of-meta" class="level3">
+<h3 class="anchored" data-anchor-id="the-declared-shape-of-meta">The Declared Shape of <code>meta</code></h3>
+<p>A project may declare which fields of <code>meta</code> it expects and what type each one holds. The declaration is a <code>Schema.MetaSchema</code>: a list of <code>(name, type)</code>, with the type one of <code>:string</code>, <code>:int64</code>, <code>:float64</code>, <code>:bool</code> or <code>:timestamp</code>.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>h <span class="op">=</span> <span class="fu">create_project</span>(workdir, <span class="st">"papers"</span>; meta_schema <span class="op">=</span> [<span class="st">"year"</span> <span class="op">=&gt;</span> <span class="op">:</span>int64, <span class="st">"published"</span> <span class="op">=&gt;</span> <span class="op">:</span>timestamp])</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="fu">meta_schema</span>(h)                                    <span class="co"># what this project declares</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="fu">declare_meta_schema!</span>(h, [<span class="st">"year"</span> <span class="op">=&gt;</span> <span class="op">:</span>int64])       <span class="co"># declare on a project that exists</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><code>append_items!</code> checks each declared field and converts it when the conversion keeps the value: JSON has one number type, so <code>2024.0</code> is stored as the integer <code>2024</code>, and a timestamp is stored as the string its instant prints as. A value of another type raises <code>PayloadMismatch</code>, which is an <code>InvalidRequest</code>.</p>
+<p>Three properties define what declaring means here:</p>
+<ul>
+<li><strong>It is additive.</strong> A field nobody declared is stored as it arrives, and a record need not carry every declared field. Declaring says what a field must hold when it is present, not what an item may contain.</li>
+<li><strong>It does not reach backwards.</strong> Declaring on a project that already holds records reads none of them. The declaration governs what is written from then on; <code>rebuild</code> is what rewrites the rest. This is what makes declaring cheap on a project of any size.</li>
+<li><strong>It is not an index.</strong> The declared fields are stored in <code>meta</code> as before, and a filter over them is still evaluated per candidate. What the declaration changes is the comparison: a field declared <code>:timestamp</code> is compared as an instant rather than as the text that stores it, so two spellings of one instant match.</li>
+</ul>
+<p>The declaration lives in the project, not in the record: giving <code>MetadataRecord</code> a typed column per declared field would make its Julia type vary from one project to the next, which propagates to every function that handles a record, to the Avro table <code>dump</code> writes, and to a process that holds several projects at once. <code>schema_version</code> on the record is what ties a record to the declaration it was written under.</p>
+<hr>
+</section>
+</section>
+<section id="engine-type-hierarchy" class="level2">
+<h2 class="anchored" data-anchor-id="engine-type-hierarchy">Engine Type Hierarchy</h2>
+<p><code>SimilaritySearchEngine.jl</code> parameterizes search collections through two distinct abstractions: 1. <strong>Engine (<code>AbstractSearchEngine</code>)</strong>: Defines the data domain of the stored payloads (<code>DenseEngine</code>, <code>SparseEngine</code>, <code>FullTextEngine</code>). 2. <strong>Backend (<code>AbstractSearchIndex</code>)</strong>: Defines the underlying search data structure (<code>SearchGraph</code>, <code>ExhaustiveSearch</code>, <code>ParallelExhaustiveSearch</code>, <code>InvertedFile</code>, <code>BM25InvertedFile</code>).</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="fu">create_project</span>(w, ds)                                               <span class="co"># Dense vectors, SearchGraph (defaults)</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="fu">create_project</span>(w, ds; engine<span class="op">=</span>DenseEngine, backend<span class="op">=</span>ExhaustiveSearch) <span class="co"># Dense vectors, exact linear scan</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="fu">create_project</span>(w, ds; engine<span class="op">=</span>SparseEngine, dimension<span class="op">=</span><span class="fl">50_000</span>)        <span class="co"># Sparse vectors, InvertedFile</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="fu">create_project</span>(w, ds; engine<span class="op">=</span>FullTextEngine, backend<span class="op">=</span>BM25InvertedFile,</span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>                      textmodel<span class="op">=</span><span class="fu">DefaultProfile</span>(<span class="op">:</span>es))                <span class="co"># Full text, BM25 scoring</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell" data-layout-align="default">
+<div class="cell-output-display">
+<div>
+<p></p><figure class="figure"><p></p>
+<div>
+<pre class="mermaid mermaid-js">classDiagram
+    class AbstractSearchEngine {
+        &lt;&lt;abstract&gt;&gt;
+    }
+    class DenseEngine~B~ {
+        backend: B
+        search_ctx_pool: ContextPool
+        deleted_ids: Set~UInt32~
+        lock: ReadWriteLock
+    }
+    class SparseEngine {
+        backend: SparseBackend
+        search_ctx_pool: ContextPool
+        deleted_ids: Set~UInt32~
+        lock: ReadWriteLock
+    }
+    class FullTextEngine {
+        backend: TextBackend
+        profile: Union~Nothing, TextProfile~
+        fitspec: Union~Nothing, DeferredFit~
+        staged: Vector~String~
+        search_ctx_pool: ContextPool
+        deleted_ids: Set~UInt32~
+        lock: ReadWriteLock
+    }
+    class GraphBackend {
+        index: SearchGraph
+        ctx: SearchGraphContext
+        minrecall: Union~Nothing, Float32~
+        opt_beamsearch: OptBeamSearch
+    }
+    class ExactBackend~IndexType~ {
+        index: IndexType
+        ctx: GenericContext
+    }
+    class SparseBackend {
+        index: InvertedFile
+        ctx: InvertedFileContext
+        distance: PreMetric
+        dimension: Int
+    }
+    class TextBackend {
+        index: Union~Nothing, AbstractInvertedFile~
+        ctx: InvertedFileContext
+        kind: Type
+        distance: Union~Nothing, PreMetric~
+    }
+    AbstractSearchEngine &lt;|-- DenseEngine
+    AbstractSearchEngine &lt;|-- SparseEngine
+    AbstractSearchEngine &lt;|-- FullTextEngine
+    DenseEngine *-- GraphBackend
+    DenseEngine *-- ExactBackend
+    SparseEngine *-- SparseBackend
+    FullTextEngine *-- TextBackend
+</pre>
+</div>
+<p></p></figure><p></p>
+</div>
+</div>
+</div>
+<section id="properties-of-the-hierarchy" class="level3">
+<h3 class="anchored" data-anchor-id="properties-of-the-hierarchy">Properties of the Hierarchy</h3>
+<ul>
+<li><strong>Sparse engine (<code>SparseEngine</code>)</strong>: Performs inverted-index search over sparse vectors encoded outside the package. The caller supplies <code>SparseVector</code> objects, and no tokenizer or text profile is involved.</li>
+<li><strong>Introspection of the payload type (<code>payload_kind</code>)</strong>: Returns <code>:dense</code>, <code>:sparse</code> or <code>:text</code>, so that a calling layer can determine what a project accepts.</li>
+<li><strong>Backend Compatibility Registry (<code>BACKENDS</code>)</strong>: Enforces valid combinations of payload engines and search backends:
+<ul>
+<li><code>DenseEngine</code> accepts <code>SearchGraph</code>, <code>ExhaustiveSearch</code>, and <code>ParallelExhaustiveSearch</code>.</li>
+<li><code>SparseEngine</code> accepts <code>InvertedFile</code>.</li>
+<li><code>FullTextEngine</code> accepts <code>BM25InvertedFile</code> and <code>TextInvertedFile</code>.</li>
+</ul></li>
+<li><strong>Domain Separation of BM25</strong>: <code>BM25InvertedFile</code> is restricted to <code>FullTextEngine</code> because BM25 scoring relies on corpus-level document frequencies and average document lengths rather than purely geometric vector properties.</li>
+<li><strong>Structural Dimension Constraints</strong>: <code>SparseBackend</code> requires an explicit <code>dimension</code> parameter at initialization because an <code>InvertedFile</code> allocates a fixed array of posting lists.</li>
+<li><strong>Text model</strong>: <code>FullTextEngine</code> keeps its linguistic configuration in a <code>TextProfile</code> (<code>profile</code>): vocabulary frequencies, term weighting, stopword lists, lemma clusters, and query-expansion graphs.</li>
+</ul>
+<hr>
+</section>
+</section>
+<section id="decoupled-lifecycle-staging-vs.-indexing" class="level2">
+<h2 class="anchored" data-anchor-id="decoupled-lifecycle-staging-vs.-indexing">Decoupled Lifecycle: Staging vs.&nbsp;Indexing</h2>
+<p>The package separates the insertion of items from the construction of the index, which is the expensive operation:</p>
+<pre><code>[ Ingestion ] ──────&gt; append_items! ──────&gt; [ Staged Backlog ] ──────&gt; index! ──────&gt; [ Searchable Index ]
+                     (Durable in Store)                                              (Searchable in Engine)</code></pre>
+<section id="behavior-of-each-engine-type" class="level3">
+<h3 class="anchored" data-anchor-id="behavior-of-each-engine-type">Behavior of Each Engine Type</h3>
+<ol type="1">
+<li><strong><code>SearchGraph</code> (Dense Engine)</strong>:
+<ul>
+<li><code>append_items!</code> writes the <code>Vector{Float32}</code> arrays to the memory-mapped file <code>dense_vectors.mmapdb</code>. The operation is durable and costs <span class="math inline">\(O(1)\)</span> per vector. It does not construct graph edges.</li>
+<li><code>index!</code> evaluates the backlog range <code>length(index)+1:length(database(index))</code> and builds proximity graph connections via <code>SimilaritySearch.index!</code>.</li>
+</ul></li>
+<li><strong><code>FullTextEngine</code> (Text Engine)</strong>:
+<ul>
+<li><code>append_items!</code> appends raw text strings to <code>StagedTextStore</code> within RocksDB.</li>
+<li><code>index!</code> processes the staged text backlog:
+<ul>
+<li>On the <strong>first invocation</strong> of an uninitialized project, <code>index!</code> executes the linguistic model specification (<code>fitspec</code>) to build the initial <code>TextProfile</code> and instantiate the inverted index.</li>
+<li>On subsequent invocations, <code>index!</code> encodes staged strings and inserts posting list entries.</li>
+</ul></li>
+</ul></li>
+<li><strong><code>ExhaustiveSearch</code> and <code>InvertedFile</code> (Sparse Engine)</strong>:
+<ul>
+<li>An exact linear scan evaluates the database directly, and a sparse inverted file updates its posting lists on insertion. <code>append_items!</code> therefore makes an item searchable immediately, and <code>index!</code> performs no work.</li>
+</ul></li>
+</ol>
+<hr>
+</section>
+</section>
+<section id="concurrency-model" class="level2">
+<h2 class="anchored" data-anchor-id="concurrency-model">Concurrency Model</h2>
+<p>The index structures of <code>SimilaritySearch.jl</code> and <code>TextSearch.jl</code> support concurrent reads. A write that runs at the same time as a read, or as another write, corrupts them.</p>
+<p>The package coordinates access from several threads with two mechanisms: <code>ReadWriteLock</code> and <code>ContextPool</code>.</p>
+<section id="reader-writer-synchronization-readwritelock" class="level3">
+<h3 class="anchored" data-anchor-id="reader-writer-synchronization-readwritelock">Reader-Writer Synchronization: <code>ReadWriteLock</code></h3>
+<p>Each engine maintains a <code>ReadWriteLock</code> to coordinate thread access: - <strong>Read Lock (Shared)</strong>: Acquired by query operations (<code>search</code>, <code>ftsearch</code>, <code>allknn</code>, <code>closestpairs</code>). Allows multiple worker threads to execute searches in parallel. - <strong>Write Lock (Exclusive)</strong>: Acquired by mutating operations (<code>append_items!</code>, <code>index!</code>, <code>delete_item!</code>, <code>calibrate!</code>). Blocks all active readers and concurrent writers.</p>
+<div class="cell" data-layout-align="default">
+<div class="cell-output-display">
+<div>
+<p></p><figure class="figure"><p></p>
+<div>
+<pre class="mermaid mermaid-js">sequenceDiagram
+    participant S1 as search (thread 1)
+    participant S2 as search (thread 2)
+    participant W as append_items! (thread 3)
+    participant L as engine.lock
+
+    S1-&gt;&gt;L: read_lock (readers: 1)
+    S2-&gt;&gt;L: read_lock (readers: 2)
+    Note over S1,S2: Concurrent search execution
+    W-&gt;&gt;L: write_lock (blocks until readers == 0)
+    S1-&gt;&gt;L: release (readers: 1)
+    S2-&gt;&gt;L: release (readers: 0)
+    L-&gt;&gt;W: write_lock granted (exclusive)
+    Note over W: Execute mutation and update persistence
+    W-&gt;&gt;L: release
+</pre>
+</div>
+<p></p></figure><p></p>
+</div>
+</div>
+</div>
+</section>
+<section id="context-isolation-contextpool" class="level3">
+<h3 class="anchored" data-anchor-id="context-isolation-contextpool">Context Isolation: <code>ContextPool</code></h3>
+<p>A search context (<code>SearchGraphContext</code>, <code>GenericContext</code>, <code>InvertedFileContext</code>) contains working buffers: beam priority queues, bit vectors of visited vertices, and accumulator caches. If two threads search with the same context, these buffers are corrupted.</p>
+<p><code>ContextPool</code> manages a dynamic pool of isolated context instances:</p>
+<div class="cell" data-layout-align="default">
+<div class="cell-output-display">
+<div>
+<p></p><figure class="figure"><p></p>
+<div>
+<pre class="mermaid mermaid-js">flowchart LR
+    A["Search Query Entry"] --&gt; B{"pool.available&lt;br/&gt;non-empty?"}
+    B -- Yes --&gt; C["pop! available context"]
+    B -- No --&gt; D["deepcopy(pool.template)"]
+    C --&gt; E["Execute search using checked-out context"]
+    D --&gt; E
+    E --&gt; F["Return context to pool.available"]
+</pre>
+</div>
+<p></p></figure><p></p>
+</div>
+</div>
+</div>
+<p>The pool grows to the number of queries that have run concurrently, and it keeps the allocated buffers, so that later queries do not allocate them again.</p>
+<p>A context is also what decides how far an operation spreads over threads: <code>SimilaritySearch.getminbatch</code> divides the work of a <code>@BATCHES</code> loop into <code>8 * Threads.nthreads()</code> batches by default, capped by <code>ctx.maxbatches</code>, and a <code>SearchGraphContext</code> preallocates one visited-set buffer per batch slot. The two uses of a context therefore want opposite sizes. An operation over many elements – insertion, <code>allknn</code>, <code>searchbatch</code> – wants every slot; a single query is one element and uses one.</p>
+<p>The contexts in the pool are built with one slot. Measured on 64 threads, that is 0.25 MB against the 128.2 MB of a default context, and the same query answers with the same identifiers either way; multiplied by the number of concurrent searches, it is the difference between gigabytes of scratch that never shrink and a few megabytes. The context the batch operations run on, <code>backend.ctx</code>, keeps the full count, and <code>create_project</code> and <code>open_project</code> accept <code>maxbatches</code> to cap it: with fewer batches than threads, the threads that are left stay available for queries. That cap belongs to the process rather than to the project, so it is passed when the project is opened and not stored in it.</p>
+</section>
+<section id="measuring-the-cost-of-a-query" class="level3">
+<h3 class="anchored" data-anchor-id="measuring-the-cost-of-a-query">Measuring the Cost of a Query</h3>
+<p>The use of a pool has a consequence for measurement. <code>SimilaritySearch.jl</code> counts the work performed by an operation in the context itself (<code>ctx.costdists</code>). These counters accumulate and are never reset, so the cost of one operation is the difference between two readings taken before and after it.</p>
+<p>This method is correct for insertion, which uses the engine’s own <code>ctx</code> under an exclusive write lock. It is not correct for search. A query uses a context taken from the pool for the duration of the call, and the context returns to the pool when the call ends. A reading taken afterwards includes the work of any other query that has used the same context since.</p>
+<p>The count is therefore computed inside <code>IndexEngine.search_live</code>, between checkout and checkin, and is reported to the caller in a <code>SearchStats</code> instance that the caller provides:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>stats <span class="op">=</span> <span class="fu">SearchStats</span>()</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>results <span class="op">=</span> <span class="fu">search</span>(h, query, <span class="fl">10</span>; stats)</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>stats.distance_evaluations</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><code>search</code>, <code>ftsearch</code> and the filtered form of <code>search</code> accept this argument. For a filtered search, the value is the cost of the candidate search that was executed, not of the <code>k</code> results that satisfied the predicate. Each call overwrites the field; values are not accumulated. The server obtains the <code>distance_evaluations</code> field of its <code>op_log</code> from this mechanism.</p>
+<hr>
+</section>
+</section>
+<section id="persistence-architecture" class="level2">
+<h2 class="anchored" data-anchor-id="persistence-architecture">Persistence Architecture</h2>
+<p>A project is stored in RocksDB column families and in one memory-mapped file. A write modifies only the segments it affects.</p>
+<div class="cell" data-layout-align="default">
+<div class="cell-output-display">
+<div>
+<p></p><figure class="figure"><p></p>
+<div>
+<pre class="mermaid mermaid-js">flowchart TB
+    subgraph db["RocksDB Project Directory"]
+        records[("records&lt;br/&gt;&lt;small&gt;_id → MetadataRecord&lt;/small&gt;")]
+        meta[("meta&lt;br/&gt;&lt;small&gt;_id → JSON meta blob&lt;/small&gt;")]
+        oplog[("op_log")]
+        idxkw[("idx_keywords&lt;br/&gt;&lt;small&gt;keyword → _ids&lt;/small&gt;")]
+        idxrefs[("idx_refs&lt;br/&gt;&lt;small&gt;referenced doc_id → _ids&lt;/small&gt;")]
+        idxdoc[("idx_docid&lt;br/&gt;&lt;small&gt;doc_id → _ids&lt;/small&gt;")]
+        engine[("engine&lt;br/&gt;&lt;small&gt;Field-level engine state&lt;/small&gt;")]
+        adj[("searchgraph_adj&lt;br/&gt;&lt;small&gt;object_id → direct neighbors&lt;/small&gt;")]
+        stagedtext[("staged_text&lt;br/&gt;&lt;small&gt;Raw text blocks&lt;/small&gt;")]
+        sparsedb[("sparse_db&lt;br/&gt;&lt;small&gt;Encoded object blocks&lt;/small&gt;")]
+        postings[("invfile_postings&lt;br/&gt;&lt;small&gt;token → document ids&lt;/small&gt;")]
+        docvecs[("invfile_docvecs&lt;br/&gt;&lt;small&gt;document → indexed vector&lt;/small&gt;")]
+    end
+    mmapfile[["dense_vectors.mmapdb&lt;br/&gt;&lt;small&gt;Memory-Mapped Vector File&lt;/small&gt;"]]
+
+    ProjectManager -- "Metadata CRUD" --&gt; records
+    ProjectManager -- "Unstructured Meta" --&gt; meta
+    ProjectManager -- "Secondary Indices" --&gt; idxkw
+    ProjectManager -- "Secondary Indices" --&gt; idxrefs
+    ProjectManager -- "Secondary Indices" --&gt; idxdoc
+    EngineStore -- "save_field! / load_field" --&gt; engine
+    AdjacencyStore -- "save_neighbors! / load_neighbors" --&gt; adj
+    StagedTextStore -- "append_staged_texts!" --&gt; stagedtext
+    InvertedFileObjectStore -- "append_objects!" --&gt; sparsedb
+    InvertedIndexStore -- "write_invfile_block!" --&gt; postings
+    InvertedIndexStore -- "write_invfile_block! / load_invfile_docvecs" --&gt; docvecs
+    append_dense["append_items! (Dense)"] --&gt; mmapfile
+    append_text["append_items! (Text)"] --&gt; stagedtext
+</pre>
+</div>
+<p></p></figure><p></p>
+</div>
+</div>
+</div>
+<section id="the-persisted-text-index" class="level3">
+<h3 class="anchored" data-anchor-id="the-persisted-text-index">The Persisted Text Index</h3>
+<p>A text project stores the index itself: posting lists in <code>invfile_postings</code>, and one vector per document in <code>invfile_docvecs</code>. Both text backends are stored this way. Their posting lists contain the same data, document identifiers, and they differ only in the representation of each document. Three representations are used, and each stored value begins with a one-byte tag that identifies its own: integer term frequencies (BM25), <code>Float32</code> model weights (the weighted backend), and bags of words (the weighted backend under a set distance, which reads membership instead of weights). A sparse project stores the objects it indexed, in <code>sparse_db</code>, and reconstructs its index at every open. Its items are vectors encoded by the caller, so the stored objects are already the representation that would be written; applying the same treatment to a sparse project remains pending work.</p>
+<p>The two procedures differ in cost. Over 265,000 Project Gutenberg paragraphs, reconstruction takes 20.4 s, and assembly from storage takes 1.4 s with BM25 and 1.7 s with the weighted backend (measured 2026-09-11 and 2026-09-12). Indexing the same corpus takes 25.7 s and 26.4 s respectively, compared with 147.3 s before, because a block is now encoded by the parallel batch procedure of the library instead of one document at a time.</p>
+<p>Writing is incremental and proceeds by blocks. Each call to <code>index!</code> encodes its backlog as one block, inserts the document vectors and lengths of that block into the index in memory, and passes its posting lists to <code>IndexEngine.persist_block!</code>, with identifiers converted from block-local to global. The implementation of that function reads, modifies and writes one stored list per token that the block contains. Appending is correct because document identifiers increase monotonically: the identifiers of a block are larger than every identifier already stored, so the ascending order required by the merge at query time is preserved. <code>IndexEngine</code> contains no reference to RocksDB, and dispatches on the type of adjacency list of its index.</p>
+<p>The unit of writing is the block, and the number of blocks has a cost. The list of a token is rewritten once per block that contains it, so the same 50,000 documents take 5.8 s in one block, 6.8 s in ten, and 10.1 s in fifty (measured 2026-09-12). Large blocks are therefore preferable, which is the result of calling <code>append_items!</code> and then a single <code>index!</code>.</p>
+<p><strong>Posting lists are read on demand; document vectors are not.</strong> The reason is measured. A query reads one posting list per query term, so reading them from storage increases latency by 1.8% (66.8 ms against 68.0 ms) and removes 55.8 MB of 237.5 MB from memory. Scoring reads the term vector of each candidate (<code>bm25score(..., idx.db[docID])</code>), and the merge makes every document that contains any query token a candidate. With a frequent term, reading document vectors on demand becomes one point read per document in the collection: 1,771.9 ms against 66.8 ms for the same query. Document vectors are therefore read into memory when the project is opened (0.76 s for that corpus).</p>
+<p>Posting lists read on demand are kept in a least-frequently-used cache. The cache holds a maximum number of lists and is reduced to a base size when that maximum is exceeded. Lists are removed only after a query has finished, never during one: concurrent searches hold read locks rather than exclusive locks, and a list removed during a query would be read again by any search still using it.</p>
+<p><strong>There is no migration from the previous format.</strong> A project written before the index was persisted opens with its profile and its staged text, and with no index. A search against it reports this condition, and one call to <code>index!</code> builds the index from the staged text, which was always persisted independently of the index. Supporting the previous format would require keeping the reconstruction procedure for projects that do not yet exist, since no version has been released. The migration is therefore explicit:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>h <span class="op">=</span> <span class="fu">open_project</span>(workdir, dataset)</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="fu">index!</span>(h)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="external-identifier-resolution" class="level3">
+<h3 class="anchored" data-anchor-id="external-identifier-resolution">External Identifier Resolution</h3>
+<p><code>doc_id</code> is the identifier supplied by the caller. It is resolved through the <code>idx_docid</code> column family, not by scanning <code>records</code>. Keys are composite: the bytes of <code>doc_id</code> followed by the four bytes of <code>_id</code>. This allows several items to share one <code>doc_id</code>. <code>fetch_items</code> returns every record that carries the requested identifier, in ascending <code>_id</code> order, and <code>exists</code> reports the identifier as deleted only when all of those records are deleted. On a project of 50,000 items, resolving an external identifier takes 0.12 ms through this index, compared with 59 ms for the scan it replaces.</p>
+<p>A project written before this index existed is migrated the first time it is opened for writing. <code>Project.backfill_docid_index!</code> performs one pass over <code>records</code> and writes a marker key, so that later opens do not repeat the pass. A read-only handle opened on a project that has not been migrated uses the scan instead.</p>
+</section>
+<section id="compaction" class="level3">
+<h3 class="anchored" data-anchor-id="compaction">Compaction</h3>
+<p>Bulk writes leave a write-ahead log, and the next open must replay it. Compaction therefore affects the latency of opening a project, not the latency of writing to it. <code>close_project!</code> compacts every column family of the project before closing, unless the handle is read-only, the session performed no writes, or the caller passes <code>compact=false</code>. <code>compact_project!</code> performs the same operation while the project remains open. On a dense project of 50,000 vectors, reopening takes 2.97 s without compaction and 0.28 s with it, and the compaction itself takes 0.03 s.</p>
+</section>
+<section id="storage-subsystems" class="level3">
+<h3 class="anchored" data-anchor-id="storage-subsystems">Storage Subsystems</h3>
+<ol type="1">
+<li><strong><code>EngineStore</code> (Engine Field State)</strong>:
+<ul>
+<li>Stores engine-level configuration as individual key-value entries (<code>:minrecall</code>, <code>:opt_beamsearch</code>, <code>:deleted_ids</code>, <code>:profile</code>).</li>
+<li>Mutations (e.g., updating deleted IDs or storing calibration results) rewrite only their specific keys.</li>
+</ul></li>
+<li><strong>Dense Vector Storage (<code>dense_vectors.mmapdb</code>)</strong>:
+<ul>
+<li>Dense vectors are stored in a dedicated memory-mapped binary file managed by <code>MMapMatrixDatabase</code>.</li>
+<li>Avoids key-value serialization. Appends are sequential, and random access reads the vector without copying it.</li>
+</ul></li>
+<li><strong><code>AdjacencyStore</code> (Graph Topology)</strong>:
+<ul>
+<li>Graph adjacencies are persisted incrementally through <code>CallbackLog</code> observer hooks during <code>index!</code>.</li>
+<li>Stores only forward (direct) edges; reverse edges are reconstructed dynamically in memory during project reopening to ensure idempotency.</li>
+</ul></li>
+<li><strong><code>StagedTextStore</code> and <code>InvertedFileObjectStore</code></strong>:
+<ul>
+<li><code>StagedTextStore</code> holds un-encoded raw text lines.</li>
+<li><code>InvertedFileObjectStore</code> stores contiguous blocks of encoded posting-list objects.</li>
+</ul></li>
+</ol>
+</section>
+<section id="project-reopening-lifecycle" class="level3">
+<h3 class="anchored" data-anchor-id="project-reopening-lifecycle">Project Reopening Lifecycle</h3>
+<div class="cell" data-layout-align="default">
+<div class="cell-output-display">
+<div>
+<p></p><figure class="figure"><p></p>
+<div>
+<pre class="mermaid mermaid-js">sequenceDiagram
+    participant Caller as open_project
+    participant MM as dense_vectors.mmapdb
+    participant ES as EngineStore
+    participant AS as AdjacencyStore
+    participant IE as IndexEngine
+
+    Caller-&gt;&gt;ES: load_field(:kind)
+    Caller-&gt;&gt;MM: Open memory-mapped vector file
+    Caller-&gt;&gt;ES: load_field(:graph_len)
+    Caller-&gt;&gt;AS: load_neighbors(i) for i in 1:graph_len
+    Caller-&gt;&gt;IE: build_searchgraph(distance, vectors, neighbors, graph_len)
+    IE-&gt;&gt;IE: Restore forward graph adjacencies
+    IE-&gt;&gt;IE: connect_reverse_links! over 1:graph_len
+    IE--&gt;&gt;Caller: Reconstructed DenseEngine{GraphBackend}
+</pre>
+</div>
+<p></p></figure><p></p>
+</div>
+</div>
+</div>
+<p>When a project is reopened, the stored forward edges are read again and the reverse links are regenerated, which restores the index to the state it had before the project was closed.</p>
+<hr>
+</section>
+</section>
+<section id="failure-reporting-typed-errors-and-their-boundaries" class="level2">
+<h2 class="anchored" data-anchor-id="failure-reporting-typed-errors-and-their-boundaries">Failure Reporting: Typed Errors and Their Boundaries</h2>
+<p>Every failure that the engine raises is an <code>EngineError</code>. The type of the error, not its message, is the interface. There are four abstract categories, and one or more concrete types under each of them:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>category</th>
+<th>meaning</th>
+<th>concrete types</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>InvalidRequest</code></td>
+<td>the call cannot be honoured as written; retrying it unchanged fails again</td>
+<td><code>PayloadMismatch</code>, <code>WrongDimension</code>, <code>UnknownBackend</code>, <code>InvalidOption</code>, <code>UnsupportedOperation</code></td>
+</tr>
+<tr class="even">
+<td><code>NotFound</code></td>
+<td>something the call named does not exist</td>
+<td><code>ProfileNotInstalled</code></td>
+</tr>
+<tr class="odd">
+<td><code>ConflictingState</code></td>
+<td>the request is well formed but the project is not in a state that can serve it; the same call succeeds later</td>
+<td><code>PendingBacklog</code>, <code>NothingStaged</code>, <code>NoIndex</code>, <code>NotTrained</code>, <code>EmptyProject</code></td>
+</tr>
+<tr class="even">
+<td><code>StorageFailure</code></td>
+<td>what was read back cannot be interpreted</td>
+<td><code>CorruptedStorage</code></td>
+</tr>
+</tbody>
+</table>
+<p>The concrete types carry the values a caller can use. <code>PendingBacklog</code> reports the number of staged items and the number of indexed items, <code>WrongDimension</code> reports the expected and the received length, and <code>InvalidOption</code> reports the keyword that was rejected.</p>
+<p><strong>The mapping is defined at each interface, not in the engine.</strong> The engine contains no reference to HTTP status codes or to process exit codes. Each consumer performs the translation:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="cf">try</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>    <span class="fu">search</span>(handle, query, <span class="fl">10</span>)</span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="cf">catch</span> <span class="cn">e</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>    <span class="cn">e</span> isa ConflictingState <span class="op">&amp;&amp;</span> <span class="cf">return</span> <span class="fu">retry_after_indexing</span>()</span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>    <span class="cn">e</span> isa NotFound <span class="op">&amp;&amp;</span> <span class="cf">return</span> <span class="fu">not_found</span>()</span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>    <span class="fu">rethrow</span>()</span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><code>SimilaritySearchServer</code> maps the categories to status codes: <code>NotFound</code> to 404, <code>ConflictingState</code> to 409, <code>InvalidRequest</code> to 400, and any other failure to 500. Its command lines map the same categories to exit codes 4, 5, 2 and 70, so that a shell script can select a branch without reading the output text. This mapping is the only coupling between the two packages of this repository, and the <a href="./server/manual.html#how-failures-are-reported">server manual</a> states it in one table.</p>
+<p>The alternative, <code>error("...")</code> with a message, requires every consumer to classify the failure by its text. Such a classification fails when the wording changes, and it fails without any error being reported. This had occurred in this repository: the concurrency test identified a rejected operation with <code>occursin("requires no pending backlog", e.msg)</code>. It now matches the type <code>PendingBacklog</code>.</p>
+</section>
+<section id="logging-channels-reporters-and-observers" class="level2">
+<h2 class="anchored" data-anchor-id="logging-channels-reporters-and-observers">Logging Channels: Reporters and Observers</h2>
+<p>A context maintains two separate logging channels: - <strong>Reporters (<code>ctx.reporters</code>)</strong>: Receive progress messages via <a href="https://sadit.github.io/SimilaritySearch.jl/dev/api/"><code>INFORM</code></a> and output formatted status lines to <code>stderr</code> or custom <code>IO</code> streams. Throttled to prevent console flooding. - <strong>Observers (<code>ctx.observers</code>)</strong>: Receive structural mutation events (<code>:add!</code>) via <a href="https://sadit.github.io/SimilaritySearch.jl/dev/api/"><code>OBSERVE</code></a>. Execute un-throttled callbacks that trigger persistence updates (<code>CallbackLog</code>).</p>
+<div class="cell" data-layout-align="default">
+<div class="cell-output-display">
+<div>
+<p></p><figure class="figure"><p></p>
+<div>
+<pre class="mermaid mermaid-js">flowchart LR
+    Mutation["append_items! / index!"] --&gt; INFORM["INFORM (ctx.reporters)"]
+    Mutation --&gt; OBSERVE["OBSERVE :add! (ctx.observers)"]
+    INFORM --&gt; Stderr["InformativeLog → stderr (throttled)"]
+    OBSERVE --&gt; CallbackLog["CallbackLog → Persistence Trigger (un-throttled)"]
+</pre>
+</div>
+<p></p></figure><p></p>
+</div>
+</div>
+</div>
+<hr>
+</section>
+<section id="soft-deletions-and-dataset-operations" class="level2">
+<h2 class="anchored" data-anchor-id="soft-deletions-and-dataset-operations">Soft Deletions and Dataset Operations</h2>
+<ul>
+<li><strong>Soft deletions</strong>: <code>delete_item!</code> records document identifiers in <code>deleted_ids</code>. The index is not reorganized. A query evaluates such candidates and reports them with the field <code>deleted::Bool</code> of <code>SearchResult</code>.</li>
+<li><strong>Operations over an entire collection</strong>: <code>allknn</code>, <code>fft</code>, <code>closestpairs</code> and <code>bichromatic_kclosestpairs</code> operate on the index in memory, using multithreaded batch routines over the whole collection.</li>
+</ul>
+
+
+</section>
+
+</main> <!-- /main -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp("https:\/\/sadit\.github\.io\/SimilaritySearchEngine\.jl\/");
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+</div> <!-- /content -->
+
+
+
+
+</body></html>
