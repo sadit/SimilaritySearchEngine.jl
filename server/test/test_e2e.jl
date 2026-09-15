@@ -1,6 +1,6 @@
 using Test
 using HTTP
-using JSON
+using JSON3
 using SimilaritySearchServer
 using SimilaritySearchServer.Server
 using SimilaritySearchEngine.Project
@@ -15,13 +15,13 @@ using SimilaritySearchServer.Executors
     # Test Ready
     resp = HTTP.get("$root/readyz")
     @test resp.status == 200
-    @test JSON.parse(String(resp.body))["status"] == "ok"
+    @test JSON3.read(String(resp.body))["status"] == "ok"
 
     # Test Create Dataset
-    req_body = JSON.json(Dict("id" => "test_dataset_1"))
+    req_body = JSON3.write(Dict("id" => "test_dataset_1"))
     resp = HTTP.post("$root/api/v1/datasets", [], req_body)
     @test resp.status == 201
-    parsed_resp = JSON.parse(String(resp.body))
+    parsed_resp = JSON3.read(String(resp.body))
     @test parsed_resp["status"] == "created"
     @test parsed_resp["id"] == "test_dataset_1"
 
@@ -33,10 +33,10 @@ using SimilaritySearchServer.Executors
     # Test Submit Job -- the HTTP handler only ever enqueues (queued/); the background
     # dispatcher (Executors.run_dispatcher!, started alongside the server) is what
     # actually moves it through running/ to a terminal state.
-    req_body = JSON.json(Dict("command" => ["build", "--dataset", "test_dataset_1"]))
+    req_body = JSON3.write(Dict("command" => ["build", "--dataset", "test_dataset_1"]))
     resp = HTTP.post("$root/api/v1/jobs/build", [], req_body)
     @test resp.status == 202
-    parsed_resp = JSON.parse(String(resp.body))
+    parsed_resp = JSON3.read(String(resp.body))
     @test parsed_resp["status"] == "accepted"
     job_id = parsed_resp["job_id"]
     @test !isempty(job_id)
@@ -54,7 +54,7 @@ using SimilaritySearchServer.Executors
     status = nothing
     for _ in 1:180
         resp = HTTP.get("$root/api/v1/jobs/$job_id")
-        status = JSON.parse(String(resp.body))["status"]
+        status = JSON3.read(String(resp.body))["status"]
         status in terminal && break
         sleep(0.3)
     end
