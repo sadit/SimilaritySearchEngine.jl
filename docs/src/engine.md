@@ -13,7 +13,7 @@ The friendly, no-HTTP-required surface — project lifecycle, CRUD, calibration,
 
 ```@autodocs
 Modules = [SimilaritySearchEngine]
-Order   = [:type, :function]
+Order   = [:type, :function, :constant]
 ```
 
 ## `Errors`
@@ -24,7 +24,7 @@ categories to its own vocabulary -- status codes, exit codes -- rather than read
 
 ```@autodocs
 Modules = [SimilaritySearchEngine.Errors]
-Order   = [:type, :function]
+Order   = [:type, :function, :constant]
 ```
 
 ## `IndexEngine`
@@ -63,5 +63,5 @@ Typed, optionally-indexed metadata schema declarations.
 
 ```@autodocs
 Modules = [SimilaritySearchEngine.Schema]
-Order   = [:type, :function]
+Order   = [:type, :function, :constant]
 ```

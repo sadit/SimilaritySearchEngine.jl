@@ -24,7 +24,7 @@ handlers each subcommand dispatches to.
 
 ```@autodocs
 Modules = [SimilaritySearchServer]
-Order   = [:type, :function, :constant]
+Order   = [:type, :function, :constant, :macro]
 ```
 
 ## `Server`
