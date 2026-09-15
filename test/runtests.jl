@@ -274,6 +274,53 @@ const ACCENT_ITEMS = vcat(
         end
     end
 
+    # The testset above drives concurrent traffic through ONE project, where `write_lock`
+    # serializes everything. `write_lock` is a field of the engine, so it says nothing about
+    # two projects, and a process that holds several -- a server -- has nothing serializing
+    # them. Found live 2026-09-15: under `SimilaritySearch`'s default `:static` schedule this
+    # fails on the first try, because Julia refuses to enter a `@threads :static` region while
+    # another is running anywhere in the process, whatever data each one touches:
+    #
+    #     index!(a) => `@threads :static` cannot be used concurrently or nested
+    #     index!(b) => ok
+    #
+    # Both calls below are reachable from a server request handler (`server.jl`'s append and
+    # calibrate paths call them in-process), so this is the shape of a real 500. See
+    # `IndexEngine.BATCH_SCHEDULER` for the schedule the engine's contexts carry instead.
+    @testset "two projects at once: batch operations do not collide across engines" begin
+        mktempworkdir() do workdir
+            items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:400]]
+
+            function project(name)
+                h = create_project(workdir, name)
+                append_items!(h, dense_items(items))
+                h
+            end
+            a, b = project("pair_a"), project("pair_b")
+
+            # Each of these parallelizes internally through @BATCHES; only the schedule keeps
+            # them from colliding, since neither lock knows about the other engine.
+            function both(f)
+                ta, tb = Threads.@spawn(f(a)), Threads.@spawn(f(b))
+                results = map((ta, tb)) do t
+                    try (fetch(t); nothing) catch e
+                        e isa TaskFailedException ? e.task.exception : e
+                    end
+                end
+                failed = filter(!isnothing, collect(results))
+                isempty(failed) || @error "concurrent batch op across two projects failed" exception=first(failed)
+                @test isempty(failed)
+            end
+
+            both(index!)
+            both(h -> allknn(h; k=5))
+            both(h -> calibrate!(h; numqueries=20))
+
+            close_project!(a)
+            close_project!(b)
+        end
+    end
+
     @testset "sparse dataset: caller-encoded vectors, no vocabulary anywhere" begin
         mktempworkdir() do workdir
             items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:100]]

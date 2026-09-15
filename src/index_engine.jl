@@ -999,7 +999,10 @@ otherwise come back a different shape than it was created with.
 """
 function build_sparseinvertedfile(distance, dimension::Integer, object_blocks)
     index = InvertedFile(Int(dimension), distance)
-    ctx = InvertedFileContext()
+    # Its own context rather than the engine's -- the engine does not exist yet at this point
+    # of a restore -- so it carries [`BATCH_SCHEDULER`](@ref) explicitly: `append_items!` below
+    # parallelizes via `@BATCHES`, and two projects can be restoring at the same time.
+    ctx = InvertedFileContext(scheduler=BATCH_SCHEDULER)
     objs = collect(Iterators.flatten(object_blocks))
     isempty(objs) || append_items!(index, ctx, VectorDatabase(objs))
     return index
@@ -1052,14 +1055,57 @@ scratch that never shrink and a few megabytes (see [`ContextPool`](@ref)).
 """
 const SEARCH_CONTEXT_MAXBATCHES = 1
 
-"The `maxbatches` keyword of a context, or nothing to keep the library's default."
-_batch_cap(maxbatches::Nothing) = NamedTuple()
-_batch_cap(maxbatches::Integer) = (maxbatches=max(1, Int(maxbatches)),)
+"""
+    BATCH_SCHEDULER
+
+Which `Threads.@threads` schedule every context built here hands to `@BATCHES`.
+
+`SimilaritySearch.get_batch_scheduler()` defaults to `:static`, and `:static` is not usable
+by a process that holds more than one project. Julia refuses to enter a `@threads :static`
+region while another one is already running *anywhere in the process* -- the flag it tests
+is global, so the refusal does not depend on the two regions sharing any data:
+
+    index!(a) => `@threads :static` cannot be used concurrently or nested
+    index!(b) => ok
+
+That is two different projects, each with its own [`ReadWriteLock`](@ref). [`write_lock`](@ref)
+excludes callers of the *same* engine and nothing else, so nothing was ever excluding these
+two, and both `index!` and `calibrate!` run in-process inside a server's request handler.
+Reproduced on 8 threads with `:static`; both calls answer under `:default`.
+
+The value should read `:dynamic`, and does not yet. `:default` is not a schedule; it is
+whatever schedule `Threads.@threads` picks with no annotation, which is `:dynamic` today and
+is the one name Julia reserves the right to redefine. What this constant wants to say is the
+schedule itself. SimilaritySearch 1.4.1 accepts only `:default`, `:static`, `:greedy` and
+`:sequential`, so `:dynamic` raises `ArgumentError` here today; the request to accept it is
+sadit/SimilaritySearch.jl#63, and this is a one-token change once that lands.
+
+Not `:greedy`, which is the schedule for very uneven per-batch cost. `@BATCHES` has already
+averaged the cost of `minbatch` elements into each batch by the time the schedule is chosen,
+so little imbalance is left to recover and the shared channel is paid for nothing: measured
+on 30k 128-dimensional vectors over 16 threads, three runs each, `allknn` took 0.55 s under
+`:static`, 0.56 s under `:default` and 0.68 s under `:greedy`, and `index!` 5.5 s, 5.24 s and
+5.6 s.
+
+A search never reaches any of this. [`SEARCH_CONTEXT_MAXBATCHES`](@ref) makes `minbatch` equal
+the whole range, and `@BATCHES` runs a range that fits in one batch serially in the caller's
+own task, never entering a threaded region at all. The schedule is set on those contexts too
+so that raising that cap later cannot reintroduce the defect.
+
+This does not relax [`allknn_live`](@ref)'s `write_lock`. The scheduler was one of two reasons
+for full exclusivity there; the other, that the six share `engine.backend.ctx` directly, is
+untouched by any of this.
+"""
+const BATCH_SCHEDULER = :default
+
+"The batch policy of a context: the schedule always, and `maxbatches` unless it keeps the library's default."
+_batch_cap(maxbatches::Nothing) = (scheduler=BATCH_SCHEDULER,)
+_batch_cap(maxbatches::Integer) = (maxbatches=max(1, Int(maxbatches)), scheduler=BATCH_SCHEDULER)
 
 "The context a search borrows from the pool: one batch slot, and the caller's logging."
-_search_context(::Type{SearchGraphContext}) = SearchGraphContext(maxbatches=SEARCH_CONTEXT_MAXBATCHES)
-_search_context(::Type{GenericContext}) = GenericContext(maxbatches=SEARCH_CONTEXT_MAXBATCHES)
-_search_context(::Type{InvertedFileContext}) = InvertedFileContext(maxbatches=SEARCH_CONTEXT_MAXBATCHES)
+_search_context(::Type{SearchGraphContext}) = SearchGraphContext(maxbatches=SEARCH_CONTEXT_MAXBATCHES, scheduler=BATCH_SCHEDULER)
+_search_context(::Type{GenericContext}) = GenericContext(maxbatches=SEARCH_CONTEXT_MAXBATCHES, scheduler=BATCH_SCHEDULER)
+_search_context(::Type{InvertedFileContext}) = InvertedFileContext(maxbatches=SEARCH_CONTEXT_MAXBATCHES, scheduler=BATCH_SCHEDULER)
 
 """
     BACKENDS
