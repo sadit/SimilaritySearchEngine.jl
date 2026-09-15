@@ -6,10 +6,14 @@ using Oxygen
 using JSON3
 using Dates
 using RocksDB
-using SimilaritySearch
-using TextSearch
-using SimilaritySearch
-using TextSearch: BeamSearch, SearchGraph
+# The two base libraries, module-only: every name this file takes from them is written
+# `SimilaritySearch.X`/`TextSearch.X`, for the same reason `SSE` is qualified below -- a
+# reader can see which package owns a type without knowing what 153 and 149 exported names
+# happen to contain, and it is what caught `BeamSearch`/`SearchGraph` being imported *from
+# TextSearch* when both are SimilaritySearch's own, re-exported there only by accident of
+# TextSearch's own `using`.
+import SimilaritySearch
+import TextSearch
 using ..Schema
 using ..Project
 using ..Tokens
@@ -96,7 +100,7 @@ function _resolve_beamsearch_override(engine::AbstractSearchEngine, overrides::A
     end
 
     exceeds_baseline = bsize > baseline.bsize || delta > baseline.Δ || maxvisits > baseline.maxvisits
-    return (BeamSearch(bsize=bsize, Δ=delta, maxvisits=maxvisits), exceeds_baseline)
+    return (SimilaritySearch.BeamSearch(bsize=bsize, Δ=delta, maxvisits=maxvisits), exceeds_baseline)
 end
 
 """
@@ -1264,7 +1268,7 @@ function handle_calibrate(req::HTTP.Request, app::AppState, index::String)
     haskey(app.handles, index) || return json_response(404, Dict("error" => "dataset_not_found"))
     engine = app.handles[index].engine
 
-    engine.backend.index isa SearchGraph || return json_response(400, Dict(
+    engine.backend.index isa SimilaritySearch.SearchGraph || return json_response(400, Dict(
         "error" => "calibrate requires a searchgraph (approximate dense) index"
     ))
     length(engine.backend.index) == 0 && return json_response(400, Dict("error" => "index has no data to calibrate against"))
@@ -2010,7 +2014,7 @@ function parse_index_kind(kind::AbstractString)
     kind == "parallel_exhaustive_search" && return (SSE.DenseEngine, SimilaritySearch.ParallelExhaustiveSearch)
     kind == "bm25_invfile" && return (SSE.FullTextEngine, TextSearch.BM25InvertedFile)
     kind == "invfile" && return (SSE.FullTextEngine, TextSearch.TextInvertedFile)
-    kind == "sparse_invfile" && return (SSE.SparseEngine, TextSearch.InvertedFile)
+    kind == "sparse_invfile" && return (SSE.SparseEngine, SimilaritySearch.InvertedFiles.InvertedFile)
     throw(SSE.UnknownBackend("unknown index kind $(repr(kind)); expected searchgraph, " *
         "exhaustive_search, parallel_exhaustive_search, bm25_invfile, invfile or sparse_invfile"))
 end

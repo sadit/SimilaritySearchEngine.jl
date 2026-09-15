@@ -554,8 +554,8 @@ only when a dataset has no `descriptor.json` to read the *original* creation-tim
 back from (CLI-built datasets never write one, see the two-layout watch-out elsewhere in
 this file).
 """
-_dense_index_kind_name(::SearchGraph) = "searchgraph"
-_dense_index_kind_name(::ExhaustiveSearch) = "exhaustive_search"
+_dense_index_kind_name(::SimilaritySearch.SearchGraph) = "searchgraph"
+_dense_index_kind_name(::SimilaritySearch.ExhaustiveSearch) = "exhaustive_search"
 _dense_index_kind_name(::SimilaritySearch.ParallelExhaustiveSearch) = "parallel_exhaustive_search"
 
 """

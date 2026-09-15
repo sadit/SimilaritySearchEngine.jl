@@ -3,7 +3,7 @@ module Telemetry
 using RocksDB
 using JSON3
 using Dates
-using SimilaritySearch
+import SimilaritySearch   # only `SimilaritySearch.distance_evaluations`, qualified below
 using ..Project
 
 export log_operation, snapshot_costs, log_request!, identity_fields

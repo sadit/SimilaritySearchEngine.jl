@@ -4,8 +4,8 @@ using ArgParse
 using TOML
 using HTTP
 using JSON3
-using SimilaritySearch
-using TextSearch
+import SimilaritySearch
+import TextSearch
 using RocksDB
 using SimilaritySearchEngine
 # The engine's public surface, qualified: `search`/`index!`/`append_items!` are exported by
