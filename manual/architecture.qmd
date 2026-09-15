@@ -250,6 +250,22 @@ flowchart LR
 
 The pool grows to the number of queries that have run concurrently, and it keeps the allocated buffers, so that later queries do not allocate them again.
 
+A context is also what decides how far an operation spreads over threads:
+`SimilaritySearch.getminbatch` divides the work of a `@BATCHES` loop into
+`8 * Threads.nthreads()` batches by default, capped by `ctx.maxbatches`, and a
+`SearchGraphContext` preallocates one visited-set buffer per batch slot. The two uses of a
+context therefore want opposite sizes. An operation over many elements -- insertion,
+`allknn`, `searchbatch` -- wants every slot; a single query is one element and uses one.
+
+The contexts in the pool are built with one slot. Measured on 64 threads, that is 0.25 MB
+against the 128.2 MB of a default context, and the same query answers with the same
+identifiers either way; multiplied by the number of concurrent searches, it is the difference
+between gigabytes of scratch that never shrink and a few megabytes. The context the batch
+operations run on, `backend.ctx`, keeps the full count, and `create_project` and
+`open_project` accept `maxbatches` to cap it: with fewer batches than threads, the threads
+that are left stay available for queries. That cap belongs to the process rather than to the
+project, so it is passed when the project is opened and not stored in it.
+
 ### Measuring the Cost of a Query
 
 The use of a pool has a consequence for measurement. `SimilaritySearch.jl` counts the work performed by an operation in the context itself (`ctx.costdists`). These counters accumulate and are never reset, so the cost of one operation is the difference between two readings taken before and after it.

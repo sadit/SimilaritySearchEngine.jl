@@ -1,6 +1,6 @@
 using Test
 using SimilaritySearchEngine
-using SimilaritySearchEngine: Schema
+using SimilaritySearchEngine: Schema, IndexEngine
 using SimilaritySearch: SearchGraph, Dist, MatrixDatabase
 using TextSearch: BM25InvertedFile, InvertedFile, TextInvertedFile, NormalizationConfig,
                   AppliedArtifacts, vocsize, gettrainsize, gettextconfig,
@@ -1086,6 +1086,41 @@ const ACCENT_ITEMS = vcat(
             @test [f.name for f in meta_schema(h2).fields] == ["year", "lang", "score"]
             @test only(fetch_items(h2, ["a"])).meta["year"] === Int64(2024)
             close_project!(h2)
+        end
+    end
+
+    @testset "a search borrows a context sized for one query, not for a batch" begin
+        mktempworkdir() do workdir
+            h = create_project(workdir, "ctx_ds"; engine=DenseEngine, backend=SearchGraph)
+            append_items!(h, [DenseItem(Float32[i, i % 5, 1, 0]; doc_id="c$i") for i in 1:64])
+            index!(h)
+
+            # The context a search borrows carries one batch slot: a single query is one
+            # element and uses one. The context the batch operations run on keeps the
+            # library's default, which is what `@BATCHES` divides work over.
+            pooled = IndexEngine.checkout!(h.engine.search_ctx_pool)
+            @test pooled.maxbatches == IndexEngine.SEARCH_CONTEXT_MAXBATCHES == 1
+            @test h.engine.backend.ctx.maxbatches > 1
+            # A `SearchGraphContext` preallocates a visited-set buffer per slot, so the
+            # difference is the memory a concurrent search holds
+            @test Base.summarysize(pooled) < Base.summarysize(h.engine.backend.ctx)
+            IndexEngine.checkin!(h.engine.search_ctx_pool, pooled)
+
+            # ... and the answers are the same ones
+            @test length(search(h, Float32[1, 1, 1, 0], 5)) == 5
+            close_project!(h)
+
+            # The cap on batch work is a property of the process, not of the project: it is
+            # passed when the project is opened, not stored in it.
+            h2 = open_project(workdir, "ctx_ds"; maxbatches=4)
+            @test h2.engine.backend.ctx.maxbatches == 4
+            @test IndexEngine.checkout!(h2.engine.search_ctx_pool).maxbatches == 1
+            @test length(search(h2, Float32[1, 1, 1, 0], 5)) == 5
+            close_project!(h2)
+
+            h3 = open_project(workdir, "ctx_ds")
+            @test h3.engine.backend.ctx.maxbatches > 4      # no cap given, library default
+            close_project!(h3)
         end
     end
 

@@ -114,7 +114,8 @@ function run_serve(host::String, port::Int, workdir::String;
         Dict{String, SimilaritySearchEngine.EmbeddedEngine}(),
         ReentrantLock(),
         auth_enabled,
-        Server.query_slot_count(Threads.nthreads(), batch_threads_pct, max_concurrent_queries)
+        Server.query_slot_count(Threads.nthreads(), batch_threads_pct, max_concurrent_queries),
+        Server.inprocess_batch_cap(Threads.nthreads(), batch_threads_pct)
     )
 
     # Reopen every dataset already on disk (from a previous run of this same server)
@@ -134,6 +135,8 @@ function run_serve(host::String, port::Int, workdir::String;
     # job would run on one thread whatever the machine has.
     slots = Server.query_slot_count(Threads.nthreads(), batch_threads_pct, max_concurrent_queries)
     println("Queries: at most $slots at once; a request that finds every slot taken waits for one.")
+    println("In-process batch work (indexing, calibration): at most $(Server.inprocess_batch_cap(Threads.nthreads(), batch_threads_pct)) batches at a time, ",
+            "so that it does not spread over the threads answering queries.")
     max_concurrent, threads_per_job = Executors.job_thread_budget(Threads.nthreads(), batch_threads_pct)
     println("Job execution: at most $max_concurrent concurrent job(s), $threads_per_job thread(s) each ",
             "($(batch_threads_pct)% of this server's $(Threads.nthreads()) thread(s)). Queries use the rest.")

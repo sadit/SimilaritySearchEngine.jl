@@ -536,6 +536,8 @@ window.Quarto = {
 </div>
 </div>
 <p>The pool grows to the number of queries that have run concurrently, and it keeps the allocated buffers, so that later queries do not allocate them again.</p>
+<p>A context is also what decides how far an operation spreads over threads: <code>SimilaritySearch.getminbatch</code> divides the work of a <code>@BATCHES</code> loop into <code>8 * Threads.nthreads()</code> batches by default, capped by <code>ctx.maxbatches</code>, and a <code>SearchGraphContext</code> preallocates one visited-set buffer per batch slot. The two uses of a context therefore want opposite sizes. An operation over many elements – insertion, <code>allknn</code>, <code>searchbatch</code> – wants every slot; a single query is one element and uses one.</p>
+<p>The contexts in the pool are built with one slot. Measured on 64 threads, that is 0.25 MB against the 128.2 MB of a default context, and the same query answers with the same identifiers either way; multiplied by the number of concurrent searches, it is the difference between gigabytes of scratch that never shrink and a few megabytes. The context the batch operations run on, <code>backend.ctx</code>, keeps the full count, and <code>create_project</code> and <code>open_project</code> accept <code>maxbatches</code> to cap it: with fewer batches than threads, the threads that are left stay available for queries. That cap belongs to the process rather than to the project, so it is passed when the project is opened and not stored in it.</p>
 </section>
 <section id="measuring-the-cost-of-a-query" class="level3">
 <h3 class="anchored" data-anchor-id="measuring-the-cost-of-a-query">Measuring the Cost of a Query</h3>

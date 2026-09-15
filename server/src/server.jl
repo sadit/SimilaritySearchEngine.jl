@@ -160,13 +160,18 @@ struct AppState
     query_slots::Base.Semaphore
     queries_running::Threads.Atomic{Int}
     queries_waiting::Threads.Atomic{Int}
+
+    # How far an operation that runs in this process may spread over threads, as a cap on the
+    # batch count of the engine's contexts. See `inprocess_batch_cap`.
+    batch_cap::Int
 end
 
 AppState(workdir, job_mgr, cursor_mgr, executor, token_mgr, handles, lock, auth_enabled::Bool,
-         query_slots::Int=query_slot_count(Threads.nthreads(), 20, 0)) =
+         query_slots::Int=query_slot_count(Threads.nthreads(), 20, 0),
+         batch_cap::Int=inprocess_batch_cap(Threads.nthreads(), 20)) =
     AppState(workdir, job_mgr, cursor_mgr, executor, token_mgr, handles, lock, Ref(auth_enabled),
              Telemetry.MetricsRegistry(), Base.Semaphore(query_slots),
-             Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
+             Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), batch_cap)
 
 # The seven-argument form is the one every existing caller uses, and it leaves authentication
 # off, which is the default of `[auth] enabled`.
@@ -193,6 +198,27 @@ function query_slot_count(total_threads::Int, batch_pct::Real, configured::Int)
     reserved = floor(Int, max(total_threads, 1) * clamp(batch_pct, 0, 100) / 100)
     return max(1, max(total_threads, 1) - reserved)
 end
+
+"""
+    inprocess_batch_cap(total_threads, batch_pct) -> Int
+
+How far an operation that runs inside this process may spread over threads.
+
+Indexing, calibration and the other batch operations of the engine divide their work with
+`SimilaritySearch.@BATCHES`, which dispatches one task per batch and takes the batch count
+from `getminbatch`: `8 * Threads.nthreads()` by default, capped by the context's
+`maxbatches`. In a job that number is already right, because a job is a subprocess started
+with `JULIA_NUM_THREADS` set to its share. In this process it is not: an append that triggers
+`index!` would spread over every thread of the machine and compete with the searches
+`_with_query_slot` is bounding.
+
+Capping the batch count at the reserved share is what the library's own documentation
+describes as trading parallelism for memory, and here for latency: with fewer batches than
+threads, the remaining threads stay available to answer queries. The cost is that in-process
+indexing is slower, which is the trade §2 wanted made explicit.
+"""
+inprocess_batch_cap(total_threads::Int, batch_pct::Real) =
+    max(1, floor(Int, max(total_threads, 1) * clamp(batch_pct, 0, 100) / 100))
 
 """
     _with_query_slot(f, app::AppState)
@@ -502,7 +528,7 @@ function handle_create_dataset(req::HTTP.Request, app::AppState)
         lock(app.lock) do
             haskey(app.handles, id) && return
             app.handles[id] = SSE.create_project(datasets_root(app), id;
-                engine=engine_type, backend=backend_type,
+                engine=engine_type, backend=backend_type, maxbatches=app.batch_cap,
                 distance=parse_distance(distance),
                 dimension=dimension === nothing ? nothing : Int(dimension),
                 textmodel=default_textmodel(engine_type), meta_schema=declared)
@@ -544,7 +570,7 @@ function _reload_one_dataset!(app::AppState, id::String)
     # and all. This used to rebuild an *empty* engine of the right type and, if a JLD2 snapshot
     # happened to be lying next to it, load that instead: a reopened dataset came back without
     # its contents unless someone had remembered to snapshot it.
-    handle = SSE.open_project(datasets_root(app), id)
+    handle = SSE.open_project(datasets_root(app), id; maxbatches=app.batch_cap)
     lock(app.lock) do
         app.handles[id] = handle
     end

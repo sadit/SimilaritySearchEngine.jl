@@ -1027,8 +1027,39 @@ end
 # given at `create_engine` time (default 0.9) rather than running on the library's own
 # untuned defaults while it grows; `calibrate!` is a separate, explicit re-optimization
 # pass layered on top, not the sole writer of `engine.backend.index.algo[]`.
-_searchgraph_context(minrecall::Nothing, logging) = SearchGraphContext(; hyperparameters_callback=nothing, logging...)
-_searchgraph_context(minrecall::Real, logging) = SearchGraphContext(; hyperparameters_callback=OptimizeParameters(MinRecall(Float32(minrecall))), logging...)
+_searchgraph_context(minrecall::Nothing, logging, maxbatches) =
+    SearchGraphContext(; hyperparameters_callback=nothing, _batch_cap(maxbatches)..., logging...)
+_searchgraph_context(minrecall::Real, logging, maxbatches) =
+    SearchGraphContext(; hyperparameters_callback=OptimizeParameters(MinRecall(Float32(minrecall))),
+                         _batch_cap(maxbatches)..., logging...)
+
+"""
+    SEARCH_CONTEXT_MAXBATCHES
+
+How many batch slots a context borrowed for one search carries: one.
+
+A context is two things at once, the scratch space of an operation and the cap on how far
+that operation spreads over threads (`SimilaritySearch.getminbatch` reads `ctx.maxbatches`).
+The library's default, `8 * Threads.nthreads()`, is right for an operation that processes
+many elements with `@BATCHES` -- insertion, `allknn`, `searchbatch`. A single query is one
+element and uses one slot.
+
+The difference is not small for a `SearchGraph`, whose context preallocates one visited-set
+buffer per slot: measured on 64 threads, 128.2 MB with the default against 0.25 MB with one
+slot, and the same query answers with the same identifiers either way. Multiplied by the
+number of concurrent searches a server admits, that is the difference between gigabytes of
+scratch that never shrink and a few megabytes (see [`ContextPool`](@ref)).
+"""
+const SEARCH_CONTEXT_MAXBATCHES = 1
+
+"The `maxbatches` keyword of a context, or nothing to keep the library's default."
+_batch_cap(maxbatches::Nothing) = NamedTuple()
+_batch_cap(maxbatches::Integer) = (maxbatches=max(1, Int(maxbatches)),)
+
+"The context a search borrows from the pool: one batch slot, and the caller's logging."
+_search_context(::Type{SearchGraphContext}) = SearchGraphContext(maxbatches=SEARCH_CONTEXT_MAXBATCHES)
+_search_context(::Type{GenericContext}) = GenericContext(maxbatches=SEARCH_CONTEXT_MAXBATCHES)
+_search_context(::Type{InvertedFileContext}) = InvertedFileContext(maxbatches=SEARCH_CONTEXT_MAXBATCHES)
 
 """
     BACKENDS
@@ -1140,30 +1171,31 @@ every `:add!` event a `push_item!`/`append_items!` call reports -- e.g. to persi
 handle or `stdout`/`stderr` both work; purely informative, and being a reporter rather than an
 observer it changes nothing about what gets persisted.
 """
-function create_engine(::Type{SearchGraph}; distance, minrecall::Union{Nothing,Real}, textmodel, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function})
+function create_engine(::Type{SearchGraph}; distance, minrecall::Union{Nothing,Real}, textmodel, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function}, maxbatches::Union{Nothing,Integer})
     _reject_textmodel(SearchGraph, textmodel)
     mr = minrecall === nothing ? nothing : Float32(minrecall)
     backend = GraphBackend(SearchGraph(distance, VectorDatabase()),
-                           _searchgraph_context(mr, _engine_logging(on_change, log_io)),
+                           _searchgraph_context(mr, _engine_logging(on_change, log_io), maxbatches),
                            mr, OptBeamSearch())
-    DenseEngine(backend, ContextPool(SearchGraphContext()), Set{UInt32}(), ReadWriteLock())
+    DenseEngine(backend, ContextPool(_search_context(SearchGraphContext)), Set{UInt32}(), ReadWriteLock())
 end
 
 # `minrecall` is accepted and ignored on the exact backends: they have no beam to tune, and
 # taking the same keyword set for every index kind is what lets `create_project` pass one bundle
 # down without knowing which backend it is talking to.
 function _create_exact_engine(IndexType::Type, distance, textmodel,
-                              on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
+                              on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO},
+                              maxbatches::Union{Nothing,Integer})
     _reject_textmodel(IndexType, textmodel)
     backend = ExactBackend(IndexType(distance, VectorDatabase()),
-                           GenericContext(; _engine_logging(on_change, log_io)...))
-    DenseEngine(backend, ContextPool(GenericContext()), Set{UInt32}(), ReadWriteLock())
+                           GenericContext(; _batch_cap(maxbatches)..., _engine_logging(on_change, log_io)...))
+    DenseEngine(backend, ContextPool(_search_context(GenericContext)), Set{UInt32}(), ReadWriteLock())
 end
 
-create_engine(::Type{ExhaustiveSearch}; distance, minrecall, textmodel, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function}) =
-    _create_exact_engine(ExhaustiveSearch, distance, textmodel, on_change, log_io)
-create_engine(::Type{ParallelExhaustiveSearch}; distance, minrecall, textmodel, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function}) =
-    _create_exact_engine(ParallelExhaustiveSearch, distance, textmodel, on_change, log_io)
+create_engine(::Type{ExhaustiveSearch}; distance, minrecall, textmodel, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function}, maxbatches::Union{Nothing,Integer}) =
+    _create_exact_engine(ExhaustiveSearch, distance, textmodel, on_change, log_io, maxbatches)
+create_engine(::Type{ParallelExhaustiveSearch}; distance, minrecall, textmodel, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function}, maxbatches::Union{Nothing,Integer}) =
+    _create_exact_engine(ParallelExhaustiveSearch, distance, textmodel, on_change, log_io, maxbatches)
 
 """
     create_engine(::Type{BM25InvertedFile}; textmodel, distance, minrecall, on_change, log_io) -> FullTextEngine
@@ -1200,24 +1232,24 @@ be.
 # reaching for "a weighted inverted file" writes.
 function _create_text_engine(selector::Type, distance, textmodel,
                              on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO},
-                             adj_factory::Union{Nothing,Function})
+                             adj_factory::Union{Nothing,Function}, maxbatches::Union{Nothing,Integer})
     spec = _require_textmodel(selector, textmodel)
     kind = selector === BM25InvertedFile ? BM25InvertedFile : TextInvertedFile
     dist = kind === BM25InvertedFile ? nothing : distance
     profile = _initial_profile(spec)
     index = profile === nothing ? nothing : _text_index(profile, kind, dist, adj_factory)
-    backend = TextBackend(index, InvertedFileContext(; _engine_logging(on_change, log_io)...),
+    backend = TextBackend(index, InvertedFileContext(; _batch_cap(maxbatches)..., _engine_logging(on_change, log_io)...),
                           kind, dist, adj_factory)
     FullTextEngine(backend, profile, _deferred_fit(spec), String[],
-                   ContextPool(InvertedFileContext()), Set{UInt32}(), ReadWriteLock())
+                   ContextPool(_search_context(InvertedFileContext)), Set{UInt32}(), ReadWriteLock())
 end
 
-create_engine(::Type{BM25InvertedFile}; distance, minrecall, textmodel::Union{Nothing,AbstractTextModelSpec}, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function}) =
-    _create_text_engine(BM25InvertedFile, distance, textmodel, on_change, log_io, adj_factory)
-create_engine(::Type{InvertedFile}; distance, minrecall, textmodel::Union{Nothing,AbstractTextModelSpec}, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function}) =
-    _create_text_engine(InvertedFile, distance, textmodel, on_change, log_io, adj_factory)
-create_engine(::Type{TextInvertedFile}; distance, minrecall, textmodel::Union{Nothing,AbstractTextModelSpec}, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function}) =
-    _create_text_engine(TextInvertedFile, distance, textmodel, on_change, log_io, adj_factory)
+create_engine(::Type{BM25InvertedFile}; distance, minrecall, textmodel::Union{Nothing,AbstractTextModelSpec}, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function}, maxbatches::Union{Nothing,Integer}) =
+    _create_text_engine(BM25InvertedFile, distance, textmodel, on_change, log_io, adj_factory, maxbatches)
+create_engine(::Type{InvertedFile}; distance, minrecall, textmodel::Union{Nothing,AbstractTextModelSpec}, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function}, maxbatches::Union{Nothing,Integer}) =
+    _create_text_engine(InvertedFile, distance, textmodel, on_change, log_io, adj_factory, maxbatches)
+create_engine(::Type{TextInvertedFile}; distance, minrecall, textmodel::Union{Nothing,AbstractTextModelSpec}, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function}, maxbatches::Union{Nothing,Integer}) =
+    _create_text_engine(TextInvertedFile, distance, textmodel, on_change, log_io, adj_factory, maxbatches)
 
 """
     create_engine(::Type{InvertedFile}; distance, dimension, on_change, log_io) -> SparseEngine
@@ -1236,11 +1268,12 @@ through `create_sparse_engine` rather than by dispatching on `InvertedFile`: the
 index serves two different kinds of project, and the kind is the caller's to name.
 """
 function create_sparse_engine(; distance, dimension::Integer,
-                              on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
+                              on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO},
+                              maxbatches::Union{Nothing,Integer})
     dimension >= 1 || throw(ArgumentError("dimension must be at least 1; got $dimension"))
-    ctx = InvertedFileContext(; _engine_logging(on_change, log_io)...)
+    ctx = InvertedFileContext(; _batch_cap(maxbatches)..., _engine_logging(on_change, log_io)...)
     backend = SparseBackend(InvertedFile(Int(dimension), distance), ctx, distance, Int(dimension))
-    SparseEngine(backend, ContextPool(InvertedFileContext()), Set{UInt32}(), ReadWriteLock())
+    SparseEngine(backend, ContextPool(_search_context(InvertedFileContext)), Set{UInt32}(), ReadWriteLock())
 end
 
 """
@@ -1358,34 +1391,35 @@ own `build_*` function needs instead:
 - `SparseEngine`: `distance`, `dimension`, and `object_blocks` -- the same encoded posting-list
   blocks a text project replays, minus the profile there is no vocabulary for.
 """
-restore_engine(state; on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}) = restore_engine(Val(state.kind), state; on_change, log_io)
+restore_engine(state; on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, maxbatches::Union{Nothing,Integer}) =
+    restore_engine(Val(state.kind), state; on_change, log_io, maxbatches)
 
 # Dispatch is on `Val(state.kind)` because `kind` is a symbol now rather than a Julia type (see
 # [`backend_tag`](@ref)): the same dispatch, without the on-disk format naming the types in this
 # file. An unrecognised kind lands on the fallback below, with a message naming the ones that
 # exist -- which is what a project written by another version deserves instead of a `MethodError`
 # about `Val{:whatever}`.
-function restore_engine(::Val{:dense}, state; on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
+function restore_engine(::Val{:dense}, state; on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, maxbatches::Union{Nothing,Integer})
     if state.backend === :graph
         index = build_searchgraph(state.distance, state.vector_blocks, state.load_neighbors, state.graph_len)
-        backend = GraphBackend(index, _searchgraph_context(state.minrecall, _engine_logging(on_change, log_io)),
+        backend = GraphBackend(index, _searchgraph_context(state.minrecall, _engine_logging(on_change, log_io), maxbatches),
                                state.minrecall, state.opt_beamsearch)
-        return DenseEngine(backend, ContextPool(SearchGraphContext()), state.deleted_ids, ReadWriteLock())
+        return DenseEngine(backend, ContextPool(_search_context(SearchGraphContext)), state.deleted_ids, ReadWriteLock())
     end
     state.backend in (:exhaustive, :parallel_exhaustive) ||
         corrupted_storage("unknown dense backend $(repr(state.backend)); expected :graph, :exhaustive or :parallel_exhaustive")
-    backend = ExactBackend(state.index, GenericContext(; _engine_logging(on_change, log_io)...))
-    DenseEngine(backend, ContextPool(GenericContext()), state.deleted_ids, ReadWriteLock())
+    backend = ExactBackend(state.index, GenericContext(; _batch_cap(maxbatches)..., _engine_logging(on_change, log_io)...))
+    DenseEngine(backend, ContextPool(_search_context(GenericContext)), state.deleted_ids, ReadWriteLock())
 end
 
-function restore_engine(::Val{:sparse}, state; on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
-    ctx = InvertedFileContext(; _engine_logging(on_change, log_io)...)
+function restore_engine(::Val{:sparse}, state; on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, maxbatches::Union{Nothing,Integer})
+    ctx = InvertedFileContext(; _batch_cap(maxbatches)..., _engine_logging(on_change, log_io)...)
     index = build_sparseinvertedfile(state.distance, state.dimension, state.object_blocks)
     backend = SparseBackend(index, ctx, state.distance, state.dimension)
-    SparseEngine(backend, ContextPool(InvertedFileContext()), state.deleted_ids, ReadWriteLock())
+    SparseEngine(backend, ContextPool(_search_context(InvertedFileContext)), state.deleted_ids, ReadWriteLock())
 end
 
-function restore_engine(::Val{:text}, state; on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO})
+function restore_engine(::Val{:text}, state; on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, maxbatches::Union{Nothing,Integer})
     profile = state.profile
     kind = state.backend === :bm25 ? BM25InvertedFile :
            state.backend === :text_inverted_file ? TextInvertedFile :
@@ -1395,13 +1429,13 @@ function restore_engine(::Val{:text}, state; on_change::Union{Nothing,Function},
     # yet, in which case `index!` is what builds one from the staged text. Nothing is ever
     # recomputed here.
     index = state.prebuilt_index
-    backend = TextBackend(index, InvertedFileContext(; _engine_logging(on_change, log_io)...),
+    backend = TextBackend(index, InvertedFileContext(; _batch_cap(maxbatches)..., _engine_logging(on_change, log_io)...),
                           kind, state.distance, state.adj_factory)
     FullTextEngine(backend, profile, state.fitspec, state.staged,
-                   ContextPool(InvertedFileContext()), state.deleted_ids, ReadWriteLock())
+                   ContextPool(_search_context(InvertedFileContext)), state.deleted_ids, ReadWriteLock())
 end
 
-restore_engine(::Val{K}, state; on_change, log_io) where {K} =
+restore_engine(::Val{K}, state; on_change, log_io, maxbatches) where {K} =
     corrupted_storage("unknown project kind $(repr(K)); this version restores :dense, :sparse and :text. A " *
           "project written before the engine kinds were restructured records a Julia type there " *
           "instead of a symbol, and cannot be read by this version.")

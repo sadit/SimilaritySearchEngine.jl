@@ -434,6 +434,7 @@ function create_project(workdir::String, dataset::String;
                         dimension::Union{Nothing,Integer}=nothing,
                         textmodel::Union{Nothing,IndexEngine.AbstractTextModelSpec}=nothing,
                         index_type=nothing, schema_version::Int=1, meta_schema=nothing,
+                        maxbatches::Union{Nothing,Integer}=nothing,
                         postings_cache_max::Int=4096, postings_cache_base::Int=2048)
     index_type === nothing || invalid_option(:index_type, """
         `index_type` is gone: a project now names the kind of data it holds and, separately, the
@@ -499,8 +500,8 @@ function create_project(workdir::String, dataset::String;
     # value -- the whole of the no-defaults-below-the-surface policy in one statement.
     dist = distance === nothing ? IndexEngine.default_distance(back) : distance
     eng = kind === :sparse ?
-        IndexEngine.create_sparse_engine(; distance=dist, dimension, on_change, log_io=nothing) :
-        IndexEngine.create_engine(back; distance=dist, minrecall, textmodel, on_change, log_io=nothing, adj_factory)
+        IndexEngine.create_sparse_engine(; distance=dist, dimension, on_change, log_io=nothing, maxbatches) :
+        IndexEngine.create_engine(back; distance=dist, minrecall, textmodel, on_change, log_io=nothing, adj_factory, maxbatches)
     Persistence.save_fields!(store, IndexEngine.snapshot_state(eng))
     schema = _as_meta_schema(meta_schema)
     isempty(schema) || Persistence.save_field!(store, :meta_schema, schema)
@@ -527,6 +528,7 @@ another script) still has open for writing (mirrors `Project.open_project`'s own
 raises RocksDB's own real lock error, not a friendly one this function invents.
 """
 function open_project(workdir::String, dataset::String; read_only::Bool=false, schema_version::Int=1,
+                      maxbatches::Union{Nothing,Integer}=nothing,
                       postings_cache_max::Int=4096, postings_cache_base::Int=2048)
     dir = joinpath(workdir, dataset)
     project = Project.open_project(dir, dataset; read_only, extra_cf_names=[Persistence.ENGINE_CF, Persistence.ADJACENCY_CF, Persistence.INVFILE_DB_CF,
@@ -547,7 +549,7 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
         on_change = _searchgraph_on_change(store, Persistence.open_adjacency_store(project.db))
         engine = IndexEngine.create_engine(SearchGraph;
             distance=IndexEngine.default_distance(SearchGraph), minrecall=0.9,
-            textmodel=nothing, on_change, log_io=nothing)
+            textmodel=nothing, on_change, log_io=nothing, maxbatches)
         Persistence.save_fields!(store, IndexEngine.snapshot_state(engine))
         engine
     elseif kind === :dense && backend === :graph
@@ -563,7 +565,7 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
             opt_beamsearch=Persistence.load_field(store, :opt_beamsearch, nothing),
             deleted_ids=Persistence.load_field(store, :deleted_ids, nothing),
         )
-        IndexEngine.restore_engine(state; on_change=_searchgraph_on_change(store, adj_store), log_io=nothing)
+        IndexEngine.restore_engine(state; on_change=_searchgraph_on_change(store, adj_store), log_io=nothing, maxbatches)
     elseif kind === :dense
         # The exact backends are the one kind whose whole index is a single saved value, so they
         # are also the one kind that still needs `pending_flush` (see `_maybe_flush_index!`).
@@ -573,7 +575,7 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
             index=Persistence.load_field(store, :index, nothing),
             deleted_ids=Persistence.load_field(store, :deleted_ids, nothing),
         )
-        IndexEngine.restore_engine(state; on_change, log_io=nothing)
+        IndexEngine.restore_engine(state; on_change, log_io=nothing, maxbatches)
     elseif kind === :sparse
         obj_store = Persistence.open_invertedfile_object_store(project.db)
         state = (
@@ -583,7 +585,7 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
             object_blocks=Persistence.load_object_blocks(obj_store),
             deleted_ids=Persistence.load_field(store, :deleted_ids, nothing),
         )
-        IndexEngine.restore_engine(state; on_change=_invertedfile_on_change(obj_store), log_io=nothing)
+        IndexEngine.restore_engine(state; on_change=_invertedfile_on_change(obj_store), log_io=nothing, maxbatches)
     elseif kind === :text
         # One branch for both text backends: which inverted file to rebuild is `state.backend`'s
         # to say, and `restore_engine` says it. That is the same collapse `FullTextEngine` is.
@@ -612,7 +614,7 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
             staged=vcat(String[], Persistence.load_staged_text_blocks(staged_store)...),
             deleted_ids=Persistence.load_field(store, :deleted_ids, nothing),
         )
-        IndexEngine.restore_engine(state; on_change=nothing, log_io=nothing)
+        IndexEngine.restore_engine(state; on_change=nothing, log_io=nothing, maxbatches)
     else
         corrupted_storage("""
             this project records kind $(repr(kind)), which this version does not know how to \

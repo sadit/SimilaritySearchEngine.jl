@@ -9,7 +9,7 @@ using SimilaritySearchServer.Server: parse_index_kind, parse_distance, default_t
                                      engine_error_response, _typed_item, AppState, _guard,
                                      json_response, parse_meta_schema, serialize_meta_schema,
                                      _filter_predicate, query_slot_count, _with_query_slot,
-                                     token_fingerprint
+                                     token_fingerprint, inprocess_batch_cap
 using SimilaritySearchServer: cli_exit_code, wire_kind
 import SimilaritySearchServer.Tokens as Tokens
 import SimilaritySearchServer.Executors as Executors
@@ -371,6 +371,19 @@ end
     # A configured value is used as given, whatever the split says
     @test query_slot_count(64, 20, 4) == 4
     @test query_slot_count(2, 20, 100) == 100
+end
+
+@testset "in-process batch work is capped at the reserved share" begin
+    # `@BATCHES` dispatches one task per batch, so a cap below the thread count leaves the
+    # remaining threads for queries. In a job this is not needed: that subprocess starts with
+    # JULIA_NUM_THREADS already set to its share.
+    @test inprocess_batch_cap(64, 20) == 12
+    @test inprocess_batch_cap(8, 25) == 2
+    @test inprocess_batch_cap(64, 100) == 64
+    # A share that rounds to nothing still indexes, one batch at a time
+    @test inprocess_batch_cap(2, 20) == 1
+    @test inprocess_batch_cap(64, 0) == 1
+    @test inprocess_batch_cap(0, 20) == 1
 end
 
 @testset "a search waits for a slot instead of joining an unbounded crowd" begin

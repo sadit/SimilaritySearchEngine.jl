@@ -398,7 +398,14 @@ the bound is ever reached.
 The bound exists because unbounded concurrency buys no throughput and does cost memory. Past
 the number of threads, more concurrent searches share the same cores and each one gets
 slower; and every concurrent search holds a context from the engine's pool, which grows to
-the highest concurrency ever reached and does not shrink. PLAN.md §2 proposed a request
+the highest concurrency ever reached and does not shrink.
+
+The same split governs the work that runs inside this process rather than in a job. Indexing
+and calibration divide their work into batches, one task each, and the engine takes the batch
+count from the number of threads; this server caps it at the share reserved for batch work,
+so that an append that triggers `index!` does not spread over the threads answering queries.
+A job needs no such cap: it is a subprocess started with its share in `JULIA_NUM_THREADS`.
+`serve` prints both numbers when it starts. PLAN.md §2 proposed a request
 collector for this: a channel and a pool of worker tasks that every search would pass
 through. This is the bound without that structure, and the measurements a collector would be
 justified by are the ones above.
