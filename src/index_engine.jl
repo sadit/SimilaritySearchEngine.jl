@@ -1060,10 +1060,10 @@ const SEARCH_CONTEXT_MAXBATCHES = 1
 
 Which `Threads.@threads` schedule every context built here hands to `@BATCHES`.
 
-`SimilaritySearch.get_batch_scheduler()` defaults to `:static`, and `:static` is not usable
-by a process that holds more than one project. Julia refuses to enter a `@threads :static`
-region while another one is already running *anywhere in the process* -- the flag it tests
-is global, so the refusal does not depend on the two regions sharing any data:
+`:dynamic` is the only schedule a process holding more than one project can use. Julia refuses
+to enter a `@threads :static` region while another one is already running *anywhere in the
+process* -- the flag it tests is global, so the refusal does not depend on the two regions
+sharing any data:
 
     index!(a) => `@threads :static` cannot be used concurrently or nested
     index!(b) => ok
@@ -1071,20 +1071,22 @@ is global, so the refusal does not depend on the two regions sharing any data:
 That is two different projects, each with its own [`ReadWriteLock`](@ref). [`write_lock`](@ref)
 excludes callers of the *same* engine and nothing else, so nothing was ever excluding these
 two, and both `index!` and `calibrate!` run in-process inside a server's request handler.
-Reproduced on 8 threads with `:static`; both calls answer under `:default`.
 
-The value should read `:dynamic`, and does not yet. `:default` is not a schedule; it is
-whatever schedule `Threads.@threads` picks with no annotation, which is `:dynamic` today and
-is the one name Julia reserves the right to redefine. What this constant wants to say is the
-schedule itself. SimilaritySearch 1.4.1 accepts only `:default`, `:static`, `:greedy` and
-`:sequential`, so `:dynamic` raises `ArgumentError` here today; the request to accept it is
-sadit/SimilaritySearch.jl#63, and this is a one-token change once that lands.
+SimilaritySearch 1.4.2 made `:dynamic` its own global default for that reason
+(sadit/SimilaritySearch.jl#63), so this constant no longer corrects a dangerous default. It is
+still passed on every context: a schedule this package's correctness depends on belongs where
+it takes effect, not in whatever the base library happens to default to on the day someone
+reads this.
+
+Not `:default`, which names *whatever* `Threads.@threads` picks unannotated -- `:dynamic`
+today, and the one name Julia reserves the right to redefine. What is wanted here is the
+schedule, not Julia's future choice of it.
 
 Not `:greedy`, which is the schedule for very uneven per-batch cost. `@BATCHES` has already
 averaged the cost of `minbatch` elements into each batch by the time the schedule is chosen,
 so little imbalance is left to recover and the shared channel is paid for nothing: measured
 on 30k 128-dimensional vectors over 16 threads, three runs each, `allknn` took 0.55 s under
-`:static`, 0.56 s under `:default` and 0.68 s under `:greedy`, and `index!` 5.5 s, 5.24 s and
+`:static`, 0.56 s under `:dynamic` and 0.68 s under `:greedy`, and `index!` 5.5 s, 5.24 s and
 5.6 s.
 
 A search never reaches any of this. [`SEARCH_CONTEXT_MAXBATCHES`](@ref) makes `minbatch` equal
@@ -1096,7 +1098,7 @@ This does not relax [`allknn_live`](@ref)'s `write_lock`. The scheduler was one 
 for full exclusivity there; the other, that the six share `engine.backend.ctx` directly, is
 untouched by any of this.
 """
-const BATCH_SCHEDULER = :default
+const BATCH_SCHEDULER = :dynamic
 
 "The batch policy of a context: the schedule always, and `maxbatches` unless it keeps the library's default."
 _batch_cap(maxbatches::Nothing) = (scheduler=BATCH_SCHEDULER,)

@@ -27,7 +27,7 @@ RocksDB = "1"
 # are stored as -- internals that can change without a breaking release, as the BM25 field order
 # already did once. The guard is `test/runtests.jl`, which builds, persists, reassembles and
 # queries both text backends: a field-order change fails it rather than corrupting an index.
-SimilaritySearch = "1.4"
+SimilaritySearch = "1.4.2"
 SparseArrays = "1"
 TextSearch = "1.1"
 # 1.12, which is what CI verifies and what development happens on. This said 1.10 while

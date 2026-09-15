@@ -277,9 +277,10 @@ const ACCENT_ITEMS = vcat(
     # The testset above drives concurrent traffic through ONE project, where `write_lock`
     # serializes everything. `write_lock` is a field of the engine, so it says nothing about
     # two projects, and a process that holds several -- a server -- has nothing serializing
-    # them. Found live 2026-09-15: under `SimilaritySearch`'s default `:static` schedule this
-    # fails on the first try, because Julia refuses to enter a `@threads :static` region while
-    # another is running anywhere in the process, whatever data each one touches:
+    # them. Found live 2026-09-15, when `:static` was still `SimilaritySearch`'s default
+    # schedule: this fails on the first try under it, because Julia refuses to enter a
+    # `@threads :static` region while another is running anywhere in the process, whatever
+    # data each one touches:
     #
     #     index!(a) => `@threads :static` cannot be used concurrently or nested
     #     index!(b) => ok
