@@ -1,4 +1,5 @@
 using Documenter, SimilaritySearchEngine, SimilaritySearchServer
+using Documenter: Remotes
 using SimilaritySearchEngine: Errors, Schema, Project, IndexEngine, Persistence
 
 # One site for one repository, assembled by publish-docs.sh:
@@ -17,7 +18,11 @@ makedocs(;
              SimilaritySearchServer.Executors, SimilaritySearchServer.Tokens,
              SimilaritySearchServer.Telemetry, SimilaritySearchServer.Cursors],
     authors="Eric S. Tellez",
-    repo="https://github.com/sadit/SimilaritySearchEngine.jl/blob/{commit}{path}#L{line}",
+    # A `Remotes.Remote`, not the equivalent URL template. Both produce the same "Edit on
+    # GitHub" links per docstring, but a bare string tells Documenter nothing about where the
+    # repository itself lives, so it cannot build the navbar's own repository link and says so
+    # on every build. The object states host, owner and name once, and both uses follow.
+    repo=Remotes.GitHub("sadit", "SimilaritySearchEngine.jl"),
     sitename="SimilaritySearchEngine.jl",
     format=Documenter.HTML(;
         prettyurls=get(ENV, "CI", nothing) == "true",
