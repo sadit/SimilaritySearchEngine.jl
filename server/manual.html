@@ -1,0 +1,1048 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en-US" xml:lang="en-US"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.9.38">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>Server Manual – SimilaritySearchEngine.jl</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="../">
+<script src="../site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="../site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="../site_libs/quarto-html/popper.min.js"></script>
+<script src="../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-15634bcf2e68342d4ad2dfa704d543f6.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../site_libs/bootstrap/bootstrap-3e7735b7b22659e5fa437aca0bb49075.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+
+
+<link rel="stylesheet" href="../styles.css">
+</head>
+
+<body class="nav-fixed quarto-light">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a class="navbar-brand" href="../index.html">
+    <span class="navbar-title">SimilaritySearchEngine.jl</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="Search"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" role="menu" aria-expanded="false" aria-label="Toggle navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../index.html"> 
+<span class="menu-text">Home</span></a>
+  </li>  
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-engine" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">Engine</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-engine">    
+        <li>
+    <a class="dropdown-item" href="../architecture.html">
+ <span class="dropdown-text">Architecture</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="../tutorials/index.html">
+ <span class="dropdown-text">Tutorials</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="../tutorials/getting-started.html">
+ <span class="dropdown-text">Getting started</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="../tutorials/paragraph-search.html">
+ <span class="dropdown-text">Paragraph search</span></a>
+  </li>  
+    </ul>
+  </li>
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-server" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">Server</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-server">    
+        <li>
+    <a class="dropdown-item" href="../server/manual.html">
+ <span class="dropdown-text">Manual</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="../server/tutorial.html">
+ <span class="dropdown-text">Tutorial</span></a>
+  </li>  
+    </ul>
+  </li>
+</ul>
+            <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-api-reference" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">API reference</span>
+    </a>
+    <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="nav-menu-api-reference">    
+        <li>
+    <a class="dropdown-item" href="https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html">
+ <span class="dropdown-text">Engine API</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html">
+ <span class="dropdown-text">Server API</span></a>
+  </li>  
+    </ul>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link" href="https://github.com/sadit/SimilaritySearchEngine.jl"> 
+<span class="menu-text">GitHub</span></a>
+  </li>  
+</ul>
+          </div> <!-- /navcollapse -->
+            <div class="quarto-navbar-tools">
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+</header>
+<!-- content -->
+<div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">On this page</h2>
+   
+  <ul>
+  <li><a href="#what-this-package-contains" id="toc-what-this-package-contains" class="nav-link active" data-scroll-target="#what-this-package-contains">1. What this package contains</a></li>
+  <li><a href="#how-a-dataset-is-held" id="toc-how-a-dataset-is-held" class="nav-link" data-scroll-target="#how-a-dataset-is-held">2. How a dataset is held</a></li>
+  <li><a href="#kinds-of-project" id="toc-kinds-of-project" class="nav-link" data-scroll-target="#kinds-of-project">3. Kinds of project</a></li>
+  <li><a href="#rest-api-base-endpoints" id="toc-rest-api-base-endpoints" class="nav-link" data-scroll-target="#rest-api-base-endpoints">4. REST API (base endpoints)</a>
+  <ul class="collapse">
+  <li><a href="#control" id="toc-control" class="nav-link" data-scroll-target="#control">Control</a></li>
+  <li><a href="#datasets" id="toc-datasets" class="nav-link" data-scroll-target="#datasets">Datasets</a></li>
+  <li><a href="#search-and-indexing" id="toc-search-and-indexing" class="nav-link" data-scroll-target="#search-and-indexing">Search and indexing</a></li>
+  <li><a href="#vocabulary" id="toc-vocabulary" class="nav-link" data-scroll-target="#vocabulary">Vocabulary</a></li>
+  <li><a href="#telemetry" id="toc-telemetry" class="nav-link" data-scroll-target="#telemetry">Telemetry</a></li>
+  <li><a href="#asynchronous-jobs" id="toc-asynchronous-jobs" class="nav-link" data-scroll-target="#asynchronous-jobs">Asynchronous jobs</a></li>
+  <li><a href="#tokens" id="toc-tokens" class="nav-link" data-scroll-target="#tokens">Tokens</a></li>
+  <li><a href="#authentication" id="toc-authentication" class="nav-link" data-scroll-target="#authentication">Authentication</a></li>
+  </ul></li>
+  <li><a href="#how-failures-are-reported" id="toc-how-failures-are-reported" class="nav-link" data-scroll-target="#how-failures-are-reported">5. How failures are reported</a></li>
+  <li><a href="#configuration" id="toc-configuration" class="nav-link" data-scroll-target="#configuration">6. Configuration</a></li>
+  <li><a href="#tests" id="toc-tests" class="nav-link" data-scroll-target="#tests">7. Tests</a></li>
+  <li><a href="#where-to-go-next" id="toc-where-to-go-next" class="nav-link" data-scroll-target="#where-to-go-next">8. Where to go next</a></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default">
+<div class="quarto-title">
+<h1 class="title">Server Manual</h1>
+<p class="subtitle lead">SimilaritySearchServer: the REST API, the job queue and the two command lines</p>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<p><code>SimilaritySearchServer</code> provides access to <a href="../index.html"><code>SimilaritySearchEngine</code></a>, the embedded engine documented in the rest of this site, through a REST API, two command lines and an asynchronous job queue. It implements no indexing logic. <strong>Storage, indexing and search are implemented in the engine.</strong> This package translates HTTP requests and command lines into engine calls, and engine results and failures into responses and exit codes.</p>
+<p>This division determines where each subject is documented. Questions about projects, persistence, text profiles or the behavior of a search are answered in the engine’s <a href="../architecture.html">architecture guide</a>. The two packages are documented on one site because the interface between them is the public API of the engine, and both sides of that interface are described here.</p>
+<section id="what-this-package-contains" class="level2">
+<h2 class="anchored" data-anchor-id="what-this-package-contains">1. What this package contains</h2>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: left;">file</th>
+<th style="text-align: left;">what it does</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;"><code>config.jl</code>, <code>cli.jl</code>, <code>ctl.jl</code></td>
+<td style="text-align: left;">TOML configuration, and the two <code>ArgParse</code> command lines (<code>similarity-search</code>, <code>similarity-search-admin</code>)</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>cli_handlers.jl</code>, <code>ctl_handlers.jl</code></td>
+<td style="text-align: left;">one function per subcommand: <code>build</code>, <code>search</code>, <code>searchbatch</code>, <code>allknn</code>, <code>fft</code>, <code>neardup</code>, <code>hsp</code>, <code>closestpair</code>, <code>describe</code>, <code>rebuild</code>, <code>dump</code>, <code>load</code></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>server.jl</code></td>
+<td style="text-align: left;">the HTTP API (Oxygen), one <code>EmbeddedEngine</code> per dataset, and the request/response mapping</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>jobs.jl</code>, <code>executors.jl</code></td>
+<td style="text-align: left;">the job spool: an atomic directory tree (<code>queued/</code>, <code>running/</code>, <code>completed/</code>, <code>failed/</code>) of <code>.job.toml</code> files, dispatched as independent Julia subprocesses</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>tokens.jl</code>, <code>telemetry.jl</code>, <code>cursors.jl</code></td>
+<td style="text-align: left;">access tokens, the <code>op_log</code> operation history, and server-side result cursors for pagination</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>interactive.jl</code></td>
+<td style="text-align: left;">guided invocation through <code>REPL.TerminalMenus</code></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>apps/</code></td>
+<td style="text-align: left;">the three installable app entry points</td>
+</tr>
+</tbody>
+</table>
+<p>The schema, the persistence layer, the index engine and project management are not part of this package. They are <code>SimilaritySearchEngine.Schema</code>, <code>.Persistence</code>, <code>.IndexEngine</code> and <code>.Project</code>.</p>
+</section>
+<section id="how-a-dataset-is-held" class="level2">
+<h2 class="anchored" data-anchor-id="how-a-dataset-is-held">2. How a dataset is held</h2>
+<p>The server holds one <code>SimilaritySearchEngine.EmbeddedEngine</code> per dataset identifier, in <code>AppState.handles</code>. That handle contains the two parts of a project, its RocksDB metadata store and its search engine, which keeps them consistent across a restart. <code>reload_datasets!</code> opens every dataset under <code>&lt;workdir&gt;/datasets/</code> with <code>open_project</code>, and a reopened dataset preserves its index, its text profile, its staged items and its deletion marks.</p>
+<p>There is no snapshot file. Earlier versions of this package wrote one JLD2 snapshot per dataset and read it on demand, because the engine did not store its own index. The engine stores it now, and a dataset is the directory that contains it.</p>
+<p><strong>A job that operates on an entire dataset runs as a subprocess and opens its project in read-only mode</strong>, because the serving process may hold the project open, and the RocksDB write lock is exclusive per process.</p>
+</section>
+<section id="kinds-of-project" class="level2">
+<h2 class="anchored" data-anchor-id="kinds-of-project">3. Kinds of project</h2>
+<p>The parameter <code>index_kind</code> of the API names a pair: the type of data a project holds, and the structure that indexes it:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: left;"><code>index_kind</code></th>
+<th style="text-align: left;">engine</th>
+<th style="text-align: left;">backend</th>
+<th style="text-align: left;">notes</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;"><code>searchgraph</code></td>
+<td style="text-align: left;"><code>DenseEngine</code></td>
+<td style="text-align: left;"><code>SearchGraph</code></td>
+<td style="text-align: left;">approximate, adjusts its own parameters; the default</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>exhaustive_search</code></td>
+<td style="text-align: left;"><code>DenseEngine</code></td>
+<td style="text-align: left;"><code>ExhaustiveSearch</code></td>
+<td style="text-align: left;">exact, linear scan</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>parallel_exhaustive_search</code></td>
+<td style="text-align: left;"><code>DenseEngine</code></td>
+<td style="text-align: left;"><code>ParallelExhaustiveSearch</code></td>
+<td style="text-align: left;">exact, data-parallel</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>bm25_invfile</code></td>
+<td style="text-align: left;"><code>FullTextEngine</code></td>
+<td style="text-align: left;"><code>BM25InvertedFile</code></td>
+<td style="text-align: left;">BM25 scoring</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>invfile</code></td>
+<td style="text-align: left;"><code>FullTextEngine</code></td>
+<td style="text-align: left;"><code>TextInvertedFile</code></td>
+<td style="text-align: left;">TF-IDF cosine</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>sparse_invfile</code></td>
+<td style="text-align: left;"><code>SparseEngine</code></td>
+<td style="text-align: left;"><code>InvertedFile</code></td>
+<td style="text-align: left;">sparse vectors encoded by the caller; requires <code>dimension</code></td>
+</tr>
+</tbody>
+</table>
+<p>A text project is created with <code>FitFromCorpus</code>. Its vocabulary is fitted from the documents the dataset has received when <code>index!</code> is called for the first time. Sending a pre-computed text profile to the server is not available over HTTP.</p>
+</section>
+<section id="rest-api-base-endpoints" class="level2">
+<h2 class="anchored" data-anchor-id="rest-api-base-endpoints">4. REST API (base endpoints)</h2>
+<p>Every response of this API is JSON. A response that succeeded carries <code>status</code>; one that failed carries <code>error</code> and <code>kind</code> (section 5). The bodies below are real responses, not sketches.</p>
+<p>Two names identify an item, everywhere and with one meaning each: <strong><code>doc_id</code></strong> is the identifier the caller gave it, which may be absent, and <strong><code>_id</code></strong> is the integer the engine assigned, which is always there. A search result, a stored record and the operation log all use them that way. Until 2026-09-14 a search result called the first <code>id</code> and the second <code>doc_id</code>, so <code>result.doc_id</code> and <code>record.doc_id</code> were different things; that is corrected, with no alias for the old names.</p>
+<p>At the top level of a response, <code>id</code> is the dataset: <code>{"status":"appended","id":"ds"}</code>.</p>
+<section id="control" class="level3">
+<h3 class="anchored" data-anchor-id="control">Control</h3>
+<ul>
+<li><code>GET /healthz</code> — the process answers HTTP.</li>
+<li><code>GET /readyz</code> — the process is ready to serve. <code>{"status":"ok"}</code>.</li>
+<li><code>GET /metrics</code> — metrics in Prometheus text format: documents and deleted records per dataset, jobs in progress, searches running and waiting, and the counters the operation log feeds — requests per dataset and operation, distance computations, items inserted, and a histogram of request durations.</li>
+</ul>
+<p>The counters cover the running process and start at zero when it starts, which is what a Prometheus counter is expected to do; <code>simsearch_process_start_time_seconds</code> reports when that was. They are accumulated as each request is recorded, not read back from the operation log: a collector polls every few seconds, and reading a column family that grows with every request would cost more than the requests it measures. The log remains the durable record and is read through <code>GET /api/v1/datasets/{id}/log</code>.</p>
+</section>
+<section id="datasets" class="level3">
+<h3 class="anchored" data-anchor-id="datasets">Datasets</h3>
+<ul>
+<li><code>POST /api/v1/datasets</code> — creates one. Accepts <code>id</code>, <code>index_kind</code> (see section 3), <code>distance</code>, <code>dimension</code>, the join-group fields <code>join_group</code>, <code>holds_metadata</code>, <code>key</code>, and an optional <code>meta_schema</code>. Answers <code>201</code>.</li>
+<li><code>GET /api/v1/datasets?offset=&amp;limit=</code> — every dataset on disk, loaded or not.</li>
+<li><code>GET /api/v1/datasets/{id}</code> — one of them.</li>
+<li><code>DELETE /api/v1/datasets/{id}</code> — destroys it.</li>
+<li><code>POST /api/v1/admin/datasets/{id}/unload</code> and <code>/reload</code> — closes or reopens a dataset without restarting the server. The <code>rebuild</code> subcommand of the command line requires this, because the RocksDB write lock is exclusive per process.</li>
+</ul>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode json code-with-copy"><code class="sourceCode json"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="er">POST</span> <span class="er">/api/v1/datasets</span>          <span class="fu">{</span><span class="dt">"status"</span><span class="fu">:</span><span class="st">"created"</span><span class="fu">,</span><span class="dt">"id"</span><span class="fu">:</span><span class="st">"ds"</span><span class="fu">}</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="er">DELETE</span> <span class="er">/api/v1/datasets/</span><span class="fu">{</span><span class="er">id</span><span class="fu">}</span>   <span class="fu">{</span><span class="dt">"status"</span><span class="fu">:</span><span class="st">"deleted"</span><span class="fu">,</span><span class="dt">"id"</span><span class="fu">:</span><span class="st">"ds"</span><span class="fu">}</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="er">POST</span> <span class="er">.../unload</span>                <span class="fu">{</span><span class="dt">"status"</span><span class="fu">:</span><span class="st">"unloaded"</span><span class="fu">,</span><span class="dt">"id"</span><span class="fu">:</span><span class="st">"ds"</span><span class="fu">}</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="er">POST</span> <span class="er">.../reload</span>                <span class="fu">{</span><span class="dt">"status"</span><span class="fu">:</span><span class="st">"reloaded"</span><span class="fu">,</span><span class="dt">"id"</span><span class="fu">:</span><span class="st">"ds"</span><span class="fu">}</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="er">GET</span> <span class="er">/api/v1/datasets/</span><span class="fu">{</span><span class="er">id</span><span class="fu">}</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"id"</span><span class="fu">:</span><span class="st">"ds"</span><span class="fu">,</span> <span class="dt">"index_kind"</span><span class="fu">:</span><span class="st">"searchgraph"</span><span class="fu">,</span> <span class="dt">"distance"</span><span class="fu">:</span><span class="st">"L2"</span><span class="fu">,</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a> <span class="dt">"created_at"</span><span class="fu">:</span><span class="st">"2026-09-14T19:41:57.059"</span><span class="fu">,</span> <span class="dt">"loaded"</span><span class="fu">:</span><span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a> <span class="dt">"doc_count"</span><span class="fu">:</span><span class="dv">5</span><span class="fu">,</span> <span class="dt">"tombstone_count"</span><span class="fu">:</span><span class="dv">0</span><span class="fu">,</span> <span class="dt">"tombstone_ratio"</span><span class="fu">:</span><span class="dv">0</span><span class="fu">,</span></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a> <span class="dt">"join_group"</span><span class="fu">:</span><span class="kw">null</span><span class="fu">,</span> <span class="dt">"holds_metadata"</span><span class="fu">:</span><span class="kw">false</span><span class="fu">,</span> <span class="dt">"key"</span><span class="fu">:</span><span class="kw">null</span><span class="fu">,</span></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a> <span class="dt">"meta_schema"</span><span class="fu">:</span><span class="ot">[</span><span class="fu">{</span><span class="dt">"name"</span><span class="fu">:</span><span class="st">"year"</span><span class="fu">,</span><span class="dt">"type"</span><span class="fu">:</span><span class="st">"int64"</span><span class="fu">}</span><span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a> <span class="dt">"beamsearch_baseline"</span><span class="fu">:{</span><span class="dt">"bsize"</span><span class="fu">:</span><span class="dv">4</span><span class="fu">,</span><span class="dt">"delta"</span><span class="fu">:</span><span class="dv">1</span><span class="fu">,</span><span class="dt">"maxvisits"</span><span class="fu">:</span><span class="dv">1000000</span><span class="fu">}}</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><code>GET /api/v1/datasets</code> wraps a list of those objects: <code>{"status":"ok", "datasets":[...], "total":2, "offset":0, "limit":2}</code>. <code>doc_count</code>, <code>tombstone_count</code>, <code>tombstone_ratio</code>, <code>meta_schema</code> and <code>beamsearch_baseline</code> are reported for a dataset that is open; <code>beamsearch_baseline</code> is <code>null</code> for one that is not backed by a graph, and <code>meta_schema</code> is <code>null</code> for one that declares nothing.</p>
+<p><code>meta_schema</code> declares which fields of an item’s metadata the dataset expects and what each one holds:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode json code-with-copy"><code class="sourceCode json"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"id"</span><span class="fu">:</span> <span class="st">"papers"</span><span class="fu">,</span> <span class="dt">"index_kind"</span><span class="fu">:</span> <span class="st">"bm25_invfile"</span><span class="fu">,</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a> <span class="dt">"meta_schema"</span><span class="fu">:</span> <span class="ot">[</span><span class="fu">{</span><span class="dt">"name"</span><span class="fu">:</span> <span class="st">"year"</span><span class="fu">,</span> <span class="dt">"type"</span><span class="fu">:</span> <span class="st">"int64"</span><span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>                 <span class="fu">{</span><span class="dt">"name"</span><span class="fu">:</span> <span class="st">"published"</span><span class="fu">,</span> <span class="dt">"type"</span><span class="fu">:</span> <span class="st">"timestamp"</span><span class="fu">}</span><span class="ot">]</span><span class="fu">}</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>The types are <code>string</code>, <code>int64</code>, <code>float64</code>, <code>bool</code> and <code>timestamp</code>. An append is refused with <code>400</code> when a declared field carries another type. Declaring is additive: a field that is not declared is stored as it arrives, and a dataset that declares nothing behaves as before. The declared fields are not indexed; what the declaration changes is that a filter compares in the declared type, so a <code>timestamp</code> is compared as an instant rather than as the text that stores it. The engine holds the declaration inside the project, which is why it survives a restart and travels with <code>dump</code>.</p>
+<ul>
+<li><code>GET /api/v1/datasets/{id}/join_group</code> — the datasets tagged with the same <code>join_group</code>.</li>
+</ul>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode json code-with-copy"><code class="sourceCode json"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"join_group"</span><span class="fu">:</span><span class="st">"g"</span><span class="fu">,</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a> <span class="dt">"members"</span><span class="fu">:</span><span class="ot">[</span><span class="fu">{</span><span class="dt">"index_uuid"</span><span class="fu">:</span><span class="st">"txt"</span><span class="fu">,</span><span class="dt">"index_kind"</span><span class="fu">:</span><span class="st">"bm25_invfile"</span><span class="fu">,</span><span class="dt">"key"</span><span class="fu">:</span><span class="st">"body"</span><span class="fu">,</span><span class="dt">"holds_metadata"</span><span class="fu">:</span><span class="kw">true</span><span class="fu">}</span><span class="ot">]</span><span class="fu">}</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="search-and-indexing" class="level3">
+<h3 class="anchored" data-anchor-id="search-and-indexing">Search and indexing</h3>
+<ul>
+<li><code>POST /api/v1/datasets/{id}/append</code> — inserts items. A dense item contains <code>vector</code>, a text item contains <code>text</code>, and a sparse item contains <code>indices</code> and <code>values</code>. The fields <code>doc_id</code>, <code>keywords</code> and <code>refs</code>, and any other field, become the metadata of the item.</li>
+<li><code>POST /api/v1/datasets/{id}/search</code> — dense and sparse search, with optional <code>filter</code>, <code>page_size</code> and <code>beamsearch_overrides</code>.</li>
+<li><code>POST /api/v1/datasets/{id}/ftsearch</code> — text search.</li>
+<li><code>POST /api/v1/datasets/{id}/fetch</code> and <code>GET /api/v1/datasets/{id}/exists?ids=</code> — records by identifier, and whether an identifier exists.</li>
+<li><code>POST /api/v1/datasets/{id}/delete</code> — logical deletion. Takes <code>_id</code>, the integer a search or a fetch reported.</li>
+<li><code>POST /api/v1/datasets/{id}/calibrate</code> — recall calibration for a graph-backed project.</li>
+<li><code>POST /api/v1/search/hybrid</code> and <code>POST /api/v1/search/group</code> — reciprocal rank fusion over two datasets, and a text query sent to every dataset of a join group.</li>
+</ul>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode json code-with-copy"><code class="sourceCode json"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="er">POST</span> <span class="er">.../append</span>     <span class="fu">{</span><span class="dt">"status"</span><span class="fu">:</span><span class="st">"appended"</span><span class="fu">,</span><span class="dt">"id"</span><span class="fu">:</span><span class="st">"ds"</span><span class="fu">,</span><span class="dt">"inserted"</span><span class="fu">:</span><span class="dv">5</span><span class="fu">}</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="er">POST</span> <span class="er">.../delete</span>     <span class="fu">{</span><span class="dt">"status"</span><span class="fu">:</span><span class="st">"soft_deleted"</span><span class="fu">,</span><span class="dt">"id"</span><span class="fu">:</span><span class="st">"ds"</span><span class="fu">,</span><span class="dt">"_id"</span><span class="fu">:</span><span class="dv">1</span><span class="fu">}</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="er">POST</span> <span class="er">.../calibrate</span>  <span class="fu">{</span><span class="dt">"status"</span><span class="fu">:</span><span class="st">"calibrated"</span><span class="fu">,</span><span class="dt">"id"</span><span class="fu">:</span><span class="st">"ds"</span><span class="fu">,</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>                     <span class="dt">"baseline"</span><span class="fu">:{</span><span class="dt">"bsize"</span><span class="fu">:</span><span class="dv">4</span><span class="fu">,</span><span class="dt">"delta"</span><span class="fu">:</span><span class="dv">1</span><span class="fu">,</span><span class="dt">"maxvisits"</span><span class="fu">:</span><span class="dv">1000000</span><span class="fu">}}</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a><span class="er">POST</span> <span class="er">.../search</span>  <span class="er">and</span>  <span class="er">POST</span> <span class="er">.../ftsearch</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"status"</span><span class="fu">:</span><span class="st">"searched"</span><span class="fu">,</span><span class="dt">"id"</span><span class="fu">:</span><span class="st">"ds"</span><span class="fu">,</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a> <span class="dt">"results"</span><span class="fu">:</span><span class="ot">[</span><span class="fu">{</span><span class="dt">"doc_id"</span><span class="fu">:</span><span class="st">"d1"</span><span class="fu">,</span><span class="dt">"_id"</span><span class="fu">:</span><span class="dv">1</span><span class="fu">,</span><span class="dt">"distance"</span><span class="fu">:</span><span class="dv">0</span><span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>            <span class="fu">{</span><span class="dt">"doc_id"</span><span class="fu">:</span><span class="st">"d2"</span><span class="fu">,</span><span class="dt">"_id"</span><span class="fu">:</span><span class="dv">2</span><span class="fu">,</span><span class="dt">"distance"</span><span class="fu">:</span><span class="dv">1</span><span class="fu">}</span><span class="ot">]</span><span class="fu">}</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a><span class="er">POST</span> <span class="er">.../fetch</span></span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"status"</span><span class="fu">:</span><span class="st">"fetched"</span><span class="fu">,</span><span class="dt">"id"</span><span class="fu">:</span><span class="st">"ds"</span><span class="fu">,</span></span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a> <span class="dt">"results"</span><span class="fu">:</span><span class="ot">[</span><span class="fu">{</span><span class="dt">"doc_id"</span><span class="fu">:</span><span class="st">"d1"</span><span class="fu">,</span><span class="dt">"_id"</span><span class="fu">:</span><span class="dv">1</span><span class="fu">,</span><span class="dt">"keywords"</span><span class="fu">:</span><span class="ot">[</span><span class="st">"k1"</span><span class="ot">]</span><span class="fu">,</span><span class="dt">"refs"</span><span class="fu">:</span><span class="ot">[]</span><span class="fu">,</span></span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>             <span class="dt">"schema_version"</span><span class="fu">:</span><span class="dv">1</span><span class="fu">,</span><span class="dt">"year"</span><span class="fu">:</span><span class="dv">2021</span><span class="fu">}</span><span class="ot">]</span><span class="fu">}</span></span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a><span class="er">GET</span> <span class="er">.../exists?ids=d1,nope</span></span>
+<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"status"</span><span class="fu">:</span><span class="st">"ok"</span><span class="fu">,</span><span class="dt">"id"</span><span class="fu">:</span><span class="st">"ds"</span><span class="fu">,</span></span>
+<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a> <span class="dt">"results"</span><span class="fu">:</span><span class="ot">[</span><span class="fu">{</span><span class="dt">"id"</span><span class="fu">:</span><span class="st">"d1"</span><span class="fu">,</span><span class="dt">"doc_id"</span><span class="fu">:</span><span class="st">"d1"</span><span class="fu">,</span><span class="dt">"_id"</span><span class="fu">:</span><span class="dv">1</span><span class="fu">,</span><span class="dt">"exists"</span><span class="fu">:</span><span class="kw">true</span><span class="fu">,</span><span class="dt">"deleted"</span><span class="fu">:</span><span class="kw">false</span><span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a>            <span class="fu">{</span><span class="dt">"id"</span><span class="fu">:</span><span class="st">"nope"</span><span class="fu">,</span><span class="dt">"doc_id"</span><span class="fu">:</span><span class="kw">null</span><span class="fu">,</span><span class="dt">"_id"</span><span class="fu">:</span><span class="kw">null</span><span class="fu">,</span><span class="dt">"exists"</span><span class="fu">:</span><span class="kw">false</span><span class="fu">,</span><span class="dt">"deleted"</span><span class="fu">:</span><span class="kw">false</span><span class="fu">}</span><span class="ot">]</span><span class="fu">}</span></span>
+<span id="cb4-20"><a href="#cb4-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-21"><a href="#cb4-21" aria-hidden="true" tabindex="-1"></a><span class="er">POST</span> <span class="er">/api/v1/search/hybrid</span></span>
+<span id="cb4-22"><a href="#cb4-22" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"status"</span><span class="fu">:</span><span class="st">"searched"</span><span class="fu">,</span><span class="dt">"results"</span><span class="fu">:</span><span class="ot">[</span><span class="fu">{</span><span class="dt">"doc_id"</span><span class="fu">:</span><span class="st">"d1"</span><span class="fu">,</span><span class="dt">"_id"</span><span class="fu">:</span><span class="dv">1</span><span class="fu">,</span><span class="dt">"score"</span><span class="fu">:</span><span class="fl">0.0327</span><span class="fu">}</span><span class="ot">]</span><span class="fu">}</span></span>
+<span id="cb4-23"><a href="#cb4-23" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-24"><a href="#cb4-24" aria-hidden="true" tabindex="-1"></a><span class="er">POST</span> <span class="er">/api/v1/search/group</span></span>
+<span id="cb4-25"><a href="#cb4-25" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"status"</span><span class="fu">:</span><span class="st">"searched"</span><span class="fu">,</span><span class="dt">"join_group"</span><span class="fu">:</span><span class="st">"g"</span><span class="fu">,</span></span>
+<span id="cb4-26"><a href="#cb4-26" aria-hidden="true" tabindex="-1"></a> <span class="dt">"results"</span><span class="fu">:{</span><span class="dt">"body"</span><span class="fu">:</span><span class="ot">[</span><span class="fu">{</span><span class="dt">"doc_id"</span><span class="fu">:</span><span class="st">"t1"</span><span class="fu">,</span><span class="dt">"_id"</span><span class="fu">:</span><span class="dv">1</span><span class="fu">,</span><span class="dt">"score"</span><span class="fu">:</span><span class="fl">-0.267</span><span class="fu">}</span><span class="ot">]</span><span class="fu">}}</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>A <code>fetch</code> result merges the item’s metadata into the record, which is why <code>year</code> sits beside <code>keywords</code> above. In <code>exists</code>, <code>id</code> is the string that was asked about, which may be either identifier; <code>doc_id</code> and <code>_id</code> are what it resolved to, and are <code>null</code> when nothing did. A <code>search</code> over a text dataset reports a BM25 score with its sign inverted, under the name <code>distance</code>, which is the convention of the library: a smaller value is a closer match. A filtered search that could not fill <code>k</code> adds <code>"insufficient_results":true</code>, since it reads a bounded number of candidates before applying the filter.</p>
+<p>An operation on one dataset is addressed under that dataset. The two queries that read more than one are under <code>/api/v1/search/</code>, which is the only place where a route is not about a single dataset. The earlier prefix <code>/api/v1/simsearch/</code> was removed on 2026-09-13: it marked a distinction that the API stopped making.</p>
+</section>
+<section id="vocabulary" class="level3">
+<h3 class="anchored" data-anchor-id="vocabulary">Vocabulary</h3>
+<ul>
+<li><code>GET /api/v1/datasets/{id}/vocab?scan=&amp;sample=</code> — what a text dataset’s vocabulary covers.</li>
+</ul>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode json code-with-copy"><code class="sourceCode json"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"id"</span><span class="fu">:</span><span class="st">"txt"</span><span class="fu">,</span> <span class="dt">"vocsize"</span><span class="fu">:</span><span class="dv">3</span><span class="fu">,</span> <span class="dt">"trainsize"</span><span class="fu">:</span><span class="dv">3</span><span class="fu">,</span> <span class="dt">"numtokens"</span><span class="fu">:</span><span class="dv">9</span><span class="fu">,</span> <span class="dt">"avgdoclen"</span><span class="fu">:</span><span class="dv">3</span><span class="fu">,</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a> <span class="dt">"top_tokens"</span><span class="fu">:</span><span class="ot">[</span><span class="fu">{</span><span class="dt">"token"</span><span class="fu">:</span><span class="st">"gato"</span><span class="fu">,</span><span class="dt">"ndocs"</span><span class="fu">:</span><span class="dv">3</span><span class="fu">,</span><span class="dt">"occs"</span><span class="fu">:</span><span class="dv">3</span><span class="fu">}</span><span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a> <span class="dt">"queries"</span><span class="fu">:</span><span class="dv">1</span><span class="fu">,</span> <span class="dt">"query_tokens"</span><span class="fu">:</span><span class="dv">1</span><span class="fu">,</span> <span class="dt">"query_oov_tokens"</span><span class="fu">:</span><span class="dv">0</span><span class="fu">,</span> <span class="dt">"query_oov_rate"</span><span class="fu">:</span><span class="dv">0</span><span class="fu">}</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>With <code>scan=true</code>, six more fields:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6"><pre class="sourceCode json code-with-copy"><code class="sourceCode json"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"live_tokens"</span><span class="fu">:</span><span class="dv">9</span><span class="fu">,</span> <span class="dt">"live_oov_tokens"</span><span class="fu">:</span><span class="dv">0</span><span class="fu">,</span> <span class="dt">"live_oov_rate"</span><span class="fu">:</span><span class="dv">0</span><span class="fu">,</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a> <span class="dt">"live_documents_scanned"</span><span class="fu">:</span><span class="dv">3</span><span class="fu">,</span> <span class="dt">"live_documents_total"</span><span class="fu">:</span><span class="dv">3</span><span class="fu">,</span> <span class="dt">"live_sampled"</span><span class="fu">:</span><span class="kw">false</span><span class="fu">}</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>A vocabulary is fitted once and does not grow. The rate over the queries says the words being asked for are missing, and the rate over the documents says the words the dataset already holds are missing; the second is what <code>rebuild</code> corrects, by refitting the vocabulary over the documents the dataset has now.</p>
+<p>The query counters cost nothing and are always reported. The reading over the documents is asked for with <code>scan=true</code>, and it is bounded: at most <code>sample</code> documents are read, spread evenly over the dataset, and <code>live_sampled</code> says whether it read all of them. The default sample takes about a second whatever the dataset’s size; <code>sample=0</code> reads every document, which on a large dataset takes minutes and is better asked for offline with <code>describe</code>. <code>409</code> for a dataset that holds no text or was never indexed.</p>
+</section>
+<section id="telemetry" class="level3">
+<h3 class="anchored" data-anchor-id="telemetry">Telemetry</h3>
+<ul>
+<li><code>GET /api/v1/datasets/{id}/log?offset=&amp;limit=</code> — the dataset’s <code>op_log</code>: one record per <code>search</code>, <code>ftsearch</code>, <code>append</code> or <code>delete</code>.</li>
+</ul>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode json code-with-copy"><code class="sourceCode json"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"status"</span><span class="fu">:</span><span class="st">"ok"</span><span class="fu">,</span><span class="dt">"total"</span><span class="fu">:</span><span class="dv">4</span><span class="fu">,</span><span class="dt">"offset"</span><span class="fu">:</span><span class="dv">0</span><span class="fu">,</span><span class="dt">"limit"</span><span class="fu">:</span><span class="dv">1</span><span class="fu">,</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a> <span class="dt">"entries"</span><span class="fu">:</span><span class="ot">[</span><span class="fu">{</span><span class="dt">"operation"</span><span class="fu">:</span><span class="st">"delete"</span><span class="fu">,</span><span class="dt">"timestamp"</span><span class="fu">:</span><span class="st">"2026-09-14T19:42:11.195"</span><span class="fu">,</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>             <span class="dt">"details"</span><span class="fu">:{</span><span class="dt">"index_uuid"</span><span class="fu">:</span><span class="st">"ds"</span><span class="fu">,</span><span class="dt">"_id"</span><span class="fu">:</span><span class="dv">1</span><span class="fu">,</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>                        <span class="dt">"user"</span><span class="fu">:</span><span class="st">"alice"</span><span class="fu">,</span><span class="dt">"token_fingerprint"</span><span class="fu">:</span><span class="st">"703ffec26b6db7b1"</span><span class="fu">}}</span><span class="ot">]</span><span class="fu">}</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>A <code>search</code> entry carries more in <code>details</code>: <code>distance_name</code>, <code>dimension</code>, <code>distance_evaluations</code> and <code>elapsed_seconds</code>; an <code>append</code> entry carries <code>items_inserted</code>.</p>
+<p><code>user</code> is the name on the token the request carried, and is present when that token was valid. <code>token_fingerprint</code> is the first eight bytes of the token’s SHA-256: enough to tell two tokens of one user apart and to match an entry against a token someone holds, and not enough to present as one. Until 2026-09-14 this field was the token itself, which put live credentials in a column family of the dataset and in every <code>dump</code> of it. The endpoint still requires <code>admin</code>, because the log says who did what, which is an audit surface rather than a reading of the dataset.</p>
+<p>The number of distance computations of a search is obtained from the engine, in a <code>SimilaritySearchEngine.SearchStats</code> instance that <code>_run_search</code> passes to <code>search</code> and to <code>ftsearch</code>. It is not obtained by reading a context before and after the call: a search uses a context taken from a pool of the engine, so a counter read from this package includes the work of any other search executed since. For <code>append</code> the second method is correct, because an insertion uses the engine’s own context under an exclusive write lock.</p>
+</section>
+<section id="asynchronous-jobs" class="level3">
+<h3 class="anchored" data-anchor-id="asynchronous-jobs">Asynchronous jobs</h3>
+<ul>
+<li><code>POST /api/v1/jobs/{kind}</code> — enqueues a job (<code>allknn</code>, <code>fft</code>, <code>neardup</code>, <code>hsp</code>, <code>searchbatch</code>, <code>closestpair</code>, <code>build</code>, <code>dump</code>, <code>load</code>). Answers <code>202</code>.</li>
+<li><code>GET /api/v1/jobs?offset=&amp;limit=</code>, <code>GET /api/v1/jobs/{job_id}</code> and <code>/result</code> — the jobs, the state of one, and its output.</li>
+<li><code>POST /api/v1/jobs/{job_id}/block</code>, <code>/resume</code>, <code>/kill</code>, and <code>DELETE /api/v1/jobs/{job_id}</code>.</li>
+<li><code>POST /api/v1/admin/jobs/gc</code> — removes the jobs and cursors that have expired.</li>
+</ul>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb8"><pre class="sourceCode json code-with-copy"><code class="sourceCode json"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="er">POST</span> <span class="er">/api/v1/jobs/allknn</span>  <span class="ot">[</span><span class="dv">202</span><span class="ot">]</span>   <span class="fu">{</span><span class="dt">"status"</span><span class="fu">:</span><span class="st">"accepted"</span><span class="fu">,</span><span class="dt">"job_id"</span><span class="fu">:</span><span class="st">"fe3198116091f825"</span><span class="fu">}</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="er">GET</span> <span class="er">/api/v1/jobs</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"status"</span><span class="fu">:</span><span class="st">"ok"</span><span class="fu">,</span><span class="dt">"total"</span><span class="fu">:</span><span class="dv">1</span><span class="fu">,</span><span class="dt">"offset"</span><span class="fu">:</span><span class="dv">0</span><span class="fu">,</span><span class="dt">"limit"</span><span class="fu">:</span><span class="dv">1</span><span class="fu">,</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a> <span class="dt">"jobs"</span><span class="fu">:</span><span class="ot">[</span><span class="fu">{</span><span class="dt">"id"</span><span class="fu">:</span><span class="st">"fe3198116091f825"</span><span class="fu">,</span><span class="dt">"kind"</span><span class="fu">:</span><span class="st">"allknn"</span><span class="fu">,</span><span class="dt">"status"</span><span class="fu">:</span><span class="st">"queued"</span><span class="fu">}</span><span class="ot">]</span><span class="fu">}</span></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a><span class="er">POST</span> <span class="er">/api/v1/admin/jobs/gc</span></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"status"</span><span class="fu">:</span><span class="st">"ok"</span><span class="fu">,</span><span class="dt">"jobs_purged"</span><span class="fu">:</span><span class="ot">[]</span><span class="fu">,</span><span class="dt">"cursors_purged"</span><span class="fu">:</span><span class="ot">[]</span><span class="fu">,</span><span class="dt">"cursors_expired"</span><span class="fu">:</span><span class="ot">[]</span><span class="fu">}</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>A job’s state is <code>queued</code>, <code>running</code>, <code>blocked</code>, <code>completed</code> or <code>failed</code>. <code>GET /api/v1/jobs/{job_id}/result</code> streams the file the job wrote, except for <code>dump</code>, whose result is a directory: for that one it answers <code>{"bundle_dir": ..., "manifest": {...}}</code>.</p>
+</section>
+<section id="tokens" class="level3">
+<h3 class="anchored" data-anchor-id="tokens">Tokens</h3>
+<ul>
+<li><code>POST /api/v1/admin/tokens</code> — creates one. Accepts <code>user</code>, <code>permissions</code> and an optional <code>expires_at</code>.</li>
+<li><code>GET /api/v1/admin/tokens</code> — every token stored, expired or not.</li>
+<li><code>DELETE /api/v1/admin/tokens/{token}</code> — revokes one.</li>
+<li><code>POST /api/v1/admin/tokens/prune</code> — removes the expired ones.</li>
+</ul>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb9"><pre class="sourceCode json code-with-copy"><code class="sourceCode json"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="er">POST</span> <span class="er">/api/v1/admin/tokens</span>  <span class="ot">[</span><span class="dv">201</span><span class="ot">]</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"status"</span><span class="fu">:</span><span class="st">"created"</span><span class="fu">,</span><span class="dt">"token"</span><span class="fu">:</span><span class="st">"703ffec26b6db7b1..."</span><span class="fu">,</span><span class="dt">"permissions"</span><span class="fu">:</span><span class="ot">[</span><span class="st">"read:*"</span><span class="ot">]</span><span class="fu">}</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a><span class="er">GET</span> <span class="er">/api/v1/admin/tokens</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"status"</span><span class="fu">:</span><span class="st">"ok"</span><span class="fu">,</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a> <span class="dt">"tokens"</span><span class="fu">:</span><span class="ot">[</span><span class="fu">{</span><span class="dt">"token"</span><span class="fu">:</span><span class="st">"703ffec26b6db7b1..."</span><span class="fu">,</span><span class="dt">"user"</span><span class="fu">:</span><span class="st">"alice"</span><span class="fu">,</span><span class="dt">"permissions"</span><span class="fu">:</span><span class="ot">[</span><span class="st">"read:*"</span><span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>            <span class="dt">"created_at"</span><span class="fu">:</span><span class="st">"2026-09-14T19:42:20.595"</span><span class="fu">,</span><span class="dt">"expires_at"</span><span class="fu">:</span><span class="kw">null</span><span class="fu">}</span><span class="ot">]</span><span class="fu">}</span></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a><span class="er">DELETE</span> <span class="er">/api/v1/admin/tokens/</span><span class="fu">{</span><span class="er">token</span><span class="fu">}</span>   <span class="fu">{</span><span class="dt">"status"</span><span class="fu">:</span><span class="st">"revoked"</span><span class="fu">}</span></span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a><span class="er">POST</span> <span class="er">/api/v1/admin/tokens/prune</span>       <span class="fu">{</span><span class="dt">"status"</span><span class="fu">:</span><span class="st">"ok"</span><span class="fu">,</span><span class="dt">"pruned"</span><span class="fu">:</span><span class="dv">0</span><span class="fu">}</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>The token string is returned once, when it is created. <code>GET /api/v1/admin/tokens</code> is an audit listing and reports them in full, which is why it requires <code>admin</code>.</p>
+</section>
+<section id="authentication" class="level3">
+<h3 class="anchored" data-anchor-id="authentication">Authentication</h3>
+<p>Every <code>/api/v1</code> endpoint requires a token when <code>[auth] enabled</code> is true in <code>config.toml</code>. <code>/healthz</code>, <code>/readyz</code> and <code>/metrics</code> answer without one, so a supervisor and a metrics collector work without credentials. The default is <code>false</code>, which is the behavior of a server that has never had authentication.</p>
+<p>The token travels in the <code>Authorization</code> header, as <code>Bearer &lt;token&gt;</code> or as the bare token. A permission is <code>operation:dataset</code>:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: left;">operation</th>
+<th style="text-align: left;">grants</th>
+<th style="text-align: left;">includes</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;"><code>read</code></td>
+<td style="text-align: left;">the queries and the <code>GET</code> endpoints</td>
+<td style="text-align: left;">—</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>write</code></td>
+<td style="text-align: left;">append, delete, calibrate, job submission</td>
+<td style="text-align: left;"><code>read</code></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>admin</code></td>
+<td style="text-align: left;">dataset creation and deletion, the token endpoints, job control, the operation log</td>
+<td style="text-align: left;"><code>write</code> and <code>read</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>dataset</code> is a dataset id or <code>*</code>. A route that is not about one dataset — listing datasets, the job endpoints, the token endpoints, <code>/api/v1/search/group</code> — requires the operation over <code>*</code>, so a token restricted to one dataset uses that dataset and cannot enumerate the rest. <code>admin:*</code> grants everything. A request without a valid token is answered <code>401</code>; a valid token without the permission is answered <code>403</code>, and the body names the permission that was required.</p>
+<p>The first token is created against the working directory, because a server with authentication enabled refuses to start while no token exists, and the endpoint that creates tokens is itself behind authentication:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb10"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="ex">similarity-search</span> add-token <span class="at">--user</span> admin <span class="at">--permissions</span> <span class="st">"admin:*"</span> <span class="at">--workdir</span> ./workdir</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Later tokens are created with <code>POST /api/v1/admin/tokens</code> or with <code>similarity-search-ctl add-token</code>, which is the same endpoint. A token may carry an <code>expires_at</code>, an ISO 8601 timestamp that is verified when the token is created and again on every request.</p>
+</section>
+</section>
+<section id="how-failures-are-reported" class="level2">
+<h2 class="anchored" data-anchor-id="how-failures-are-reported">5. How failures are reported</h2>
+<p>The engine raises typed errors. This package maps them <strong>by category</strong>, never by the text of the message:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: left;">engine category</th>
+<th style="text-align: right;">HTTP</th>
+<th style="text-align: right;">CLI exit code</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;"><code>NotFound</code></td>
+<td style="text-align: right;">404</td>
+<td style="text-align: right;">4</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>ConflictingState</code> (staged backlog, untrained profile, empty project)</td>
+<td style="text-align: right;">409</td>
+<td style="text-align: right;">5</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>InvalidRequest</code> (wrong payload, wrong dimension, bad option)</td>
+<td style="text-align: right;">400</td>
+<td style="text-align: right;">2</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>StorageFailure</code></td>
+<td style="text-align: right;">500</td>
+<td style="text-align: right;">70</td>
+</tr>
+</tbody>
+</table>
+<p>Two status codes come from this package rather than from the engine: <code>401</code> when a request carries no valid token, and <code>403</code> when its token lacks the permission the route requires.</p>
+<p>An error response contains two fields: <code>error</code>, the message, intended for a person, and <code>kind</code>, the concrete engine type, intended for a client that selects a behavior. Failures detected by a command line itself, such as a dataset directory that does not exist or an input file that cannot be read, return exit code <code>1</code>. They are detected before the engine is called.</p>
+</section>
+<section id="configuration" class="level2">
+<h2 class="anchored" data-anchor-id="configuration">6. Configuration</h2>
+<p><code>config.toml</code> (or <code>.similarity-search-server.toml</code>):</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb11"><pre class="sourceCode toml code-with-copy"><code class="sourceCode toml"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="kw">[paths]</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="dt">workdir</span> <span class="op">=</span> <span class="st">"./workdir"</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a><span class="kw">[server]</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a><span class="dt">host</span> <span class="op">=</span> <span class="st">"127.0.0.1"</span></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a><span class="dt">port</span> <span class="op">=</span> <span class="dv">8080</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a><span class="kw">[resources]</span></span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a><span class="dt">query_threads_pct</span> <span class="op">=</span> <span class="dv">80</span></span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a><span class="dt">batch_threads_pct</span> <span class="op">=</span> <span class="dv">20</span></span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a><span class="dt">max_concurrent_queries</span> <span class="op">=</span> <span class="dv">0</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><code>max_concurrent_queries</code> bounds how many searches run at once. <code>0</code> derives it from the split below: the threads that job execution did not reserve. A request that arrives when every slot is taken waits for one; it is not refused, because a caller that asked for a search wants the search. <code>/metrics</code> reports <code>simsearch_queries_running</code>, <code>simsearch_queries_waiting</code>, <code>simsearch_query_slots</code> and <code>simsearch_query_wait_seconds_total</code>, which is what says whether the bound is ever reached.</p>
+<p>The bound exists because unbounded concurrency buys no throughput and does cost memory. Past the number of threads, more concurrent searches share the same cores and each one gets slower; and every concurrent search holds a context from the engine’s pool, which grows to the highest concurrency ever reached and does not shrink.</p>
+<p>The same split governs the work that runs inside this process rather than in a job. Indexing and calibration divide their work into batches, one task each, and the engine takes the batch count from the number of threads; this server caps it at the share reserved for batch work, so that an append that triggers <code>index!</code> does not spread over the threads answering queries. A job needs no such cap: it is a subprocess started with its share in <code>JULIA_NUM_THREADS</code>. <code>serve</code> prints both numbers when it starts. PLAN.md §2 proposed a request collector for this: a channel and a pool of worker tasks that every search would pass through. This is the bound without that structure, and the measurements a collector would be justified by are the ones above.</p>
+<p><code>[resources]</code> divides this server’s threads between answering queries and executing jobs. A job runs as its own process, so the reserved share is spent as a number of processes and a number of threads each: at most four jobs at once, each with its part of <code>floor(threads × batch_threads_pct / 100)</code>, and never more than that share in total. The remaining threads stay with the server. <code>serve</code> prints the resulting numbers when it starts, for example <code>at most 4 concurrent job(s), 3 thread(s) each (20.0% of this server's 64 thread(s))</code>.</p>
+<p>The number of threads the server itself has is the one given to Julia when it starts (<code>julia -t auto</code>), not a value in this file.</p>
+</section>
+<section id="tests" class="level2">
+<h2 class="anchored" data-anchor-id="tests">7. Tests</h2>
+<p>Two levels, selected with <code>test_args=["full"]</code> or <code>SSE_TEST_LEVEL=full</code>:</p>
+<ul>
+<li><strong>light</strong> (50 assertions, approximately 5 s): the interface with the engine. It verifies the mapping from the names used in requests to engine types, from engine errors to status codes and exit codes, and from the items of a request to engine items. No server is started and no subprocess is created. This level detects a change in the engine on the day it is made.</li>
+<li><strong>full</strong> (585 assertions, approximately 19 minutes): the end-to-end suites for the API, the jobs and the command lines. They start servers and execute subprocesses. Near the end, the run produces no output for about ten minutes, while the command-line suite waits for jobs to expire. The run has not stopped.</li>
+</ul>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb12"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">--project</span><span class="op">=</span>server <span class="at">-e</span> <span class="st">'using Pkg; Pkg.develop(path="."); Pkg.test()'</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">--project</span><span class="op">=</span>server <span class="at">-e</span> <span class="st">'using Pkg; Pkg.test(test_args=["full"])'</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="where-to-go-next" class="level2">
+<h2 class="anchored" data-anchor-id="where-to-go-next">8. Where to go next</h2>
+<ul>
+<li>The <a href="../server/tutorial.html">server tutorial</a>: the same interface in use, in eight steps. A dataset is created, indexed and queried, and a job is executed.</li>
+<li>The <a href="../architecture.html">architecture of the engine</a>: the storage layout, the engine hierarchy, the concurrency model, and the typed errors this package maps.</li>
+<li>The reference, generated from the docstrings of both packages: <a href="https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html">Server API</a> and <a href="https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html">Engine API</a>.</li>
+</ul>
+
+
+</section>
+
+</main> <!-- /main -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp("https:\/\/sadit\.github\.io\/SimilaritySearchEngine\.jl\/");
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+</div> <!-- /content -->
+
+
+
+
+</body></html>

@@ -1,0 +1,1106 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en-US" xml:lang="en-US"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.9.38">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>Multilingual Paragraph Search over Books and Wikipedia – SimilaritySearchEngine.jl</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="https://cdn.jsdelivr.net/npm/jquery@3.5.1/dist/jquery.min.js" integrity="sha384-ZvpUoO/+PpLXR1lu4jmpXWu80pZlYUAfxl5NsBMWOEPSjUn/6Z/hRTt8+pR6L4N2" crossorigin="anonymous"></script><script src="../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="../">
+<script src="../site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="../site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="../site_libs/quarto-html/popper.min.js"></script>
+<script src="../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-15634bcf2e68342d4ad2dfa704d543f6.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../site_libs/bootstrap/bootstrap-3e7735b7b22659e5fa437aca0bb49075.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+<script src="https://cdn.jsdelivr.net/npm/requirejs@2.3.6/require.min.js" integrity="sha384-c9c+LnTbwQ3aujuU7ULEPVvgLs+Fn6fJUvIGTsuu1ZcCf11fiEubah0ttpca4ntM sha384-6V1/AdqZRWk1KAlWbKBlGhN7VG4iE/yAZcO6NZPMF8od0vukrvr0tg4qY6NSrItx" crossorigin="anonymous"></script>
+
+<script type="application/javascript">define('jquery', [],function() {return window.jQuery;})</script>
+
+
+<link rel="stylesheet" href="../styles.css">
+</head>
+
+<body class="nav-fixed quarto-light">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a class="navbar-brand" href="../index.html">
+    <span class="navbar-title">SimilaritySearchEngine.jl</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="Search"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" role="menu" aria-expanded="false" aria-label="Toggle navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../index.html"> 
+<span class="menu-text">Home</span></a>
+  </li>  
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-engine" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">Engine</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-engine">    
+        <li>
+    <a class="dropdown-item" href="../architecture.html">
+ <span class="dropdown-text">Architecture</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="../tutorials/index.html">
+ <span class="dropdown-text">Tutorials</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="../tutorials/getting-started.html">
+ <span class="dropdown-text">Getting started</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="../tutorials/paragraph-search.html">
+ <span class="dropdown-text">Paragraph search</span></a>
+  </li>  
+    </ul>
+  </li>
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-server" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">Server</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-server">    
+        <li>
+    <a class="dropdown-item" href="../server/manual.html">
+ <span class="dropdown-text">Manual</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="../server/tutorial.html">
+ <span class="dropdown-text">Tutorial</span></a>
+  </li>  
+    </ul>
+  </li>
+</ul>
+            <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-api-reference" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">API reference</span>
+    </a>
+    <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="nav-menu-api-reference">    
+        <li>
+    <a class="dropdown-item" href="https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html">
+ <span class="dropdown-text">Engine API</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html">
+ <span class="dropdown-text">Server API</span></a>
+  </li>  
+    </ul>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link" href="https://github.com/sadit/SimilaritySearchEngine.jl"> 
+<span class="menu-text">GitHub</span></a>
+  </li>  
+</ul>
+          </div> <!-- /navcollapse -->
+            <div class="quarto-navbar-tools">
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+</header>
+<!-- content -->
+<div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">On this page</h2>
+   
+  <ul>
+  <li><a href="#motivation-for-paragraph-level-granularity" id="toc-motivation-for-paragraph-level-granularity" class="nav-link active" data-scroll-target="#motivation-for-paragraph-level-granularity">Motivation for Paragraph-Level Granularity</a></li>
+  <li><a href="#dataset-preparation" id="toc-dataset-preparation" class="nav-link" data-scroll-target="#dataset-preparation">Dataset Preparation</a></li>
+  <li><a href="#corpus-statistics" id="toc-corpus-statistics" class="nav-link" data-scroll-target="#corpus-statistics">Corpus Statistics</a>
+  <ul class="collapse">
+  <li><a href="#statistical-observations" id="toc-statistical-observations" class="nav-link" data-scroll-target="#statistical-observations">Statistical Observations</a></li>
+  </ul></li>
+  <li><a href="#linguistic-profiles-textprofile" id="toc-linguistic-profiles-textprofile" class="nav-link" data-scroll-target="#linguistic-profiles-textprofile">Linguistic Profiles (<code>TextProfile</code>)</a>
+  <ul class="collapse">
+  <li><a href="#normalization-policy-preserving-case-and-diacritics" id="toc-normalization-policy-preserving-case-and-diacritics" class="nav-link" data-scroll-target="#normalization-policy-preserving-case-and-diacritics">Normalization Policy: Preserving Case and Diacritics</a></li>
+  <li><a href="#applied-vs.-carried-artifacts" id="toc-applied-vs.-carried-artifacts" class="nav-link" data-scroll-target="#applied-vs.-carried-artifacts">Applied vs.&nbsp;Carried Artifacts</a></li>
+  </ul></li>
+  <li><a href="#query-execution-and-ranking" id="toc-query-execution-and-ranking" class="nav-link" data-scroll-target="#query-execution-and-ranking">Query Execution and Ranking</a></li>
+  <li><a href="#orthographic-query-correction" id="toc-orthographic-query-correction" class="nav-link" data-scroll-target="#orthographic-query-correction">Orthographic Query Correction</a></li>
+  <li><a href="#semantic-query-expansion" id="toc-semantic-query-expansion" class="nav-link" data-scroll-target="#semantic-query-expansion">Semantic Query Expansion</a></li>
+  <li><a href="#programmatic-project-lifecycle" id="toc-programmatic-project-lifecycle" class="nav-link" data-scroll-target="#programmatic-project-lifecycle">Programmatic Project Lifecycle</a></li>
+  <li><a href="#empirical-benchmark-analysis" id="toc-empirical-benchmark-analysis" class="nav-link" data-scroll-target="#empirical-benchmark-analysis">Empirical Benchmark Analysis</a>
+  <ul class="collapse">
+  <li><a href="#performance-observations" id="toc-performance-observations" class="nav-link" data-scroll-target="#performance-observations">Performance Observations</a></li>
+  </ul></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default">
+<div class="quarto-title">
+<h1 class="title">Multilingual Paragraph Search over Books and Wikipedia</h1>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<p>This tutorial applies full-text retrieval to corpora in several languages. The <a href="../tutorials/getting-started.html">Getting Started</a> tutorial uses one novel in English; this one indexes three corpora:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 20%">
+<col style="width: 20%">
+<col style="width: 20%">
+<col style="width: 20%">
+<col style="width: 20%">
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: left;">Corpus Identifier</th>
+<th style="text-align: left;">Source Collection</th>
+<th style="text-align: left;">Language</th>
+<th style="text-align: left;">Volume</th>
+<th style="text-align: left;">Retrieval Unit</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;"><code>gutenberg-en</code></td>
+<td style="text-align: left;">Project Gutenberg</td>
+<td style="text-align: left;">English</td>
+<td style="text-align: left;">100 volumes</td>
+<td style="text-align: left;">Paragraph</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>gutenberg-es</code></td>
+<td style="text-align: left;">Project Gutenberg</td>
+<td style="text-align: left;">Spanish</td>
+<td style="text-align: left;">100 volumes</td>
+<td style="text-align: left;">Paragraph</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>wikipedia-en</code></td>
+<td style="text-align: left;">Wikipedia (2023-11-01 dump)</td>
+<td style="text-align: left;">English</td>
+<td style="text-align: left;">1,000 articles</td>
+<td style="text-align: left;">Paragraph</td>
+</tr>
+</tbody>
+</table>
+<section id="motivation-for-paragraph-level-granularity" class="level3">
+<h3 class="anchored" data-anchor-id="motivation-for-paragraph-level-granularity">Motivation for Paragraph-Level Granularity</h3>
+<p>Indexing a long document, such as a complete book or an encyclopedia article, as a single unit reduces precision. A long document covers several topics, and the document frequency of a term carries little information when most terms of the vocabulary occur in almost every document. A <strong>paragraph</strong> is a shorter unit, restricted to one topic, and is therefore appropriate both for matching a query and for fitting a text model.</p>
+<hr>
+</section>
+<section id="dataset-preparation" class="level2">
+<h2 class="anchored" data-anchor-id="dataset-preparation">Dataset Preparation</h2>
+<p>The datasets and the text profiles used in this tutorial are produced by <code>tutorials/prepare.jl</code>. The script downloads texts in the public domain, divides them into paragraphs, fits the text profiles, and indexes the corpora:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode sh code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Complete build (approximately one hour)</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">-t</span> 8 <span class="at">--project</span><span class="op">=</span>tutorials tutorials/prepare.jl</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="co"># Reduced build, for verification (approximately five minutes)</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">-t</span> 8 <span class="at">--project</span><span class="op">=</span>tutorials tutorials/prepare.jl <span class="at">--smoke</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Each stage (<code>corpora</code>, <code>profiles</code>, <code>projects</code>) writes its result to disk, so a later execution repeats only the stages that are missing. A single stage can also be requested by name, and <code>--force</code> rebuilds it: <code>julia -t 8 --project=tutorials tutorials/prepare.jl projects --force</code>.</p>
+<p>The times reported in this page were measured with 8 threads. Indexing uses them, so a different number of threads changes the values in the last table.</p>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Note</span>Quarto Rendering Configuration
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>When rendering this manual via Quarto on systems where <code>/run/user/$UID</code> is restricted, configure a custom runtime directory:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode sh code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="va">XDG_RUNTIME_DIR</span><span class="op">=</span><span class="va">$(</span><span class="fu">mktemp</span> <span class="at">-d</span><span class="va">)</span> <span class="ex">quarto</span> render manual</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+</div>
+<hr>
+</section>
+<section id="corpus-statistics" class="level2">
+<h2 class="anchored" data-anchor-id="corpus-statistics">Corpus Statistics</h2>
+<div id="4" class="cell" data-execution_count="1">
+<div class="cell-output cell-output-display" data-execution_count="1">
+<pre><code>true</code></pre>
+</div>
+</div>
+<p>The preparation script generates one JSONL file per corpus, recording structural measurements dynamically:</p>
+<div id="6" class="cell" data-execution_count="1">
+<div class="cell-output cell-output-display" data-execution_count="1">
+<div class="markdown">
+<table class="caption-top table table-sm table-striped small">
+<tbody>
+<tr class="odd">
+<th style="text-align: left;" data-quarto-table-cell-role="th">Corpus</th>
+<th style="text-align: left;" data-quarto-table-cell-role="th">Language</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Documents</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Paragraphs</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Paragraphs / Document</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Storage Size</th>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>gutenberg-en</code></td>
+<td style="text-align: left;">en</td>
+<td style="text-align: right;">100</td>
+<td style="text-align: right;">265,424</td>
+<td style="text-align: right;">2654.2</td>
+<td style="text-align: right;">120.1 MB</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>gutenberg-es</code></td>
+<td style="text-align: left;">es</td>
+<td style="text-align: right;">100</td>
+<td style="text-align: right;">216,247</td>
+<td style="text-align: right;">2162.5</td>
+<td style="text-align: right;">89.2 MB</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>wikipedia-en</code></td>
+<td style="text-align: left;">en</td>
+<td style="text-align: right;">1,000</td>
+<td style="text-align: right;">41,279</td>
+<td style="text-align: right;">41.3</td>
+<td style="text-align: right;">30.2 MB</td>
+</tr>
+</tbody>
+</table>
+
+</div>
+</div>
+</div>
+<section id="statistical-observations" class="level3">
+<h3 class="anchored" data-anchor-id="statistical-observations">Statistical Observations</h3>
+<ol type="1">
+<li><strong>Variation in the length of encyclopedia articles</strong>: a long Wikipedia article contains many more paragraphs than a short entry.</li>
+<li><strong>Variation in the length of books</strong>: in the Project Gutenberg collections, the size of a volume ranges from a short pamphlet to a work in several volumes. Indexing by paragraph gives units of comparable size for documents of any length.</li>
+</ol>
+<p>Each JSONL record contains the text of one paragraph and the metadata of its source:</p>
+<div id="8" class="cell" data-execution_count="1">
+<div class="cell-output cell-output-stdout">
+<pre><code>Metadata Keys: doc_id, text, source, lang, book_id, title, author, paragraph
+
+Document ID:   gutenberg-es-61851-p1
+Title / Author: El crimen y el castigo — Dostoyevsky, Fyodor
+Text Preview:  Se ha respetado la ortografía y la acentuación del original.…</code></pre>
+</div>
+</div>
+<hr>
+</section>
+</section>
+<section id="linguistic-profiles-textprofile" class="level2">
+<h2 class="anchored" data-anchor-id="linguistic-profiles-textprofile">Linguistic Profiles (<code>TextProfile</code>)</h2>
+<p>A text project requires a <a href="https://sadit.github.io/TextSearch.jl/dev/api/"><code>TextProfile</code></a>, which defines the tokenization of the vocabulary, the term weighting, the stopword list, the lemma map, and the query-expansion network.</p>
+<p>The preparation script fits the profiles with the procedure of <code>TextSearch.jl</code> (<code>textsearch fit</code>). That procedure applies Latent Semantic Indexing (LSI) to obtain word embeddings, and builds the query-expansion structures from them.</p>
+<section id="normalization-policy-preserving-case-and-diacritics" class="level3">
+<h3 class="anchored" data-anchor-id="normalization-policy-preserving-case-and-diacritics">Normalization Policy: Preserving Case and Diacritics</h3>
+<p>The corpora are processed under the following normalization configuration:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode toml code-with-copy"><code class="sourceCode toml"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">[normalization]</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="dt">del_diac</span> <span class="op">=</span> <span class="cn">false</span>      <span class="co"># Preserve diacritical marks (e.g., accents)</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="dt">lc</span> <span class="op">=</span> <span class="cn">false</span>            <span class="co"># Preserve character casing</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="dt">del_punc</span> <span class="op">=</span> <span class="cn">true</span>       <span class="co"># Remove punctuation marks</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="dt">group_num</span> <span class="op">=</span> <span class="cn">true</span>      <span class="co"># Normalize numeric sequences</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="dt">group_url</span> <span class="op">=</span> <span class="cn">true</span>      <span class="co"># Normalize URL strings</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Preserving case and diacritics preserves distinctions in meaning, for example between a proper noun and a common noun, or between two words of a Romance language that differ only in an accent. The query is resolved against this vocabulary, and a query written without accents is mapped to the accented form at search time.</p>
+<div id="10" class="cell" data-execution_count="1">
+<div class="cell-output cell-output-display" data-execution_count="1">
+<div class="markdown">
+<table class="caption-top table table-sm table-striped small">
+<tbody>
+<tr class="odd">
+<th style="text-align: left;" data-quarto-table-cell-role="th">Profile</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Vocabulary Size</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Stopwords</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Lemmas</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Expansion Entries</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Fit Time</th>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>gutenberg-en</code></td>
+<td style="text-align: right;">136,716</td>
+<td style="text-align: right;">9 <em>(applied)</em></td>
+<td style="text-align: right;">28,465</td>
+<td style="text-align: right;">136,716</td>
+<td style="text-align: right;">265s</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>gutenberg-es</code></td>
+<td style="text-align: right;">337,336</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">83,792</td>
+<td style="text-align: right;">337,336</td>
+<td style="text-align: right;">476s</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>wikipedia-en</code></td>
+<td style="text-align: right;">139,776</td>
+<td style="text-align: right;">18 <em>(applied)</em></td>
+<td style="text-align: right;">23,186</td>
+<td style="text-align: right;">139,776</td>
+<td style="text-align: right;">129s</td>
+</tr>
+</tbody>
+</table>
+
+</div>
+</div>
+</div>
+</section>
+<section id="applied-vs.-carried-artifacts" class="level3">
+<h3 class="anchored" data-anchor-id="applied-vs.-carried-artifacts">Applied vs.&nbsp;Carried Artifacts</h3>
+<p>A fitted profile stores its lemma clusters and its expansion network, and does not apply them by default. Applying one of them modifies the tokenization, and the project configuration selects it explicitly. The stopwords are marked as applied because the vocabulary frequencies were computed with the stopwords removed.</p>
+<p>The profile records its origin and the parameters used to fit it:</p>
+<div id="12" class="cell" data-execution_count="1">
+<div class="cell-output cell-output-stdout">
+<pre><code>TextProfile: base
+  fit(doc_freq_threshold=0.5, encoder=lsi, outdim=128, scaling=none, source_path=, trainsize=41279)
+  stopwords: 18 (applied)
+  lemmas: 23186 (carried)
+  query_expansion: 139776 (carried), with distances
+  VectorModel:
+    global_weighting: TextSearch.IdfWeighting()
+    local_weighting: TextSearch.TfWeighting()
+    maxoccs: 33158
+    Vocabulary:
+      vocsize: 139776
+      trainsize: 41279
+      numtokens: 2898621
+      avgdoclen: 70.2202330482812
+      TextConfig:
+        NormalizationConfig:
+            del_diac: false
+            del_dup: false
+            del_punc: true
+            group_num: true
+            group_url: true
+            group_usr: false
+            group_emo: false
+            lc: false
+            re_user: r"@[^;:,.@#&amp;\\\-\"'/:\*\(\)\[\]\¿\?\¡\!\{\}~\&lt;\&gt;\|\s]+"
+            re_url: r"(http|ftp|https)://\S+"
+            re_num: r"[-+]?(\d+\.?\d*)|(\.\d+)"
+            emojis: 3923 emoji chars
+        TokenizationConfig:
+            nlist: Int8[1]
+            mark_token_type: true
+            generators: TextSearch.Tokenizer.AbstractTokenGenerator[]
+        pipeline: TokenPipeline(lemmas=nothing, stopwords=18 tokens)
+        language: unknown</code></pre>
+</div>
+</div>
+<hr>
+</section>
+</section>
+<section id="query-execution-and-ranking" class="level2">
+<h2 class="anchored" data-anchor-id="query-execution-and-ranking">Query Execution and Ranking</h2>
+<p>Search queries evaluate against the indexed BM25 inverted files:</p>
+<div id="16" class="cell" data-execution_count="1">
+<div class="cell-output cell-output-stdout">
+<pre><code>[gutenberg-en] Query: the whale rose out of the sea
+  1. Moby Dick; Or, The Whale                   | Distance: -74.805
+     Secondly: It is well known in the Sperm Whale Fishery, however ignorant the world ashore may be of it, that there have been several memorable historic…
+  2. Moby Dick; Or, The Whale                   | Distance: -70.770
+     Throughout the Pacific, and also in Nantucket, and New Bedford, and Sag Harbor, you will come across lively sketches of whales and whaling-scenes, gra…
+  3. Moby Dick; Or, The Whale                   | Distance: -67.435
+     In life, the visible surface of the Sperm Whale is not the least among the many marvels he presents. Almost invariably it is all over obliquely crosse…
+
+[gutenberg-es] Query: Fortunata y Jacinta en Madrid
+  1. La Odisea                                  | Distance: -90.754
+     TEBAS (Θήβη y Θῆβαι):
+  2. La Ilíada                                  | Distance: -90.754
+     TEBAS (Θήβη y Θῆβαι):
+  3. Fortunata y Jacinta: dos historias de casa | Distance: -63.504
+     Doña Lupe la invitó, dos días después de la tarde del choque con Jacinta, a volver a visitar a Mauricia. ¡Qué diría doña Guillermina si no volvían! Ne…
+
+[wikipedia-en] Query: anarchism as a political philosophy
+  1. Anarcho-capitalism                         | Distance: -141.363
+     Anarcho-capitalism Anarchist activists and scholars do not consider anarcho-capitalism as a part of the anarchist movement, arguing that anarchism has…
+  2. Anarcho-capitalism                         | Distance: -134.281
+     Anarcho-capitalism Anarchism In both its social and individualist forms, anarchism is usually considered an anti-capitalist and radical left-wing or f…
+  3. Anarcho-capitalism                         | Distance: -134.086
+     Anarcho-capitalism Rothbard argued that anarcho-capitalism is the only true form of anarchism—the only form of anarchism that could possibly exist in …
+</code></pre>
+</div>
+</div>
+<p>The reported distances are BM25 scores with the sign inverted, which follows the convention of <code>SimilaritySearch.jl</code>: a smaller value indicates a closer match.</p>
+<hr>
+</section>
+<section id="orthographic-query-correction" class="level2">
+<h2 class="anchored" data-anchor-id="orthographic-query-correction">Orthographic Query Correction</h2>
+<p>Because linguistic profiles preserve diacritics, unaccented search terms (e.g., <code>musica</code>) do not match accented vocabulary entries (<code>música</code>) by default.</p>
+<p>Under the default <code>QueryPolicy(correction=:auto)</code>, the query resolution engine identifies unaccented query terms and maps them to their most probable accented vocabulary counterparts:</p>
+<div id="18" class="cell" data-execution_count="1">
+<div class="cell-output cell-output-stdout">
+<pre><code>Query: la musica del corazon
+  ~ musica is in 9 documents against música's 724, so it reads as a misspelling; searched as música (variant), Música (variant) instead
+
+Query: el pais y la republica
+  ~ republica is in 3 documents against República's 307, so it reads as a misspelling; searched as República (variant), república (variant) instead
+</code></pre>
+</div>
+</div>
+<p><code>ftexplain</code> reports the token substitutions that were applied. A query written with correct orthography produces no substitution:</p>
+<div id="20" class="cell" data-execution_count="1">
+<div class="cell-output cell-output-stdout">
+<pre><code>ftexplain output on correctly typed query: String[]</code></pre>
+</div>
+</div>
+<p>To enforce exact literal matching without orthographic correction, set <code>correction=:off</code>:</p>
+<div id="22" class="cell" data-execution_count="1">
+<div class="cell-output cell-output-stdout">
+<pre><code>[gutenberg-es] Query: la musica del corazon
+  1. Diccionario Bagobo-Español                 | Distance: -121.829
+     Pipit ca casócot.--Menudear, repitir la petición.
+  2. Diccionario Bagobo-Español                 | Distance: -94.831
+     Ca-polao.--Letargo, pertubación del jucio.
+
+[gutenberg-es] Query: la musica del corazon
+  1. The Spanish American Reader                | Distance: -134.627
+     [10] =Telegrama=, _telegram_. RELATED WORDS: =Dirección=, _address_; =firma=, _signature_; =telegrama al interior=, =telegrama al exterior= (or =cable…
+  2. Diccionario Bagobo-Español                 | Distance: -121.829
+     Pipit ca casócot.--Menudear, repitir la petición.
+</code></pre>
+</div>
+</div>
+<hr>
+</section>
+<section id="semantic-query-expansion" class="level2">
+<h2 class="anchored" data-anchor-id="semantic-query-expansion">Semantic Query Expansion</h2>
+<p>Query expansion adds to each query term its nearest neighbors in the LSI embedding space:</p>
+<div id="24" class="cell" data-execution_count="1">
+<div class="cell-output cell-output-stdout">
+<pre><code>anarchism      -&gt; anarchist, capitalism, individualist, Individualist, anarcho, anarchists
+philosophy     -&gt; metaphysics, philosophical, epistemology, Immanuel, Sramana, Sramanas
+revolution     -&gt; revolutions, Enlightenment, revolutionary, monde, mentalités, autonomy</code></pre>
+</div>
+</div>
+<p>Query expansion increases recall, because it adds related terms to the query:</p>
+<div id="26" class="cell" data-execution_count="1">
+<div class="cell-output cell-output-stdout">
+<pre><code>[wikipedia-en] Query: anarchism
+  1. Anarcho-capitalism                         | Distance: -124.245
+     Anarcho-capitalism Anarchist activists and scholars do not consider anarcho-capitalism as a part of the anarchist movement, arguing that anarchism has…
+  2. Anarcho-capitalism                         | Distance: -121.518
+     Anarcho-capitalism Classification Anarcho-capitalism developed from radical American anti-state libertarianism and individualist anarchism. A strong c…
+
+[wikipedia-en] Query: anarchism
+  1. Anarchism                                  | Distance: -18.357
+     Anarchism References Explanatory notes Citations General and cited sources Primary sources Secondary sources Tertiary sources Further reading Criticis…
+  2. Anarcho-capitalism                         | Distance: -18.200
+     Anarcho-capitalism See also Agorism Anarcho-capitalism and minarchism Consequentialist libertarianism Counter-economics Creative disruption Crypto-ana…
+</code></pre>
+</div>
+</div>
+<hr>
+</section>
+<section id="programmatic-project-lifecycle" class="level2">
+<h2 class="anchored" data-anchor-id="programmatic-project-lifecycle">Programmatic Project Lifecycle</h2>
+<p>The following example performs the complete sequence over a subset of one corpus:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb13"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="co"># 1. Ingest slice of paragraph records</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>slice <span class="op">=</span> <span class="fu">map</span>(<span class="bu">Iterators</span>.<span class="fu">take</span>(<span class="fu">eachline</span>(<span class="fu">corpus_file</span>(<span class="st">"gutenberg-en"</span>)), <span class="fl">2000</span>)) <span class="cf">do</span> line</span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>    o <span class="op">=</span> JSON3.<span class="fu">read</span>(line)</span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>    meta <span class="op">=</span> <span class="fu">Dict</span><span class="dt">{String,Any}</span>(<span class="fu">String</span>(k) <span class="op">=&gt;</span> v <span class="cf">for</span> (k, v) <span class="kw">in</span> <span class="fu">pairs</span>(o) <span class="cf">if</span> k <span class="op">!==</span> <span class="op">:</span>text <span class="op">&amp;&amp;</span> k <span class="op">!==</span> <span class="op">:</span>doc_id)</span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>    SSE.<span class="fu">TextItem</span>(<span class="fu">String</span>(o.text); doc_id<span class="op">=</span><span class="fu">String</span>(o.doc_id), meta)</span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="co"># 2. Create project using a pre-computed BaseProfile</span></span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a>workdir <span class="op">=</span> <span class="fu">mktempdir</span>()</span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a>h <span class="op">=</span> SSE.<span class="fu">create_project</span>(workdir, <span class="st">"sample_project"</span>;</span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a>        engine    <span class="op">=</span> SSE.FullTextEngine,</span>
+<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a>        backend   <span class="op">=</span> TextSearch.BM25InvertedFile,</span>
+<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a>        textmodel <span class="op">=</span> SSE.<span class="fu">BaseProfile</span>(profiles[<span class="st">"gutenberg-en"</span>]))</span>
+<span id="cb13-14"><a href="#cb13-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-15"><a href="#cb13-15" aria-hidden="true" tabindex="-1"></a><span class="co"># 3. Stage items (durable on disk, pending indexing)</span></span>
+<span id="cb13-16"><a href="#cb13-16" aria-hidden="true" tabindex="-1"></a>SSE.<span class="fu">append_items!</span>(h, slice)</span>
+<span id="cb13-17"><a href="#cb13-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-18"><a href="#cb13-18" aria-hidden="true" tabindex="-1"></a><span class="co"># 4. Construct inverted file postings over staged backlog</span></span>
+<span id="cb13-19"><a href="#cb13-19" aria-hidden="true" tabindex="-1"></a><span class="fu">quiet</span>() <span class="cf">do</span></span>
+<span id="cb13-20"><a href="#cb13-20" aria-hidden="true" tabindex="-1"></a>    SSE.<span class="fu">index!</span>(h)</span>
+<span id="cb13-21"><a href="#cb13-21" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span>
+<span id="cb13-22"><a href="#cb13-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-23"><a href="#cb13-23" aria-hidden="true" tabindex="-1"></a><span class="co"># 5. Execute full-text query</span></span>
+<span id="cb13-24"><a href="#cb13-24" aria-hidden="true" tabindex="-1"></a>results <span class="op">=</span> SSE.<span class="fu">ftsearch</span>(h, <span class="st">"the whale"</span>, <span class="fl">3</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<hr>
+</section>
+<section id="empirical-benchmark-analysis" class="level2">
+<h2 class="anchored" data-anchor-id="empirical-benchmark-analysis">Empirical Benchmark Analysis</h2>
+<p>The following table reports the construction and indexing times measured over the three corpora:</p>
+<div id="28" class="cell" data-execution_count="1">
+<div class="cell-output cell-output-display" data-execution_count="1">
+<div class="markdown">
+<table class="caption-top table table-sm table-striped small">
+<tbody>
+<tr class="odd">
+<th style="text-align: left;" data-quarto-table-cell-role="th">Project</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Paragraphs</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Vocabulary</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Create (s)</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Append (s)</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Index (s)</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Indexing Latency (ms/doc)</th>
+<th style="text-align: right;" data-quarto-table-cell-role="th">Disk Footprint</th>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>gutenberg-en</code></td>
+<td style="text-align: right;">265,424</td>
+<td style="text-align: right;">136,716</td>
+<td style="text-align: right;">1s</td>
+<td style="text-align: right;">4s</td>
+<td style="text-align: right;">22s</td>
+<td style="text-align: right;">0.08</td>
+<td style="text-align: right;">102 MB</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>gutenberg-es</code></td>
+<td style="text-align: right;">216,247</td>
+<td style="text-align: right;">337,336</td>
+<td style="text-align: right;">2s</td>
+<td style="text-align: right;">3s</td>
+<td style="text-align: right;">15s</td>
+<td style="text-align: right;">0.07</td>
+<td style="text-align: right;">91 MB</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>wikipedia-en</code></td>
+<td style="text-align: right;">41,279</td>
+<td style="text-align: right;">139,776</td>
+<td style="text-align: right;">1s</td>
+<td style="text-align: right;">1s</td>
+<td style="text-align: right;">5s</td>
+<td style="text-align: right;">0.13</td>
+<td style="text-align: right;">32 MB</td>
+</tr>
+</tbody>
+</table>
+
+</div>
+</div>
+</div>
+<section id="performance-observations" class="level3">
+<h3 class="anchored" data-anchor-id="performance-observations">Performance Observations</h3>
+<ul>
+<li><strong>Cost of persistence</strong>: writing each document to RocksDB adds little time compared with an indexing loop in memory, and the data survive an interruption of the process.</li>
+<li><strong>Compilation time</strong>: the first execution in Julia includes the compilation of the code. Later batches show the rate of the compiled code.</li>
+<li><strong>Storage of the profile</strong>: creating a project with a fitted profile writes that profile into the RocksDB store of the project, so the project can be copied to another machine without additional files.</li>
+<li><strong>Storage of the index</strong>: a text project stores the inverted index, so opening it does not index the corpus again. The <a href="../architecture.html">architecture guide</a> reports the difference: 1.4 s against 20.4 s for the largest of these corpora.</li>
+</ul>
+
+
+</section>
+</section>
+
+</main> <!-- /main -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp("https:\/\/sadit\.github\.io\/SimilaritySearchEngine\.jl\/");
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+</div> <!-- /content -->
+
+
+
+
+</body></html>
