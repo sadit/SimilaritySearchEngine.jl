@@ -513,6 +513,9 @@ function handle_create_dataset(req::HTTP.Request, app::AppState)
     index_type = get(data, "index_type", get(data, "index_kind", "searchgraph"))
     distance = get(data, "distance", "L2")
     dimension = get(data, "dimension", nothing)
+    edit_correction = get(data, "edit_correction", false)
+    edit_correction isa Bool ||
+        return json_response(400, Dict("error" => "'edit_correction' must be true or false"))
 
     engine_type, backend_type = try
         parse_index_kind(index_type)
@@ -535,7 +538,7 @@ function handle_create_dataset(req::HTTP.Request, app::AppState)
                 engine=engine_type, backend=backend_type, maxbatches=app.batch_cap,
                 distance=parse_distance(distance),
                 dimension=dimension === nothing ? nothing : Int(dimension),
-                textmodel=default_textmodel(engine_type), meta_schema=declared)
+                textmodel=default_textmodel(engine_type), meta_schema=declared, edit_correction)
         end
     catch e
         e isa SSE.EngineError || rethrow()
@@ -544,7 +547,8 @@ function handle_create_dataset(req::HTTP.Request, app::AppState)
 
     descriptor = Dict(
         "id" => id, "index_kind" => index_type, "distance" => distance, "created_at" => string(now(UTC)),
-        "join_group" => join_group, "holds_metadata" => holds_metadata, "key" => key
+        "join_group" => join_group, "holds_metadata" => holds_metadata, "key" => key,
+        "edit_correction" => edit_correction
     )
     write(descriptor_path(app, id), JSON3.write(descriptor))
 
@@ -574,7 +578,12 @@ function _reload_one_dataset!(app::AppState, id::String)
     # and all. This used to rebuild an *empty* engine of the right type and, if a JLD2 snapshot
     # happened to be lying next to it, load that instead: a reopened dataset came back without
     # its contents unless someone had remembered to snapshot it.
-    handle = SSE.open_project(datasets_root(app), id; maxbatches=app.batch_cap)
+    #
+    # `edit_correction` is the exception: the engine does not persist it, because it is decided
+    # at each open, so this sidecar is where a dataset keeps it. A descriptor written before the
+    # field existed has no entry, and reads as `false`.
+    handle = SSE.open_project(datasets_root(app), id; maxbatches=app.batch_cap,
+                             edit_correction=get(descriptor, "edit_correction", false) === true)
     lock(app.lock) do
         app.handles[id] = handle
     end
@@ -666,9 +675,39 @@ the deliberate counterpart to `reload_datasets!`'s cold-start skip-if-already-lo
 guard. Closes the current in-memory handle first if `id` happens to still be loaded (so
 this also works as a plain "refresh this dataset's engine from its snapshot" op, not only
 after an explicit `unload`). `404` if `id` has no `descriptor.json` on disk at all.
+
+The body is optional. `{"edit_correction": true}` or `false` changes that setting of a text
+dataset: it is written to `descriptor.json` and the dataset is reopened with it. A value
+that is not a boolean, or `true` for a dataset that does not hold text, is a `400`, and the
+dataset stays loaded as it was.
 """
 function handle_reload_dataset(req::HTTP.Request, app::AppState, id::String)
     valid_project_id(id) || return json_response(400, Dict("error" => "invalid dataset id"))
+
+    body = String(req.body)
+    data = isempty(body) ? Dict{String, Any}() : JSON3.read(body, Dict{String, Any})
+    if haskey(data, "edit_correction")
+        edit_correction = data["edit_correction"]
+        edit_correction isa Bool ||
+            return json_response(400, Dict("error" => "'edit_correction' must be true or false"))
+        dpath = descriptor_path(app, id)
+        isfile(dpath) || return json_response(404, Dict("error" => "dataset_not_found"))
+        descriptor = JSON3.read(read(dpath, String), Dict{String, Any})
+        # Checked here, before the loaded handle is closed: the engine would refuse it too, but
+        # only on the reopen, which would leave the dataset unloaded.
+        engine_type, _ = try
+            parse_index_kind(get(descriptor, "index_kind", "searchgraph"))
+        catch e
+            e isa SSE.UnknownBackend || rethrow()
+            return engine_error_response(e)
+        end
+        if edit_correction && engine_type !== SSE.FullTextEngine
+            return json_response(400, Dict("error" => "'edit_correction' only applies to a text dataset; " *
+                                                      "'$id' is $(descriptor["index_kind"])"))
+        end
+        descriptor["edit_correction"] = edit_correction
+        write(dpath, JSON3.write(descriptor))
+    end
 
     if haskey(app.handles, id)
         lock(app.lock) do
@@ -706,6 +745,7 @@ function dataset_descriptor(app::AppState, id::String)
     get!(base, "holds_metadata", false)
     get!(base, "key", nothing)
     get!(base, "beamsearch_baseline", nothing)
+    get!(base, "edit_correction", false)
 
     loaded = haskey(app.handles, id)
     base["loaded"] = loaded

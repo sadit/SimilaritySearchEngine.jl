@@ -51,5 +51,19 @@ using JSON3
         results = JSON3.read(String(resp.body)).results
         @test length(results) == 9
         @test !any(r -> r._id == 6, results)
+
+        # A text dataset's `edit_correction` lives in its descriptor, and the bundle carries it.
+        resp = HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "dump_edits_ds",
+                         "index_type" => "bm25_invfile", "edit_correction" => true)))
+        @test resp.status == 201
+        @test HTTP.post("$base_url/datasets/dump_edits_ds/append", [], JSON3.write(Dict("items" => docs))).status == 200
+        @test HTTP.post("$base_url/admin/datasets/dump_edits_ds/unload", [], "").status == 200
+        edits_bundle = joinpath(workdir, "dump_edits_bundle")
+        @test success(`julia --project=$proj $cli_script dump --dataset dump_edits_ds --workdir $workdir --output $edits_bundle`)
+        @test success(`julia --project=$proj $cli_script load --bundle $edits_bundle --dataset dump_edits_restored --workdir $workdir`)
+        @test HTTP.post("$base_url/admin/datasets/dump_edits_restored/reload", [], "").status == 200
+        detail = JSON3.read(String(HTTP.get("$base_url/datasets/dump_edits_restored").body))
+        @test detail.loaded == true
+        @test detail.edit_correction == true
     end
 end

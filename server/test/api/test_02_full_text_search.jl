@@ -89,5 +89,51 @@ using JSON3
         end
         @test resp.status == 409
         @test JSON3.read(String(resp.body)).kind == "NotTrained"
+
+        # 6. edit_correction: a query token that the vocabulary lacks is corrected to the only
+        # vocabulary token at edit distance 1 from it. `Frankenstien` exchanges two letters of
+        # `Frankenstein`, which no case or diacritic fold reaches.
+        status(f) = try f().status catch e; e.response.status end
+        typo = JSON3.write(Dict("text" => "Frankenstien", "k" => 10))
+        hits(id) = JSON3.read(HTTP.post("$base_url/datasets/$id/ftsearch", [], typo).body).results
+
+        # Off by default, and reported as off.
+        @test isempty(hits("lexical_ds"))
+        @test JSON3.read(HTTP.get("$base_url/datasets/lexical_ds").body).edit_correction == false
+
+        resp = HTTP.post("$base_url/datasets", [],
+                         JSON3.write(Dict("id" => "lexical_edits", "index_type" => "bm25_invfile",
+                                          "edit_correction" => true)))
+        @test resp.status == 201
+        @test HTTP.post("$base_url/datasets/lexical_edits/append", [], append_body).status == 200
+        @test !isempty(hits("lexical_edits"))
+        @test JSON3.read(HTTP.get("$base_url/datasets/lexical_edits").body).edit_correction == true
+
+        # The descriptor keeps it, so a plain reload opens the dataset with it again.
+        reload(id, body="") = HTTP.post("$base_url/admin/datasets/$id/reload", [], body)
+        @test reload("lexical_edits").status == 200
+        @test !isempty(hits("lexical_edits"))
+
+        # A reload with a body changes it.
+        @test reload("lexical_edits", JSON3.write(Dict("edit_correction" => false))).status == 200
+        @test isempty(hits("lexical_edits"))
+        @test JSON3.read(HTTP.get("$base_url/datasets/lexical_edits").body).edit_correction == false
+        @test reload("lexical_edits", JSON3.write(Dict("edit_correction" => true))).status == 200
+        @test !isempty(hits("lexical_edits"))
+
+        # Refused for a dataset without text, at creation and at reload. The refused reload
+        # leaves the dataset loaded.
+        @test status(() -> HTTP.post("$base_url/datasets", [],
+                JSON3.write(Dict("id" => "dense_edits", "index_type" => "searchgraph",
+                                 "edit_correction" => true)))) == 400
+        @test HTTP.post("$base_url/datasets", [],
+                JSON3.write(Dict("id" => "dense_plain", "index_type" => "searchgraph"))).status == 201
+        @test status(() -> reload("dense_plain", JSON3.write(Dict("edit_correction" => true)))) == 400
+        @test JSON3.read(HTTP.get("$base_url/datasets/dense_plain").body).loaded == true
+        # Only a boolean is accepted.
+        @test status(() -> HTTP.post("$base_url/datasets", [],
+                JSON3.write(Dict("id" => "lexical_bad", "index_type" => "bm25_invfile",
+                                 "edit_correction" => "yes")))) == 400
+        @test status(() -> reload("lexical_edits", JSON3.write(Dict("edit_correction" => 1)))) == 400
     end
 end

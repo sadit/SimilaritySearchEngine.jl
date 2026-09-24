@@ -638,6 +638,7 @@ function execute_dump(cmd_args::Dict)
         "join_group" => descriptor === nothing ? nothing : get(descriptor, "join_group", nothing),
         "holds_metadata" => descriptor === nothing ? false : get(descriptor, "holds_metadata", false),
         "key" => descriptor === nothing ? nothing : get(descriptor, "key", nothing),
+        "edit_correction" => descriptor === nothing ? false : get(descriptor, "edit_correction", false),
         "record_count" => length(records),
         "dumped_at" => string(now(UTC)),
     )
@@ -757,6 +758,7 @@ function execute_load(cmd_args::Dict)
         "join_group" => get(manifest, "join_group", nothing),
         "holds_metadata" => get(manifest, "holds_metadata", false),
         "key" => get(manifest, "key", nothing),
+        "edit_correction" => get(manifest, "edit_correction", false),
     )
     write(joinpath(target_path, "descriptor.json"), JSON3.write(descriptor))
 

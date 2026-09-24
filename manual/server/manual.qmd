@@ -99,14 +99,16 @@ is read through `GET /api/v1/datasets/{id}/log`.
 ### Datasets
 
 - `POST /api/v1/datasets` — creates one. Accepts `id`, `index_kind` (see section 3),
-  `distance`, `dimension`, the join-group fields `join_group`, `holds_metadata`, `key`, and
-  an optional `meta_schema`. Answers `201`.
+  `distance`, `dimension`, the join-group fields `join_group`, `holds_metadata`, `key`, an
+  optional `meta_schema`, and `edit_correction` for a text dataset. Answers `201`.
 - `GET /api/v1/datasets?offset=&limit=` — every dataset on disk, loaded or not.
 - `GET /api/v1/datasets/{id}` — one of them.
 - `DELETE /api/v1/datasets/{id}` — destroys it.
 - `POST /api/v1/admin/datasets/{id}/unload` and `/reload` — closes or reopens a dataset
   without restarting the server. The `rebuild` subcommand of the command line requires this,
-  because the RocksDB write lock is exclusive per process.
+  because the RocksDB write lock is exclusive per process. `/reload` accepts an optional body
+  `{"edit_correction": true}` or `false`, which changes that setting and reopens the dataset
+  with it.
 
 ```json
 POST /api/v1/datasets          {"status":"created","id":"ds"}
@@ -118,7 +120,7 @@ GET /api/v1/datasets/{id}
 {"id":"ds", "index_kind":"searchgraph", "distance":"L2",
  "created_at":"2026-09-14T19:41:57.059", "loaded":true,
  "doc_count":5, "tombstone_count":0, "tombstone_ratio":0,
- "join_group":null, "holds_metadata":false, "key":null,
+ "join_group":null, "holds_metadata":false, "key":null, "edit_correction":false,
  "meta_schema":[{"name":"year","type":"int64"}],
  "beamsearch_baseline":{"bsize":4,"delta":1,"maxvisits":1000000}}
 ```
@@ -145,6 +147,24 @@ declared fields are not indexed; what the declaration changes is that a filter c
 the declared type, so a `timestamp` is compared as an instant rather than as the text that
 stores it. The engine holds the declaration inside the project, which is why it survives a
 restart and travels with `dump`.
+
+`edit_correction` applies to a text dataset (`bm25_invfile` or `invfile`). When it is `true`,
+`ftsearch` corrects a query token that is absent from the vocabulary to the only vocabulary
+token at Damerau-Levenshtein distance 1 from it. For example, `Frankenstien` is searched as
+`Frankenstein`. The Damerau-Levenshtein distance counts insertions, deletions, substitutions
+and exchanges of two adjacent letters. If two or more vocabulary tokens are at distance 1, the
+query token is not replaced.
+
+The default is `false` because the correction has a cost. The server builds an edit index from
+the vocabulary each time it opens the dataset: at startup, and at each `/reload`. Measured on
+2026-09-24 over a vocabulary of 730,320 tokens, building it took 1.2 s with 64 threads and 5.0
+s with one thread, and it used 81 MiB. A query with one token absent from the vocabulary took
+18.7 ms to resolve instead of 7.3 µs. A query whose tokens are all in the vocabulary is not
+slower.
+
+The value is stored in `descriptor.json`, next to the project, and it travels with `dump` and
+`load`. `true` for a dataset that does not hold text is refused with `400`, at creation and at
+`/reload`; a refused `/reload` leaves the dataset loaded as it was.
 
 - `GET /api/v1/datasets/{id}/join_group` — the datasets tagged with the same `join_group`.
 
