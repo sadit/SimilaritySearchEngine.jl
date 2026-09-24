@@ -113,6 +113,9 @@ function build_settings()
         "--workdir"
             help = "Working directory for the database"
             default = "data"
+        "--edit-correction"
+            help = "Text dataset only: replace a query token absent from the vocabulary with the only vocabulary token at edit distance 1"
+            action = :store_true
     end
 
     @add_arg_table! s["allknn"] begin

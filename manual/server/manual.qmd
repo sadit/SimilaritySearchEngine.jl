@@ -166,6 +166,10 @@ The value is stored in `descriptor.json`, next to the project, and it travels wi
 `load`. `true` for a dataset that does not hold text is refused with `400`, at creation and at
 `/reload`; a refused `/reload` leaves the dataset loaded as it was.
 
+The command line has the same option for a batch of queries:
+`similarity-search searchbatch --edit-correction`. It does not read `descriptor.json`: the
+flag decides it for that run. On a dataset without text the command exits with code 2.
+
 - `GET /api/v1/datasets/{id}/join_group` — the datasets tagged with the same `join_group`.
 
 ```json

@@ -24,5 +24,25 @@ using JSON3
     @test length(parsed.ids) > 0
 
     rm(out_file, force=true)
+
+    # --edit-correction, on a text dataset: `Frankenstien` exchanges two letters of
+    # `Frankenstein`, which the vocabulary holds and no case or diacritic fold reaches.
+    cmd_build_lex = `julia --project=$proj $cli_script build --dataset lex_ds --input $data_path --index-kind bm25_invfile --workdir $workdir`
+    @test success(cmd_build_lex)
+    typo_queries = tempname()
+    write(typo_queries, JSON3.write(Dict("text" => "Frankenstien")) * "\n")
+    searched(flags...) = begin
+        out = tempname()
+        ok = success(`julia --project=$proj $cli_script searchbatch --dataset lex_ds --queries $typo_queries --output $out --k 5 --workdir $workdir $flags`)
+        ok ? JSON3.read(only(readlines(out))).ids : nothing
+    end
+    @test isempty(searched())
+    @test !isempty(searched("--edit-correction"))
+
+    # A dataset without text refuses it with the exit code of an invalid request.
+    proc = run(ignorestatus(`julia --project=$proj $cli_script searchbatch --dataset test_ds --queries $data_path --output $(tempname()) --k 5 --workdir $workdir --edit-correction`))
+    @test proc.exitcode == 2
+
+    rm(typo_queries, force=true)
     rm(workdir, force=true, recursive=true)
 end

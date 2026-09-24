@@ -82,7 +82,7 @@ macro cli_engine_call(expr)
 end
 
 """
-    _open_handle(project_id, workdir; read_only=false) -> Union{Nothing, SSE.EmbeddedEngine}
+    _open_handle(project_id, workdir; read_only=false, edit_correction=false) -> Union{Nothing, SSE.EmbeddedEngine}
 
 Reopens a dataset by id, whichever of this codebase's two layouts it lives under --
 `<workdir>/datasets/<id>` for one created over HTTP, `<workdir>/<id>` for one built by the
@@ -94,10 +94,10 @@ that file was a second and older copy of state that already had a place to live,
 that ran before a snapshot had been written failed with "snapshot not found". The functions
 that wrote and read it were removed on 2026-09-13, together with the `JLD2` dependency.
 """
-function _open_handle(project_id::String, workdir::String; read_only::Bool=false)
+function _open_handle(project_id::String, workdir::String; read_only::Bool=false, edit_correction::Bool=false)
     for root in (joinpath(workdir, "datasets"), workdir)
         isdir(joinpath(root, project_id)) || continue
-        return SSE.open_project(root, project_id; read_only)
+        return SSE.open_project(root, project_id; read_only, edit_correction)
     end
     println("Error: dataset '$project_id' not found under $workdir")
     return nothing
@@ -275,7 +275,11 @@ function execute_searchbatch(cmd_args::Dict)
 
     # Read-only: a heavy job runs as a subprocess and the server may still hold this
     # project open for writing, and RocksDB's write lock is exclusive per process.
-    handle = _open_handle(project_id, workdir; read_only=true)
+    # `edit_correction` is refused by the engine for a dataset without text, which is an
+    # engine error and exits with its code.
+    handle = @cli_engine_call _open_handle(project_id, workdir; read_only=true,
+                                           edit_correction=get(cmd_args, "edit-correction", false))
+    handle isa Cint && return handle
     handle === nothing && return 1
     kind = SSE.payload_kind(handle.engine)
 

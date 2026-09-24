@@ -79,6 +79,15 @@ using JSON3
     @test occursin("--workdir /tmp/custom", formatted)
     @test !occursin("--distance", formatted) # L2 is still the default, stays omitted
 
+    # A `:store_true` flag is printed without a value, and omitted while it is false.
+    search_fields = SimilaritySearchServer._command_fields(settings, "searchbatch")
+    search_args = Dict{String, Any}("dataset" => "x", "queries" => "q.jsonl", "output" => "o.jsonl",
+                                    "k" => 10, "workdir" => "data", "edit-correction" => true)
+    @test SimilaritySearchServer._format_invocation("searchbatch", search_args, search_fields) ==
+          "similarity-search searchbatch --dataset x --queries q.jsonl --output o.jsonl --edit-correction"
+    search_args["edit-correction"] = false
+    @test !occursin("edit-correction", SimilaritySearchServer._format_invocation("searchbatch", search_args, search_fields))
+
     # --- CLI_CHOICES / range_tester: non-interactive parsing also validates now ---
 
     @test SimilaritySearchServer.CLI_CHOICES["index-kind"] == ["searchgraph", "exhaustive_search", "parallel_exhaustive_search", "invfile", "bm25_invfile"]

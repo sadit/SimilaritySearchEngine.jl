@@ -142,7 +142,8 @@ function _format_invocation(cmd_name::String, cmd_args::AbstractDict, fields::Ve
         value === nothing && continue
         value == f.default && continue
         push!(parts, "--$(f.dest_name)")
-        push!(parts, string(value))
+        # A `:store_true` flag takes no value: it is present or it is absent.
+        f.action === :store_true || push!(parts, string(value))
     end
     return join(parts, " ")
 end
@@ -276,7 +277,8 @@ function _format_ctl_invocation(path::Vector{String}, cmd_args::AbstractDict, fi
         value === nothing && continue
         value == f.default && continue
         push!(parts, "--$(f.dest_name)")
-        push!(parts, string(value))
+        # A `:store_true` flag takes no value: it is present or it is absent.
+        f.action === :store_true || push!(parts, string(value))
     end
     return join(parts, " ")
 end
