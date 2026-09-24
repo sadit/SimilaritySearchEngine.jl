@@ -23,7 +23,7 @@ function execute_build(cmd_args::Dict)
     items = SSE.AbstractItem[]
     for line in eachline(input_file)
         isempty(strip(line)) && continue
-        it = Server._typed_item(kind, JSON3.read(line, Dict{String, Any}))
+        it = Server._typed_item(kind, JSON3.read(codeunits(line), Dict{String, Any}))
         it === nothing || push!(items, it)
     end
 
@@ -222,7 +222,7 @@ function execute_hsp(cmd_args::Dict)
     query_vecs = Vector{Float32}[]
     for line in eachline(queries_file)
         isempty(strip(line)) && continue
-        item = JSON3.read(line, Dict{String, Any})
+        item = JSON3.read(codeunits(line), Dict{String, Any})
         haskey(item, "vector") || continue
         push!(query_vecs, convert(Vector{Float32}, item["vector"]))
     end
@@ -286,7 +286,7 @@ function execute_searchbatch(cmd_args::Dict)
     open(out_file, "w") do out_io
         for line in eachline(queries_file)
             isempty(strip(line)) && continue
-            item = JSON3.read(line, Dict{String, Any})
+            item = JSON3.read(codeunits(line), Dict{String, Any})
 
             hits = if kind === :text
                 haskey(item, "text") || continue
@@ -437,7 +437,7 @@ function _live_items(ds, engine)
     all_ids = Int[]
     live = Tuple{Int, Dict{String, Any}}[]
     for (_, v) in RocksDB.DBIterator(ds.db; cf=ds.cf_records)
-        record = JSON3.read(String(copy(v)), Schema.MetadataRecord)
+        record = JSON3.read(v, Schema.MetadataRecord)
         push!(all_ids, record._id)
         record._id in engine.deleted_ids && continue
         
@@ -593,7 +593,7 @@ function execute_dump(cmd_args::Dict)
 
     records = Persistence.DumpRecord[]
     for (_, v) in RocksDB.DBIterator(ds.db; cf=ds.cf_records)
-        record = JSON3.read(String(copy(v)), Schema.MetadataRecord)
+        record = JSON3.read(v, Schema.MetadataRecord)
         meta_json = Project.get_raw_meta(ds, record._id)
         push!(records, Persistence.DumpRecord(
             record,
@@ -609,7 +609,7 @@ function execute_dump(cmd_args::Dict)
     end
 
     descriptor_file = joinpath(dir, "descriptor.json")
-    descriptor = isfile(descriptor_file) ? JSON3.read(read(descriptor_file, String), Dict{String, Any}) : nothing
+    descriptor = isfile(descriptor_file) ? JSON3.read(read(descriptor_file), Dict{String, Any}) : nothing
 
     is_text = SSE.payload_kind(engine) === :text
     if descriptor !== nothing
@@ -728,7 +728,7 @@ function execute_load(cmd_args::Dict)
     isfile(manifest_path) || (println("Error: bundle '$bundle_dir' is missing manifest.json"); return 1)
     isfile(avro_src) || (println("Error: bundle '$bundle_dir' is missing dataset.avro"); return 1)
     isdir(project_src) || (println("Error: bundle '$bundle_dir' is missing project/"); return 1)
-    manifest = JSON3.read(read(manifest_path, String), Dict{String, Any})
+    manifest = JSON3.read(read(manifest_path), Dict{String, Any})
 
     target_path = joinpath(workdir, "datasets", target_id)
     if ispath(target_path)
@@ -748,7 +748,7 @@ function execute_load(cmd_args::Dict)
     restored = 0
     for rec in Persistence.read_dump_records(avro_src)
         meta_record = Schema.MetadataRecord(rec._id, rec.schema_version, rec.doc_id, rec.keywords, rec.refs)
-        meta = rec.meta_json === nothing ? nothing : JSON3.read(rec.meta_json, Dict{String, Any})
+        meta = rec.meta_json === nothing ? nothing : JSON3.read(codeunits(rec.meta_json), Dict{String, Any})
         Project.put_metadata!(handle.project, meta_record, meta)
         restored += 1
     end

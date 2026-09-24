@@ -127,7 +127,7 @@ function get_token(manager::TokenManager, token_str::String)
         return nothing
     end
     
-    data = JSON3.read(String(val_bytes), Dict{String, Any})
+    data = JSON3.read(val_bytes, Dict{String, Any})
     return TokenRecord(
         data["token_str"],
         data["user"],
@@ -162,7 +162,7 @@ log-tokens` (an audit listing) and `prune_expired!`'s own scan below.
 function list_tokens(manager::TokenManager)
     records = TokenRecord[]
     for (_, v) in RocksDB.DBIterator(manager.db)
-        data = JSON3.read(String(v), Dict{String, Any})
+        data = JSON3.read(v, Dict{String, Any})
         push!(records, TokenRecord(
             data["token_str"],
             data["user"],

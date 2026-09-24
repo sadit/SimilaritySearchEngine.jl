@@ -235,7 +235,7 @@ function _ctl_poll_job(base_url::String, job_id::String; interval::Real=0.3, max
     for _ in 1:max_attempts
         resp = _ctl_request(:get, "$base_url/jobs/$job_id")
         resp === nothing && return nothing
-        status = String(JSON3.read(String(resp.body), Dict{String, Any})["status"])
+        status = String(JSON3.read(codeunits(String(resp.body)), Dict{String, Any})["status"])
         status in ("completed", "failed") && return status
         sleep(interval)
     end
@@ -254,7 +254,7 @@ streamed to the CLI's caller (see `handle_get_job_result`'s `isdir` branch).
 function ctl_dump(base_url::String, cmd_args::Dict)
     resp = _ctl_request(:post, "$base_url/jobs/dump"; body=Dict("dataset" => cmd_args["dataset"]))
     resp === nothing && return 1
-    job_id = JSON3.read(String(resp.body), Dict{String, Any})["job_id"]
+    job_id = JSON3.read(codeunits(String(resp.body)), Dict{String, Any})["job_id"]
 
     status = _ctl_poll_job(base_url, job_id)
     status === nothing && (println("Error: job did not reach a terminal state"); return 1)
@@ -277,7 +277,7 @@ a running server, exactly like the CLI-driven `dump`/`load` + admin `reload` flo
 function ctl_load(base_url::String, cmd_args::Dict)
     resp = _ctl_request(:post, "$base_url/jobs/load"; body=Dict("bundle" => cmd_args["bundle"], "dataset" => cmd_args["dataset"]))
     resp === nothing && return 1
-    job_id = JSON3.read(String(resp.body), Dict{String, Any})["job_id"]
+    job_id = JSON3.read(codeunits(String(resp.body)), Dict{String, Any})["job_id"]
 
     status = _ctl_poll_job(base_url, job_id)
     status === nothing && (println("Error: job did not reach a terminal state"); return 1)

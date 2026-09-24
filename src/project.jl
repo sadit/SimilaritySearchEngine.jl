@@ -141,7 +141,7 @@ function backfill_docid_index!(manager::ProjectManager)
     n = 0
     b = RocksDB.WriteBatch()
     for (_, v) in RocksDB.DBIterator(manager.db; cf=manager.cf_records)
-        record = JSON3.read(String(v), MetadataRecord)
+        record = JSON3.read(v, MetadataRecord)
         isempty(record.doc_id) && continue
         RocksDB.put!(b, docid_key(record.doc_id, record._id), UInt8[], cf=manager.cf_idx_docid)
         n += 1
@@ -255,7 +255,7 @@ Retrieves a [`Schema.MetadataRecord`](@ref) from the project by its internal `_i
 function get_metadata(manager::ProjectManager, id::Integer)
     val_bytes = get(manager.db, _id_key(Int32(id)), cf=manager.cf_records)
     val_bytes === nothing && return nothing
-    return JSON3.read(String(val_bytes), MetadataRecord)
+    return JSON3.read(val_bytes, MetadataRecord)
 end
 
 """
@@ -293,7 +293,7 @@ lookup. Only decodes the (small, fixed-shape) record for each row -- never touch
 """
 function find_by_doc_id(manager::ProjectManager, doc_id::String)
     for (_, v) in RocksDB.DBIterator(manager.db; cf=manager.cf_records)
-        record = JSON3.read(String(v), MetadataRecord)
+        record = JSON3.read(v, MetadataRecord)
         record.doc_id == doc_id && return record
     end
     return nothing

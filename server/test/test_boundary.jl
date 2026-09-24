@@ -14,6 +14,7 @@ using SimilaritySearchServer: cli_exit_code, wire_kind
 import SimilaritySearchServer.Tokens as Tokens
 import SimilaritySearchServer.Executors as Executors
 import SimilaritySearchServer.Telemetry as Telemetry
+import SimilaritySearchServer.Server as Server
 using SimilaritySearchServer: resolve_batch_threads_pct
 using HTTP
 using JSON3
@@ -135,6 +136,25 @@ end
     @test Tokens.is_expired(rec("2000-01-01T00:00:00"))
     @test !Tokens.is_expired(rec("2999-01-01T00:00:00"))
     @test Tokens.is_expired(rec("last tuesday"))
+end
+
+@testset "a request body is parsed as JSON, never opened as a path" begin
+    # Given a `String` shorter than 255 bytes, `JSON3.read` asks `isfile` of it first and parses
+    # the file when one exists. A body that names a JSON file in the working directory would then
+    # be answered with that file's contents: here, a permission decided by a file instead of by
+    # the request, and a dataset created from a file.
+    workdir = mktempdir()
+    app = AppState(workdir, nothing, nothing, nothing, Tokens.open_token_manager(workdir),
+                   Dict{String, SSE.EmbeddedEngine}(), ReentrantLock(), false)
+    cd(mktempdir()) do
+        write("req.json", JSON3.write(Dict("dataset" => "corpus_es", "id" => "from_file",
+                                           "index_type" => "searchgraph")))
+        req = HTTP.Request("POST", "/api/v1/datasets", [], "req.json")
+        # Not JSON, so no dataset is named, and the permission required is the one over all.
+        @test Server._body_dataset(req, "dataset") == "*"
+        @test_throws ArgumentError Server.handle_create_dataset(req, app)
+        @test !isdir(joinpath(workdir, "datasets", "from_file"))
+    end
 end
 
 @testset "_guard answers 401, 403, or the handler" begin

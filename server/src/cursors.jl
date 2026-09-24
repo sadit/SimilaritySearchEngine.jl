@@ -107,7 +107,7 @@ function get_cursor(manager::CursorManager, id::String)
     for state in (Open, Exhausted, Expired)
         path = _cursor_path(manager, state, id)
         if isfile(path)
-            return state, JSON3.read(read(path, String), Dict{String, Any})
+            return state, JSON3.read(read(path), Dict{String, Any})
         end
     end
     return nothing, nothing
@@ -136,7 +136,7 @@ function poll_cursor!(manager::CursorManager, id::String; limit::Union{Int, Noth
     path = _cursor_path(manager, Open, id)
     isfile(path) || return nothing
 
-    record = JSON3.read(read(path, String), Dict{String, Any})
+    record = JSON3.read(read(path), Dict{String, Any})
     if _is_expired(record)
         mv(path, _cursor_path(manager, Expired, id), force=true)
         return nothing
@@ -179,7 +179,7 @@ function gc_expired!(manager::CursorManager)
         endswith(fname, ".cursor.json") || continue
         id = fname[1:end-length(".cursor.json")]
         path = joinpath(dir, fname)
-        record = JSON3.read(read(path, String), Dict{String, Any})
+        record = JSON3.read(read(path), Dict{String, Any})
         if _is_expired(record)
             mv(path, _cursor_path(manager, Expired, id), force=true)
             push!(moved, id)

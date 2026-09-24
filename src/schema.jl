@@ -277,7 +277,10 @@ when the caller needs to mutate or merge `meta` rather than just read from it.
 """
 function decode_meta(bytes::Vector{UInt8}; lazy::Bool)
     isempty(bytes) && return nothing
-    lazy ? JSON3.read(String(copy(bytes))) : JSON3.read(String(copy(bytes)), Dict{String,Any})
+    # Bytes, never a `String`: given a `String` shorter than 255 bytes, `JSON3.read` first asks
+    # `isfile` of it and reads the file when one exists. The lazy view keeps a reference to the
+    # buffer it parsed, so it gets a copy; a `Dict` holds its own strings and needs none.
+    lazy ? JSON3.read(copy(bytes)) : JSON3.read(bytes, Dict{String,Any})
 end
 decode_meta(::Nothing; lazy::Bool) = nothing
 

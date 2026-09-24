@@ -109,7 +109,7 @@ function save_manifest()
     mkpath(DATA)
     # Merged rather than overwritten: the three steps are separately runnable, so a run of
     # `projects` alone must not erase what `corpora` measured an hour earlier.
-    merged = isfile(manifest_path()) ? Dict{String,Any}(JSON3.read(read(manifest_path(), String), Dict{String,Any})) : Dict{String,Any}()
+    merged = isfile(manifest_path()) ? Dict{String,Any}(JSON3.read(read(manifest_path()), Dict{String,Any})) : Dict{String,Any}()
     for (section, entries) in MANIFEST
         sec = get!(() -> Dict{String,Any}(), merged, section)
         merge!(sec, entries)
@@ -240,7 +240,7 @@ a build measured in tens of minutes has to survive that rather than restart beca
 function fetch_json(url::AbstractString; attempts::Int=5)
     for attempt in 1:attempts
         try
-            return JSON3.read(sprint(io -> Downloads.download(url, io; timeout=60)))
+            return JSON3.read(codeunits(sprint(io -> Downloads.download(url, io; timeout=60))))
         catch err
             attempt == attempts && rethrow()
             wait_s = 2.0^attempt
@@ -267,7 +267,7 @@ them again; with the cache, a resumed run starts at the first book it has not fe
 function gutendex_catalog(lang::AbstractString, n::Int)
     cache = joinpath(RAW, "catalog-$lang-$n.json")
     if isfile(cache) && !force
-        entries = JSON3.read(read(cache, String))
+        entries = JSON3.read(read(cache))
         return [(id=e.id, title=String(e.title), author=String(e.author), url=String(e.url))
                 for e in entries]
     end
@@ -400,7 +400,7 @@ function build_wikipedia(c::Corpus)
     open(out, "w") do io
         for line in eachline(tmp)
             smoke && written >= MAX_SMOKE_PARAGRAPHS && break
-            o = JSON3.read(line)
+            o = JSON3.read(codeunits(line))
             JSON3.write(io, (doc_id="$(c.name)-$(o.id)-p$(o.paragraph)", text=String(o.text),
                              source="wikipedia", lang=c.lang, article_id=String(o.id),
                              title=String(o.title), url=String(o.url), paragraph=o.paragraph))
@@ -554,7 +554,7 @@ function build_project(c::Corpus)
     n, t_append, t_index = 0, 0.0, 0.0
     batch = SSE.TextItem[]
     for line in eachline(corpus_path(c))
-        o = JSON3.read(line)
+        o = JSON3.read(codeunits(line))
         meta = Dict{String,Any}(String(k) => v for (k, v) in pairs(o) if k !== :text && k !== :doc_id)
         push!(batch, SSE.TextItem(String(o.text); doc_id=String(o.doc_id), meta))
         if length(batch) == 5000

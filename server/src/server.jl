@@ -297,7 +297,7 @@ permission over every dataset rather than accidentally requiring none.
 """
 function _body_dataset(req::HTTP.Request, keys::String...)
     data = try
-        JSON3.read(String(req.body), Dict{String, Any})
+        JSON3.read(codeunits(String(req.body)), Dict{String, Any})
     catch
         return "*"
     end
@@ -477,7 +477,7 @@ function join_group_members(app::AppState, join_group::AbstractString)
         isdir(joinpath(base, id)) || continue
         dpath = descriptor_path(app, id)
         isfile(dpath) || continue
-        desc = JSON3.read(read(dpath, String), Dict{String, Any})
+        desc = JSON3.read(read(dpath), Dict{String, Any})
         get(desc, "join_group", nothing) == join_group && push!(members, desc)
     end
     return members
@@ -485,7 +485,7 @@ end
 
 function handle_create_dataset(req::HTTP.Request, app::AppState)
     body = String(req.body)
-    data = isempty(body) ? Dict{String, Any}() : JSON3.read(body, Dict{String, Any})
+    data = isempty(body) ? Dict{String, Any}() : JSON3.read(codeunits(body), Dict{String, Any})
 
     id = get(data, "id", Project.generate_id())
     valid_project_id(id) || return json_response(400, Dict("error" => "invalid dataset id"))
@@ -568,7 +568,7 @@ function _reload_one_dataset!(app::AppState, id::String)
     path = joinpath(app.workdir, "datasets", id)
     dpath = descriptor_path(app, id)
     isfile(dpath) || return false
-    descriptor = JSON3.read(read(dpath, String), Dict{String, Any})
+    descriptor = JSON3.read(read(dpath), Dict{String, Any})
 
     index_type = get(descriptor, "index_kind", "searchgraph")
     distance = get(descriptor, "distance", "L2")
@@ -685,14 +685,14 @@ function handle_reload_dataset(req::HTTP.Request, app::AppState, id::String)
     valid_project_id(id) || return json_response(400, Dict("error" => "invalid dataset id"))
 
     body = String(req.body)
-    data = isempty(body) ? Dict{String, Any}() : JSON3.read(body, Dict{String, Any})
+    data = isempty(body) ? Dict{String, Any}() : JSON3.read(codeunits(body), Dict{String, Any})
     if haskey(data, "edit_correction")
         edit_correction = data["edit_correction"]
         edit_correction isa Bool ||
             return json_response(400, Dict("error" => "'edit_correction' must be true or false"))
         dpath = descriptor_path(app, id)
         isfile(dpath) || return json_response(404, Dict("error" => "dataset_not_found"))
-        descriptor = JSON3.read(read(dpath, String), Dict{String, Any})
+        descriptor = JSON3.read(read(dpath), Dict{String, Any})
         # Checked here, before the loaded handle is closed: the engine would refuse it too, but
         # only on the reopen, which would leave the dataset unloaded.
         engine_type, _ = try
@@ -738,7 +738,7 @@ function dataset_descriptor(app::AppState, id::String)
     isdir(path) || return nothing
 
     dpath = descriptor_path(app, id)
-    base = isfile(dpath) ? JSON3.read(read(dpath, String), Dict{String, Any}) :
+    base = isfile(dpath) ? JSON3.read(read(dpath), Dict{String, Any}) :
         Dict{String, Any}("id" => id, "index_kind" => "unknown", "distance" => "unknown", "created_at" => nothing)
 
     get!(base, "join_group", nothing)
@@ -891,7 +891,7 @@ function handle_get_op_log(req::HTTP.Request, app::AppState, id::String)
     haskey(app.handles, id) || return json_response(404, Dict("error" => "dataset_not_found"))
     dataset = app.handles[id].project
 
-    entries = Any[JSON3.read(String(v), Dict{String, Any}) for (_, v) in RocksDB.DBIterator(dataset.db; cf=dataset.cf_op_log)]
+    entries = Any[JSON3.read(v, Dict{String, Any}) for (_, v) in RocksDB.DBIterator(dataset.db; cf=dataset.cf_op_log)]
     reverse!(entries) # newest first -- op_log keys are time_ns()-ordered ascending
 
     params = queryparams(HTTP.URI(req.target))
@@ -989,7 +989,7 @@ function handle_append(req::HTTP.Request, app::AppState, index::String)
     engine = handle.engine
     dataset = handle.project
 
-    data = JSON3.read(String(req.body), Dict{String, Any})
+    data = JSON3.read(codeunits(String(req.body)), Dict{String, Any})
     items = get(data, "items", [])
 
     snapshot = Telemetry.snapshot_costs(engine.backend.ctx)
@@ -1239,7 +1239,7 @@ function handle_search(req::HTTP.Request, app::AppState, index::String)
     engine = app.handles[index].engine
     dataset = app.handles[index].project
 
-    data = JSON3.read(String(req.body), Dict{String, Any})
+    data = JSON3.read(codeunits(String(req.body)), Dict{String, Any})
     haskey(data, "vector") || return json_response(400, Dict("error" => "search requires a 'vector' field"))
     k = get(data, "k", 10)
     query = convert(Vector{Float32}, data["vector"])
@@ -1287,7 +1287,7 @@ post-creation update (currently only `handle_calibrate`'s `beamsearch_baseline`)
 """
 function _update_descriptor!(app::AppState, id::String, updates::Dict)
     dpath = descriptor_path(app, id)
-    current = isfile(dpath) ? JSON3.read(read(dpath, String), Dict{String, Any}) : Dict{String, Any}("id" => id)
+    current = isfile(dpath) ? JSON3.read(read(dpath), Dict{String, Any}) : Dict{String, Any}("id" => id)
     merge!(current, updates)
     write(dpath, JSON3.write(current))
 end
@@ -1314,7 +1314,7 @@ function handle_calibrate(req::HTTP.Request, app::AppState, index::String)
     length(engine.backend.index) == 0 && return json_response(400, Dict("error" => "index has no data to calibrate against"))
 
     body = String(req.body)
-    data = isempty(body) ? Dict{String, Any}() : JSON3.read(body, Dict{String, Any})
+    data = isempty(body) ? Dict{String, Any}() : JSON3.read(codeunits(body), Dict{String, Any})
     minrecall = Float64(get(data, "minrecall", 0.9))
     numqueries = Int(get(data, "numqueries", 64))
     ksearch = Int(get(data, "ksearch", 10))
@@ -1333,7 +1333,7 @@ function handle_ftsearch(req::HTTP.Request, app::AppState, index::String)
     engine = app.handles[index].engine
     dataset = app.handles[index].project
 
-    data = JSON3.read(String(req.body), Dict{String, Any})
+    data = JSON3.read(codeunits(String(req.body)), Dict{String, Any})
     haskey(data, "text") || return json_response(400, Dict("error" => "ftsearch requires a 'text' field"))
     k = get(data, "k", 10)
 
@@ -1364,7 +1364,7 @@ as a separate subprocess that reads only what is on disk.
 """
 function handle_delete_item(req::HTTP.Request, app::AppState, index::String)
     haskey(app.handles, index) || return json_response(404, Dict("error" => "dataset_not_found"))
-    data = JSON3.read(String(req.body), Dict{String, Any})
+    data = JSON3.read(codeunits(String(req.body)), Dict{String, Any})
     haskey(data, "_id") || return json_response(400, Dict(
         "error" => "delete requires an '_id' field: the internal identifier of the item, as reported by search and fetch"))
 
@@ -1400,7 +1400,7 @@ function handle_fetch(req::HTTP.Request, app::AppState, index::String)
     haskey(app.handles, index) || return json_response(404, Dict("error" => "dataset_not_found"))
     dataset = app.handles[index].project
 
-    data = JSON3.read(String(req.body), Dict{String, Any})
+    data = JSON3.read(codeunits(String(req.body)), Dict{String, Any})
     ids = get(data, "ids", [])
 
     results = Any[]
@@ -1453,7 +1453,7 @@ Fuses a dense (`dense_index`) and lexical (`lexical_index`) search over the same
 the two datasets actually has it for a given id.
 """
 function handle_hybrid_search(req::HTTP.Request, app::AppState)
-    data = JSON3.read(String(req.body), Dict{String, Any})
+    data = JSON3.read(codeunits(String(req.body)), Dict{String, Any})
     dense_id = get(data, "dense_index", nothing)
     lexical_id = get(data, "lexical_index", nothing)
     (dense_id === nothing || lexical_id === nothing) &&
@@ -1522,7 +1522,7 @@ Metadata is hydrated once at the end via `_hydrate_join_id`, preferring the grou
 `holds_metadata` member when one is tagged.
 """
 function handle_ftsearch_group(req::HTTP.Request, app::AppState)
-    data = JSON3.read(String(req.body), Dict{String, Any})
+    data = JSON3.read(codeunits(String(req.body)), Dict{String, Any})
     join_group = get(data, "join_group", nothing)
     key = get(data, "key", nothing)
     (join_group === nothing || key === nothing) &&
@@ -1648,7 +1648,7 @@ once `status == completed` with no further plumbing. Anything else is a `400`.
 """
 function handle_submit_job(req::HTTP.Request, app::AppState, kind::String)
     body = String(req.body)
-    data = isempty(body) ? Dict{String, Any}() : JSON3.read(body, Dict{String, Any})
+    data = isempty(body) ? Dict{String, Any}() : JSON3.read(codeunits(body), Dict{String, Any})
 
     if haskey(data, "command")
         command = String.(data["command"])
@@ -1756,7 +1756,7 @@ function handle_get_job_result(req::HTTP.Request, app::AppState, job_id::String)
 
     if isdir(result_ref)
         manifest_path = joinpath(result_ref, "manifest.json")
-        manifest = isfile(manifest_path) ? JSON3.read(read(manifest_path, String), Dict{String, Any}) : nothing
+        manifest = isfile(manifest_path) ? JSON3.read(read(manifest_path), Dict{String, Any}) : nothing
         return json_response(200, Dict("bundle_dir" => result_ref, "manifest" => manifest))
     end
 
@@ -1860,7 +1860,7 @@ in a hardened test without actually waiting a day).
 """
 function handle_jobs_gc(req::HTTP.Request, app::AppState)
     body = String(req.body)
-    data = isempty(body) ? Dict{String, Any}() : JSON3.read(body, Dict{String, Any})
+    data = isempty(body) ? Dict{String, Any}() : JSON3.read(codeunits(body), Dict{String, Any})
     retention_seconds = get(data, "retention_seconds", 86400)
 
     cursors_expired = Cursors.gc_expired!(app.cursor_mgr)
@@ -1911,7 +1911,7 @@ end
 # ==========================================
 
 function handle_create_token(req::HTTP.Request, app::AppState)
-    data = JSON3.read(String(req.body), Dict{String, Any})
+    data = JSON3.read(codeunits(String(req.body)), Dict{String, Any})
     user = get(data, "user", "anonymous")
     # `String.(...)` over an empty `Vector{Any}` (no permissions at all) stays a `Vector{Any}`,
     # which `create_token!` does not accept -- collect into the element type instead.
