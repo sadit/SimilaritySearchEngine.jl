@@ -266,6 +266,7 @@ window.Quarto = {
   <li><a href="#query-resolution-and-expansion-querypolicy" id="toc-query-resolution-and-expansion-querypolicy" class="nav-link" data-scroll-target="#query-resolution-and-expansion-querypolicy">Query Resolution and Expansion: <code>QueryPolicy</code></a>
   <ul class="collapse">
   <li><a href="#explaining-corrections-ftexplain" id="toc-explaining-corrections-ftexplain" class="nav-link" data-scroll-target="#explaining-corrections-ftexplain">Explaining Corrections: <code>ftexplain</code></a></li>
+  <li><a href="#correcting-misspelled-tokens-edit_correction" id="toc-correcting-misspelled-tokens-edit_correction" class="nav-link" data-scroll-target="#correcting-misspelled-tokens-edit_correction">Correcting Misspelled Tokens: <code>edit_correction</code></a></li>
   </ul></li>
   <li><a href="#full-text-retrieval-with-tf-idf-textinvertedfile" id="toc-full-text-retrieval-with-tf-idf-textinvertedfile" class="nav-link" data-scroll-target="#full-text-retrieval-with-tf-idf-textinvertedfile">Full-Text Retrieval with TF-IDF (<code>TextInvertedFile</code>)</a></li>
   <li><a href="#whole-dataset-metric-operations" id="toc-whole-dataset-metric-operations" class="nav-link" data-scroll-target="#whole-dataset-metric-operations">Whole-Dataset Metric Operations</a>
@@ -556,6 +557,8 @@ window.Quarto = {
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb25"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a>hes <span class="op">=</span> <span class="fu">create_project</span>(workdir, <span class="st">"news_es"</span>; engine<span class="op">=</span>FullTextEngine, backend<span class="op">=</span>BM25InvertedFile,</span>
 <span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>                     textmodel<span class="op">=</span><span class="fu">DefaultProfile</span>(<span class="op">:</span>es))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p>The project then uses the stopword lists, lemma clusters and query-expansion networks derived from a reference corpus, with term frequencies adjusted to the dataset of the project.</p>
+<p>The refit keeps most of the vocabulary of the profile. Measured on 2026-09-24 with TextSearch 1.2.1, the Spanish profile holds 730,320 tokens. A refit against 962 paragraphs of Spanish books kept 591,494 of them, and 9,382 of those occur in the paragraphs. A term that the project has not stored yet is therefore usually searchable when a later batch adds it.</p>
+<p>The profiles are installed under <code>~/.textsearch/profiles</code>. TextSearch 1.2 reads profile format 1.1 only. A profile installed with an earlier version of TextSearch is in format 1.0 and does not load. Install it again with <code>download_profile("es"; force=true)</code>.</p>
 </section>
 <section id="fitfromcorpus" class="level3">
 <h3 class="anchored" data-anchor-id="fitfromcorpus">2. <code>FitFromCorpus</code></h3>
@@ -588,85 +591,134 @@ window.Quarto = {
 <h3 class="anchored" data-anchor-id="explaining-corrections-ftexplain">Explaining Corrections: <code>ftexplain</code></h3>
 <p><code>ftexplain</code> reports the token substitutions that were applied to the query:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb29"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="fu">ftexplain</span>(hes, <span class="st">"musica clasica"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="correcting-misspelled-tokens-edit_correction" class="level3">
+<h3 class="anchored" data-anchor-id="correcting-misspelled-tokens-edit_correction">Correcting Misspelled Tokens: <code>edit_correction</code></h3>
+<p>The default correction folds case and diacritics, so it maps <code>musica</code> to <code>música</code>. It does not map <code>guerar</code> to <code>guerra</code>, because that correction exchanges two letters. The keyword <code>edit_correction=true</code> adds this kind of correction. A query token that is absent from the vocabulary is replaced by the only vocabulary token at Damerau-Levenshtein distance 1 from it. The Damerau-Levenshtein distance counts insertions, deletions, substitutions and exchanges of two adjacent letters. If there are two or more such tokens, the query token is not replaced.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb30"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a>hes <span class="op">=</span> <span class="fu">open_project</span>(workdir, <span class="st">"news_es"</span>; edit_correction<span class="op">=</span><span class="cn">true</span>)</span>
+<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a><span class="fu">ftexplain</span>(hes, <span class="st">"guerar civil"</span>)    <span class="co"># ["guerar not found, searched as guerra (edit) instead"]</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>The keyword is <code>false</code> by default, and the value is not stored with the project. Each call to <code>open_project</code> or <code>create_project</code> sets it again. <code>QueryPolicy(correction=:off)</code> disables it for one query.</p>
+<p>It is disabled by default because it has a cost. The engine builds the edit index from the vocabulary each time it opens the project. Measured on 2026-09-24 over the Spanish profile (730,320 tokens):</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Measurement</th>
+<th>Without <code>edit_correction</code></th>
+<th>With <code>edit_correction</code></th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Build the edit index, 64 threads</td>
+<td>–</td>
+<td>1.2 s</td>
+</tr>
+<tr class="even">
+<td>Build the edit index, 1 thread</td>
+<td>–</td>
+<td>5.0 s</td>
+</tr>
+<tr class="odd">
+<td>Memory of the edit index</td>
+<td>–</td>
+<td>81 MiB</td>
+</tr>
+<tr class="even">
+<td>Resolve a query whose tokens are all in the vocabulary</td>
+<td>7.3 µs</td>
+<td>7.6 µs</td>
+</tr>
+<tr class="odd">
+<td>Resolve a query with one token absent from the vocabulary</td>
+<td>7.3 µs</td>
+<td>18.7 ms</td>
+</tr>
+</tbody>
+</table>
 <hr>
 </section>
 </section>
 <section id="full-text-retrieval-with-tf-idf-textinvertedfile" class="level2">
 <h2 class="anchored" data-anchor-id="full-text-retrieval-with-tf-idf-textinvertedfile">Full-Text Retrieval with TF-IDF (<code>TextInvertedFile</code>)</h2>
 <p>To index text using classic TF-IDF weights and cosine distance:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb30"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="im">using</span> <span class="bu">TextSearch</span>: TextInvertedFile</span>
-<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a>ht <span class="op">=</span> <span class="fu">create_project</span>(workdir, <span class="st">"frankenstein_tfidf"</span>; engine<span class="op">=</span>FullTextEngine, backend<span class="op">=</span>TextInvertedFile,</span>
-<span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a>                    textmodel<span class="op">=</span><span class="fu">FitFromCorpus</span>())</span>
-<span id="cb30-5"><a href="#cb30-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb30-6"><a href="#cb30-6" aria-hidden="true" tabindex="-1"></a><span class="fu">append_items!</span>(ht, [</span>
-<span id="cb30-7"><a href="#cb30-7" aria-hidden="true" tabindex="-1"></a>    <span class="fu">TextItem</span>(it[<span class="st">"text"</span>]; doc_id <span class="op">=</span> it[<span class="st">"doc_id"</span>], keywords <span class="op">=</span> it[<span class="st">"keywords"</span>])</span>
-<span id="cb30-8"><a href="#cb30-8" aria-hidden="true" tabindex="-1"></a>    for it <span class="kw">in</span> items[<span class="fl">1</span><span class="op">:</span><span class="fl">200</span>]</span>
-<span id="cb30-9"><a href="#cb30-9" aria-hidden="true" tabindex="-1"></a>])</span>
-<span id="cb30-10"><a href="#cb30-10" aria-hidden="true" tabindex="-1"></a><span class="fu">index!</span>(ht)</span>
-<span id="cb30-11"><a href="#cb30-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb30-12"><a href="#cb30-12" aria-hidden="true" tabindex="-1"></a>hits <span class="op">=</span> <span class="fu">ftsearch</span>(ht, <span class="st">"monster creature fear"</span>, <span class="fl">5</span>)</span>
-<span id="cb30-13"><a href="#cb30-13" aria-hidden="true" tabindex="-1"></a><span class="fu">close_project!</span>(ht)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb31"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="im">using</span> <span class="bu">TextSearch</span>: TextInvertedFile</span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a>ht <span class="op">=</span> <span class="fu">create_project</span>(workdir, <span class="st">"frankenstein_tfidf"</span>; engine<span class="op">=</span>FullTextEngine, backend<span class="op">=</span>TextInvertedFile,</span>
+<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a>                    textmodel<span class="op">=</span><span class="fu">FitFromCorpus</span>())</span>
+<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-6"><a href="#cb31-6" aria-hidden="true" tabindex="-1"></a><span class="fu">append_items!</span>(ht, [</span>
+<span id="cb31-7"><a href="#cb31-7" aria-hidden="true" tabindex="-1"></a>    <span class="fu">TextItem</span>(it[<span class="st">"text"</span>]; doc_id <span class="op">=</span> it[<span class="st">"doc_id"</span>], keywords <span class="op">=</span> it[<span class="st">"keywords"</span>])</span>
+<span id="cb31-8"><a href="#cb31-8" aria-hidden="true" tabindex="-1"></a>    for it <span class="kw">in</span> items[<span class="fl">1</span><span class="op">:</span><span class="fl">200</span>]</span>
+<span id="cb31-9"><a href="#cb31-9" aria-hidden="true" tabindex="-1"></a>])</span>
+<span id="cb31-10"><a href="#cb31-10" aria-hidden="true" tabindex="-1"></a><span class="fu">index!</span>(ht)</span>
+<span id="cb31-11"><a href="#cb31-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-12"><a href="#cb31-12" aria-hidden="true" tabindex="-1"></a>hits <span class="op">=</span> <span class="fu">ftsearch</span>(ht, <span class="st">"monster creature fear"</span>, <span class="fl">5</span>)</span>
+<span id="cb31-13"><a href="#cb31-13" aria-hidden="true" tabindex="-1"></a><span class="fu">close_project!</span>(ht)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <hr>
 </section>
 <section id="whole-dataset-metric-operations" class="level2">
 <h2 class="anchored" data-anchor-id="whole-dataset-metric-operations">Whole-Dataset Metric Operations</h2>
 <p>For a dense project with a <code>SearchGraph</code> backend, the package provides algorithms that operate on the entire dataset and execute in the calling process:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb31"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a>h2 <span class="op">=</span> <span class="fu">open_project</span>(workdir, <span class="st">"frankenstein_dense"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb32"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a>h2 <span class="op">=</span> <span class="fu">open_project</span>(workdir, <span class="st">"frankenstein_dense"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <section id="all-pairs-k-nearest-neighbors-allknn" class="level3">
 <h3 class="anchored" data-anchor-id="all-pairs-k-nearest-neighbors-allknn">1. All-Pairs <span class="math inline">\(k\)</span>-Nearest Neighbors: <code>allknn</code></h3>
 <p>Computes the <span class="math inline">\(k\)</span> nearest neighbors for every indexed element:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb32"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a>neighbors <span class="op">=</span> <span class="fu">allknn</span>(h2; k<span class="op">=</span><span class="fl">5</span>)</span>
-<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a><span class="fu">first</span>(neighbors)  <span class="co"># Returns (id=1, neighbors=[...], dists=[...])</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb33"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a>neighbors <span class="op">=</span> <span class="fu">allknn</span>(h2; k<span class="op">=</span><span class="fl">5</span>)</span>
+<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a><span class="fu">first</span>(neighbors)  <span class="co"># Returns (id=1, neighbors=[...], dists=[...])</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </section>
 <section id="center-selection-fft" class="level3">
 <h3 class="anchored" data-anchor-id="center-selection-fft">2. Center Selection: <code>fft</code></h3>
 <p>Executes the farthest-first traversal to select <span class="math inline">\(k\)</span> centers that are separated from each other:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb33"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a>R <span class="op">=</span> <span class="fu">fft</span>(h2, <span class="fl">8</span>; verbose<span class="op">=</span><span class="cn">false</span>)</span>
-<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a>R.centers      <span class="co"># Identifiers of the 8 chosen centers</span></span>
-<span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a>R.separation   <span class="co"># Minimum distance between any two centers</span></span>
-<span id="cb33-4"><a href="#cb33-4" aria-hidden="true" tabindex="-1"></a>R.covering     <span class="co"># Maximum distance from any object to its assigned center</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb34"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a>R <span class="op">=</span> <span class="fu">fft</span>(h2, <span class="fl">8</span>; verbose<span class="op">=</span><span class="cn">false</span>)</span>
+<span id="cb34-2"><a href="#cb34-2" aria-hidden="true" tabindex="-1"></a>R.centers      <span class="co"># Identifiers of the 8 chosen centers</span></span>
+<span id="cb34-3"><a href="#cb34-3" aria-hidden="true" tabindex="-1"></a>R.separation   <span class="co"># Minimum distance between any two centers</span></span>
+<span id="cb34-4"><a href="#cb34-4" aria-hidden="true" tabindex="-1"></a>R.covering     <span class="co"># Maximum distance from any object to its assigned center</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </section>
 <section id="monochromatic-closest-pairs-closestpairs" class="level3">
 <h3 class="anchored" data-anchor-id="monochromatic-closest-pairs-closestpairs">3. Monochromatic Closest Pairs: <code>closestpairs</code></h3>
 <p>Finds the <span class="math inline">\(k\)</span> closest pairs of objects within the project:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb34"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a>pairs <span class="op">=</span> <span class="fu">closestpairs</span>(h2; k<span class="op">=</span><span class="fl">5</span>)</span>
-<span id="cb34-2"><a href="#cb34-2" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> (i, j, d) <span class="kw">in</span> pairs</span>
-<span id="cb34-3"><a href="#cb34-3" aria-hidden="true" tabindex="-1"></a>    ri <span class="op">=</span> <span class="fu">get_metadata</span>(h2.project, i)</span>
-<span id="cb34-4"><a href="#cb34-4" aria-hidden="true" tabindex="-1"></a>    rj <span class="op">=</span> <span class="fu">get_metadata</span>(h2.project, j)</span>
-<span id="cb34-5"><a href="#cb34-5" aria-hidden="true" tabindex="-1"></a>    <span class="fu">println</span>(<span class="st">"Pair ("</span>, ri.doc_id, <span class="st">", "</span>, rj.doc_id, <span class="st">") | Distance: "</span>, d)</span>
-<span id="cb34-6"><a href="#cb34-6" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb35"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a>pairs <span class="op">=</span> <span class="fu">closestpairs</span>(h2; k<span class="op">=</span><span class="fl">5</span>)</span>
+<span id="cb35-2"><a href="#cb35-2" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> (i, j, d) <span class="kw">in</span> pairs</span>
+<span id="cb35-3"><a href="#cb35-3" aria-hidden="true" tabindex="-1"></a>    ri <span class="op">=</span> <span class="fu">get_metadata</span>(h2.project, i)</span>
+<span id="cb35-4"><a href="#cb35-4" aria-hidden="true" tabindex="-1"></a>    rj <span class="op">=</span> <span class="fu">get_metadata</span>(h2.project, j)</span>
+<span id="cb35-5"><a href="#cb35-5" aria-hidden="true" tabindex="-1"></a>    <span class="fu">println</span>(<span class="st">"Pair ("</span>, ri.doc_id, <span class="st">", "</span>, rj.doc_id, <span class="st">") | Distance: "</span>, d)</span>
+<span id="cb35-6"><a href="#cb35-6" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </section>
 <section id="bichromatic-closest-pairs-bichromatic_kclosestpairs" class="level3">
 <h3 class="anchored" data-anchor-id="bichromatic-closest-pairs-bichromatic_kclosestpairs">4. Bichromatic Closest Pairs: <code>bichromatic_kclosestpairs</code></h3>
 <p>Finds the <span class="math inline">\(k\)</span> closest pairs between the indexed project <span class="math inline">\(A\)</span> and an external matrix collection <span class="math inline">\(B\)</span>:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb35"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a><span class="im">using</span> <span class="bu">SimilaritySearch</span>: MatrixDatabase</span>
-<span id="cb35-2"><a href="#cb35-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb35-3"><a href="#cb35-3" aria-hidden="true" tabindex="-1"></a>second_half_vectors <span class="op">=</span> [<span class="fu">vectorize</span>(lsi, it[<span class="st">"text"</span>]) for it <span class="kw">in</span> items[(half <span class="op">+</span> <span class="fl">1</span>)<span class="op">:</span><span class="kw">end</span>]]</span>
-<span id="cb35-4"><a href="#cb35-4" aria-hidden="true" tabindex="-1"></a>B <span class="op">=</span> <span class="fu">MatrixDatabase</span>(<span class="fu">hcat</span>(second_half_vectors<span class="op">...</span>))</span>
-<span id="cb35-5"><a href="#cb35-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb35-6"><a href="#cb35-6" aria-hidden="true" tabindex="-1"></a>pairs <span class="op">=</span> <span class="fu">bichromatic_kclosestpairs</span>(h2, B; k<span class="op">=</span><span class="fl">5</span>)</span>
-<span id="cb35-7"><a href="#cb35-7" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> (i, j, d) <span class="kw">in</span> pairs</span>
-<span id="cb35-8"><a href="#cb35-8" aria-hidden="true" tabindex="-1"></a>    ri <span class="op">=</span> <span class="fu">get_metadata</span>(h2.project, i)</span>
-<span id="cb35-9"><a href="#cb35-9" aria-hidden="true" tabindex="-1"></a>    other <span class="op">=</span> items[half <span class="op">+</span> j]</span>
-<span id="cb35-10"><a href="#cb35-10" aria-hidden="true" tabindex="-1"></a>    <span class="fu">println</span>(<span class="st">"Cross-match ("</span>, ri.doc_id, <span class="st">", "</span>, other[<span class="st">"doc_id"</span>], <span class="st">") | Distance: "</span>, d)</span>
-<span id="cb35-11"><a href="#cb35-11" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb36"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a><span class="im">using</span> <span class="bu">SimilaritySearch</span>: MatrixDatabase</span>
+<span id="cb36-2"><a href="#cb36-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb36-3"><a href="#cb36-3" aria-hidden="true" tabindex="-1"></a>second_half_vectors <span class="op">=</span> [<span class="fu">vectorize</span>(lsi, it[<span class="st">"text"</span>]) for it <span class="kw">in</span> items[(half <span class="op">+</span> <span class="fl">1</span>)<span class="op">:</span><span class="kw">end</span>]]</span>
+<span id="cb36-4"><a href="#cb36-4" aria-hidden="true" tabindex="-1"></a>B <span class="op">=</span> <span class="fu">MatrixDatabase</span>(<span class="fu">hcat</span>(second_half_vectors<span class="op">...</span>))</span>
+<span id="cb36-5"><a href="#cb36-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb36-6"><a href="#cb36-6" aria-hidden="true" tabindex="-1"></a>pairs <span class="op">=</span> <span class="fu">bichromatic_kclosestpairs</span>(h2, B; k<span class="op">=</span><span class="fl">5</span>)</span>
+<span id="cb36-7"><a href="#cb36-7" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> (i, j, d) <span class="kw">in</span> pairs</span>
+<span id="cb36-8"><a href="#cb36-8" aria-hidden="true" tabindex="-1"></a>    ri <span class="op">=</span> <span class="fu">get_metadata</span>(h2.project, i)</span>
+<span id="cb36-9"><a href="#cb36-9" aria-hidden="true" tabindex="-1"></a>    other <span class="op">=</span> items[half <span class="op">+</span> j]</span>
+<span id="cb36-10"><a href="#cb36-10" aria-hidden="true" tabindex="-1"></a>    <span class="fu">println</span>(<span class="st">"Cross-match ("</span>, ri.doc_id, <span class="st">", "</span>, other[<span class="st">"doc_id"</span>], <span class="st">") | Distance: "</span>, d)</span>
+<span id="cb36-11"><a href="#cb36-11" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <hr>
 </section>
 </section>
 <section id="metadata-retrieval-fetch_items-and-exists" class="level2">
 <h2 class="anchored" data-anchor-id="metadata-retrieval-fetch_items-and-exists">Metadata Retrieval: <code>fetch_items</code> and <code>exists</code></h2>
 <p>To retrieve stored records by internal <code>_id</code> or external <code>doc_id</code>:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb36"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Retrieve full stored record including payload</span></span>
-<span id="cb36-2"><a href="#cb36-2" aria-hidden="true" tabindex="-1"></a>items_fetched <span class="op">=</span> <span class="fu">fetch_items</span>(h2, [<span class="st">"frankenstein_2"</span>])</span>
-<span id="cb36-3"><a href="#cb36-3" aria-hidden="true" tabindex="-1"></a>it <span class="op">=</span> <span class="fu">only</span>(items_fetched)</span>
-<span id="cb36-4"><a href="#cb36-4" aria-hidden="true" tabindex="-1"></a>it.doc_id         <span class="co"># "frankenstein_2"</span></span>
-<span id="cb36-5"><a href="#cb36-5" aria-hidden="true" tabindex="-1"></a>it.keywords       <span class="co"># Indexed keywords array</span></span>
-<span id="cb36-6"><a href="#cb36-6" aria-hidden="true" tabindex="-1"></a>it.meta           <span class="co"># Free-form metadata dictionary</span></span>
-<span id="cb36-7"><a href="#cb36-7" aria-hidden="true" tabindex="-1"></a>it.payload        <span class="co"># Stored vector or text</span></span>
-<span id="cb36-8"><a href="#cb36-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb36-9"><a href="#cb36-9" aria-hidden="true" tabindex="-1"></a><span class="co"># Check record existence and deletion status</span></span>
-<span id="cb36-10"><a href="#cb36-10" aria-hidden="true" tabindex="-1"></a><span class="fu">exists</span>(h2, [<span class="fl">1</span>, <span class="st">"frankenstein_2"</span>, <span class="st">"non_existent_id"</span>])</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb37"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb37-1"><a href="#cb37-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Retrieve full stored record including payload</span></span>
+<span id="cb37-2"><a href="#cb37-2" aria-hidden="true" tabindex="-1"></a>items_fetched <span class="op">=</span> <span class="fu">fetch_items</span>(h2, [<span class="st">"frankenstein_2"</span>])</span>
+<span id="cb37-3"><a href="#cb37-3" aria-hidden="true" tabindex="-1"></a>it <span class="op">=</span> <span class="fu">only</span>(items_fetched)</span>
+<span id="cb37-4"><a href="#cb37-4" aria-hidden="true" tabindex="-1"></a>it.doc_id         <span class="co"># "frankenstein_2"</span></span>
+<span id="cb37-5"><a href="#cb37-5" aria-hidden="true" tabindex="-1"></a>it.keywords       <span class="co"># Indexed keywords array</span></span>
+<span id="cb37-6"><a href="#cb37-6" aria-hidden="true" tabindex="-1"></a>it.meta           <span class="co"># Free-form metadata dictionary</span></span>
+<span id="cb37-7"><a href="#cb37-7" aria-hidden="true" tabindex="-1"></a>it.payload        <span class="co"># Stored vector or text</span></span>
+<span id="cb37-8"><a href="#cb37-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb37-9"><a href="#cb37-9" aria-hidden="true" tabindex="-1"></a><span class="co"># Check record existence and deletion status</span></span>
+<span id="cb37-10"><a href="#cb37-10" aria-hidden="true" tabindex="-1"></a><span class="fu">exists</span>(h2, [<span class="fl">1</span>, <span class="st">"frankenstein_2"</span>, <span class="st">"non_existent_id"</span>])</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p>An external identifier is resolved through a dedicated column family, not by scanning the collection: 0.05 ms against 59 ms for the equivalent scan, measured on a project of 50,000 items. A <code>doc_id</code> is not required to be unique, so <code>fetch_items</code> returns every item that carries the requested identifier, in ascending <code>_id</code> order. The result may therefore contain more elements than the list of identifiers that was given. For the same reason, <code>exists</code> reports an identifier as deleted only when every item that carries it has been deleted.</p>
 <p>A numeric argument is first interpreted as an internal <code>_id</code>. It is resolved as a <code>doc_id</code> only when no record has that <code>_id</code>.</p>
 <hr>
@@ -674,22 +726,22 @@ window.Quarto = {
 <section id="handling-failures" class="level2">
 <h2 class="anchored" data-anchor-id="handling-failures">Handling Failures</h2>
 <p>The engine raises typed errors, and the type indicates why the call failed. There are four categories, and a program should select its behavior from the category rather than from the message text:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb37"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb37-1"><a href="#cb37-1" aria-hidden="true" tabindex="-1"></a><span class="im">using</span> <span class="bu">SimilaritySearchEngine</span></span>
-<span id="cb37-2"><a href="#cb37-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb37-3"><a href="#cb37-3" aria-hidden="true" tabindex="-1"></a><span class="cf">try</span></span>
-<span id="cb37-4"><a href="#cb37-4" aria-hidden="true" tabindex="-1"></a>    <span class="fu">searchbatch</span>(h, queries, <span class="fl">10</span>)</span>
-<span id="cb37-5"><a href="#cb37-5" aria-hidden="true" tabindex="-1"></a><span class="cf">catch</span> <span class="cn">e</span></span>
-<span id="cb37-6"><a href="#cb37-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="cn">e</span> isa PendingBacklog</span>
-<span id="cb37-7"><a href="#cb37-7" aria-hidden="true" tabindex="-1"></a>        <span class="co"># Items were appended but not indexed yet. The engine reports both counts.</span></span>
-<span id="cb37-8"><a href="#cb37-8" aria-hidden="true" tabindex="-1"></a>        <span class="pp">@info</span> <span class="st">"indexing </span><span class="sc">$</span>(<span class="cn">e</span>.staged <span class="op">-</span> <span class="cn">e</span>.connected)<span class="st"> pending item(s) first"</span></span>
-<span id="cb37-9"><a href="#cb37-9" aria-hidden="true" tabindex="-1"></a>        <span class="fu">index!</span>(h)</span>
-<span id="cb37-10"><a href="#cb37-10" aria-hidden="true" tabindex="-1"></a>        <span class="fu">searchbatch</span>(h, queries, <span class="fl">10</span>)</span>
-<span id="cb37-11"><a href="#cb37-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">elseif</span> <span class="cn">e</span> isa ConflictingState</span>
-<span id="cb37-12"><a href="#cb37-12" aria-hidden="true" tabindex="-1"></a>        <span class="fu">rethrow</span>()          <span class="co"># some other state problem: not trained, empty, no index</span></span>
-<span id="cb37-13"><a href="#cb37-13" aria-hidden="true" tabindex="-1"></a>    <span class="cf">else</span></span>
-<span id="cb37-14"><a href="#cb37-14" aria-hidden="true" tabindex="-1"></a>        <span class="fu">rethrow</span>()</span>
-<span id="cb37-15"><a href="#cb37-15" aria-hidden="true" tabindex="-1"></a>    <span class="cf">end</span></span>
-<span id="cb37-16"><a href="#cb37-16" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb38"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb38-1"><a href="#cb38-1" aria-hidden="true" tabindex="-1"></a><span class="im">using</span> <span class="bu">SimilaritySearchEngine</span></span>
+<span id="cb38-2"><a href="#cb38-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb38-3"><a href="#cb38-3" aria-hidden="true" tabindex="-1"></a><span class="cf">try</span></span>
+<span id="cb38-4"><a href="#cb38-4" aria-hidden="true" tabindex="-1"></a>    <span class="fu">searchbatch</span>(h, queries, <span class="fl">10</span>)</span>
+<span id="cb38-5"><a href="#cb38-5" aria-hidden="true" tabindex="-1"></a><span class="cf">catch</span> <span class="cn">e</span></span>
+<span id="cb38-6"><a href="#cb38-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="cn">e</span> isa PendingBacklog</span>
+<span id="cb38-7"><a href="#cb38-7" aria-hidden="true" tabindex="-1"></a>        <span class="co"># Items were appended but not indexed yet. The engine reports both counts.</span></span>
+<span id="cb38-8"><a href="#cb38-8" aria-hidden="true" tabindex="-1"></a>        <span class="pp">@info</span> <span class="st">"indexing </span><span class="sc">$</span>(<span class="cn">e</span>.staged <span class="op">-</span> <span class="cn">e</span>.connected)<span class="st"> pending item(s) first"</span></span>
+<span id="cb38-9"><a href="#cb38-9" aria-hidden="true" tabindex="-1"></a>        <span class="fu">index!</span>(h)</span>
+<span id="cb38-10"><a href="#cb38-10" aria-hidden="true" tabindex="-1"></a>        <span class="fu">searchbatch</span>(h, queries, <span class="fl">10</span>)</span>
+<span id="cb38-11"><a href="#cb38-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">elseif</span> <span class="cn">e</span> isa ConflictingState</span>
+<span id="cb38-12"><a href="#cb38-12" aria-hidden="true" tabindex="-1"></a>        <span class="fu">rethrow</span>()          <span class="co"># some other state problem: not trained, empty, no index</span></span>
+<span id="cb38-13"><a href="#cb38-13" aria-hidden="true" tabindex="-1"></a>    <span class="cf">else</span></span>
+<span id="cb38-14"><a href="#cb38-14" aria-hidden="true" tabindex="-1"></a>        <span class="fu">rethrow</span>()</span>
+<span id="cb38-15"><a href="#cb38-15" aria-hidden="true" tabindex="-1"></a>    <span class="cf">end</span></span>
+<span id="cb38-16"><a href="#cb38-16" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p>The categories, and when each one appears:</p>
 <table class="caption-top table">
 <colgroup>

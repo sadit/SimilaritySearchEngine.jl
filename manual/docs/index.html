@@ -318,6 +318,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <li><code>BaseProfile(p)</code> uses an existing <code>TextProfile</code>.</li>
 <li><code>FitFromCorpus(cfg)</code> fits a profile from the staged corpus, up to <code>max_documents</code>.</li>
 <li>A query accepts a <code>QueryPolicy</code>, which determines orthographic correction and query expansion.</li>
+<li><code>edit_correction=true</code>, given to <code>create_project</code> or <code>open_project</code>, also corrects a query token that is absent from the vocabulary when exactly one vocabulary token is at edit distance 1 from it.</li>
 </ul></li>
 <li><strong>Typed interface</strong>: input is given in typed containers (<code>DenseItem</code>, <code>SparseItem</code>, <code>TextItem</code>), and queries return structured results (<code>SearchResult</code>, <code>StoredItem</code>, <code>ExistsResult</code>).</li>
 <li><strong>Logical deletion</strong>: <code>delete_item!</code> marks a document as deleted without modifying the index. Queries return such candidates with an explicit <code>deleted</code> field.</li>

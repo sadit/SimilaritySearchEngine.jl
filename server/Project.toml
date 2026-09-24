@@ -33,11 +33,11 @@ REPL = "1"
 Random = "1"
 RocksDB = "1.0.0"
 SHA = "0.7"
-SimilaritySearch = "1.4.2"
+SimilaritySearch = "1.5.1"
 SimilaritySearchEngine = "0.1"
 SparseArrays = "1"
 TOML = "1"
-TextSearch = "1.1.2"
+TextSearch = "1.2.1"
 julia = "1.12"
 
 [apps.similarity-search]

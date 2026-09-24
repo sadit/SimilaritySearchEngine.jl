@@ -316,7 +316,8 @@ end
 """
     DefaultProfile(language::Symbol; nickname=..., refit=true, max_documents=1000)
 
-Index against the published profile for `language` (`:en`, `:es`, `:pt`), adapted to this
+Index against the published profile for `language` (one of the keys of
+[`DEFAULT_PROFILE_NICKNAMES`](@ref)), adapted to this
 project's own corpus at the first [`index!`](@ref index!(::FullTextEngine)) call.
 
 This is the choice to reach for. `TextSearch.refit_profile` blends the base's token counts with
@@ -324,23 +325,27 @@ this project's own, recomputes the weights from the blend, and *inherits* the st
 lemma map and expansion network instead of re-deriving them. No embedding is fitted, which is
 what makes a refit cheap next to a fit and is the point of bootstrapping.
 
-# What a refit actually gives you, and what it does not
+# What a refit gives you
 
-Measured: the published English paragraph profile holds 335,336 tokens; refitting it against an
-800-document sample gives 12,238, of which 2,649 are tokens the sample never contained and the
-base kept. Fitting on that sample alone would give 9,589.
+Measured on 2026-09-24 with TextSearch 1.2.1 and 64 threads. The published Spanish profile holds
+730,320 tokens. Refitting it against a sample of 962 paragraphs from Spanish Gutenberg books gives
+591,494 tokens in 12.4 s. Of those, 9,382 occur in the sample and 582,112 come from the base
+alone. Fitting on the same sample alone gives 10,122 tokens.
 
-So a refit is **not** language-wide vocabulary coverage. It narrows to this corpus's own
-vocabulary, widened about a quarter by the base. What it inherits is the part an indexing corpus
-cannot produce for itself: idf and BM25 weights calibrated over millions of paragraphs rather
-than hundreds, plus the artifacts -- for that English base, 96 stopwords, 16,661 lemmas and
-10,655 expansion entries.
+So a refit keeps most of the language's vocabulary. A term this project has not seen yet is
+usually still in the vocabulary, and it is searchable when a later batch brings it. Which base
+tokens a refit keeps is decided by the `min_ndocs` keyword of `TextSearch.refit_profile`. This
+package passes none, so the library's default applies. That default changed in TextSearch 1.2:
+before it, a refit kept only a small part of the base. With TextSearch 1.1 and the English
+profile, a refit against 800 documents gave 12,238 of the base's 335,336 tokens.
 
-`refit=false` is therefore not just "skip a step": it indexes against the base untouched, all
-335,336 tokens of it, so a term this project has never seen is still in the vocabulary and still
-searchable when a later batch brings it. The weights are Wikipedia's rather than yours. Choose
-by which you need -- calibration for this corpus, or coverage beyond it. With `refit=false` this
-is exactly `BaseProfile(load_profile(path))` with the path resolved for you.
+What the refit changes is the weights: idf and BM25 statistics come from the blend of the base's
+counts with this corpus's. It also inherits the artifacts. For the Spanish base these are 98
+stopwords, 140,887 lemmas, and an expansion network of 730,277 entries (589,018 after the refit).
+
+`refit=false` indexes against the base untouched, all 730,320 tokens of it, with Wikipedia's
+weights rather than weights from this corpus. With `refit=false` this is exactly
+`BaseProfile(load_profile(path))` with the path resolved for you.
 
 `max_documents` caps the refit sample as it does on [`FitFromCorpus`](@ref), and here the cap is
 cheap: the sample's only job is to say how this corpus differs from the base.
@@ -349,9 +354,13 @@ cheap: the sample's only job is to say how this corpus differs from the base.
 
 `~/.textsearch/profiles/<nickname>.zip` (or under `\$TEXTSEARCH_HOME`) -- the library of
 installed profiles `textsearch install` maintains, reused rather than reinvented. Nothing is
-bundled with this package and nothing is downloaded: the profiles are 70-160 MB each. If the
-one you asked for is not installed, [`default_profile_path`](@ref) says so and prints the
-command that installs it.
+bundled with this package and nothing is downloaded: the profiles are 12-52 MB each (format 1.1,
+measured 2026-09-24). If the one you asked for is not installed, [`default_profile_path`](@ref)
+says so and prints the command that installs it.
+
+TextSearch 1.2 reads profile format 1.1 only. A profile installed with an earlier TextSearch is
+in format 1.0, and loading it fails. Install it again with
+`download_profile(nickname; force=true)`.
 
 `nickname` defaults to [`DEFAULT_PROFILE_NICKNAMES`](@ref)`[language]` and can be overridden to
 point at any installed profile -- a refit of your own, a different Wikipedia snapshot, a
@@ -417,22 +426,6 @@ the CLI, and this is the most likely first thing a caller of [`DefaultProfile`](
 function default_profile_path(spec::DefaultProfile)
     path = joinpath(textsearch_home(), "profiles", spec.nickname * ".zip")
     isfile(path) && return path
-
-    # Check fallback legacy paragraph nicknames if language is in (:en, :es, :pt)
-    legacy = if spec.language === :es
-        "wiki20231101-es-paragraphs"
-    elseif spec.language === :en
-        "wiki20231101-en-paragraphs-partial"
-    elseif spec.language === :pt
-        "wiki20231101-pt-paragraphs"
-    else
-        nothing
-    end
-    if legacy !== nothing
-        legacy_path = joinpath(textsearch_home(), "profiles", legacy * ".zip")
-        isfile(legacy_path) && return legacy_path
-    end
-
     profile_not_installed(spec.nickname, """
         the default profile for $(repr(spec.language)) is not installed: no $path
         Install it by calling `download_profile($(repr(spec.nickname)))` or using the textsearch CLI:
@@ -579,6 +572,9 @@ mutable struct TextBackend
     kind::Type
     distance::Union{Nothing, SimilaritySearch.PreMetric}
     adj_factory::Union{Nothing, Function}
+    # Whether the index's query pipeline carries an edit index (see `_query_pipeline`). Kept
+    # here so that an index built later by `index!` gets the same pipeline as one built now.
+    edit_correction::Bool
 end
 
 """
@@ -953,30 +949,57 @@ used to keep a second copy of, in a `variants` field it derived and cached itsel
 the index, is the whole reason that field is gone.
 
 `distance` is ignored for BM25, which scores through its own `bm25score` and has no metric to
-choose (see [`default_distance`](@ref)).
-""" 
-function _text_index(profile::TextProfile, kind::Type, distance, adj_factory::Union{Nothing,Function})
+choose (see [`default_distance`](@ref)). `edit_correction` is as in [`_query_pipeline`](@ref).
+"""
+function _text_index(profile::TextProfile, kind::Type, distance, adj_factory::Union{Nothing,Function},
+                     edit_correction::Bool)
     if kind === BM25InvertedFile
         index = BM25InvertedFile(profile)
-        adj_factory === nothing && return index
+        query = _query_pipeline(index.query, index.voc, edit_correction)
+        adj_factory === nothing && query === index.query && return index
         # The library exposes no keyword for injecting an adjacency list, so the index is built
         # its own way first and then rebuilt around the caller's: same voc, same scorer, same
         # query pipeline, a different place for the posting lists to live. This is the one call
         # in this package that depends on `BM25InvertedFile`'s *field order*
         # (voc, bm25, adj, doclens, db, len, query), which is why Project.toml pins
         # TextSearch to an exact version and `test/runtests.jl` exercises this path.
-        return BM25InvertedFile(index.voc, index.bm25, adj_factory(vocsize(index.voc)),
-                                index.doclens, index.db, index.len, index.query)
+        adj = adj_factory === nothing ? index.adj : adj_factory(vocsize(index.voc))
+        return BM25InvertedFile(index.voc, index.bm25, adj, index.doclens, index.db, index.len, query)
     end
     index = TextInvertedFile(profile; dist=distance)
-    adj_factory === nothing && return index
+    query = _query_pipeline(index.query, index.model.voc, edit_correction)
+    adj_factory === nothing && query === index.query && return index
     # Same surgery, one level deeper: a TextInvertedFile wraps a plain InvertedFile, and it is
     # that inner index whose posting lists move to storage. Its field order
     # (dist, adj, sizes, db, len) is the second internal this package depends on.
     inner = index.invfile
+    adj_factory === nothing && return TextInvertedFile(index.model, inner, query)
     rebuilt = InvertedFile(inner.dist, adj_factory(length(inner.adj)), inner.sizes,
                                             inner.db, inner.len)
-    TextInvertedFile(index.model, rebuilt, index.query)
+    TextInvertedFile(index.model, rebuilt, query)
+end
+
+"""
+    _query_pipeline(query::QueryPipeline, voc::Vocabulary, edit_correction::Bool) -> QueryPipeline
+
+The query pipeline a text index is built with. It is `query` itself when `edit_correction` is
+`false`. When it is `true`, it is a copy of `query` that also holds `TextSearch.derive_edits(voc)`.
+
+The edit index lets correction replace a query token that is absent from the vocabulary with the
+only vocabulary token at Damerau-Levenshtein distance 1 from it, for example `guerar` -> `guerra`.
+TextSearch reports such a replacement with the reason `:edit`. The index is derived from the
+vocabulary and not stored, so it is derived again each time the text index is assembled.
+
+It is off by default because of what it costs. Measured on 2026-09-24 over the Spanish profile
+(730,320 tokens): `derive_edits` took 1.2 s with 64 threads and 5.0 s with one thread, and the
+edit index used 81 MiB. Resolving a query in which every token is in the vocabulary took 7.6 µs
+against 7.3 µs without it. Resolving a query with one token absent from the vocabulary took
+18.7 ms against 7.3 µs.
+"""
+function _query_pipeline(query::QueryPipeline, voc::Vocabulary, edit_correction::Bool)
+    edit_correction || return query
+    QueryPipeline(; policy=query.policy, variants=query.variants, edits=derive_edits(voc),
+                    expansion=query.expansion, distances=query.distances)
 end
 
 """
@@ -1219,7 +1242,7 @@ every `:add!` event a `push_item!`/`append_items!` call reports -- e.g. to persi
 handle or `stdout`/`stderr` both work; purely informative, and being a reporter rather than an
 observer it changes nothing about what gets persisted.
 """
-function create_engine(::Type{SearchGraph}; distance, minrecall::Union{Nothing,Real}, textmodel, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function}, maxbatches::Union{Nothing,Integer})
+function create_engine(::Type{SearchGraph}; distance, minrecall::Union{Nothing,Real}, textmodel, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function}, maxbatches::Union{Nothing,Integer}, edit_correction::Bool)
     _reject_textmodel(SearchGraph, textmodel)
     mr = minrecall === nothing ? nothing : Float32(minrecall)
     backend = GraphBackend(SearchGraph(distance, VectorDatabase()),
@@ -1240,9 +1263,9 @@ function _create_exact_engine(IndexType::Type, distance, textmodel,
     DenseEngine(backend, ContextPool(_search_context(GenericContext)), Set{UInt32}(), ReadWriteLock())
 end
 
-create_engine(::Type{ExhaustiveSearch}; distance, minrecall, textmodel, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function}, maxbatches::Union{Nothing,Integer}) =
+create_engine(::Type{ExhaustiveSearch}; distance, minrecall, textmodel, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function}, maxbatches::Union{Nothing,Integer}, edit_correction::Bool) =
     _create_exact_engine(ExhaustiveSearch, distance, textmodel, on_change, log_io, maxbatches)
-create_engine(::Type{ParallelExhaustiveSearch}; distance, minrecall, textmodel, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function}, maxbatches::Union{Nothing,Integer}) =
+create_engine(::Type{ParallelExhaustiveSearch}; distance, minrecall, textmodel, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function}, maxbatches::Union{Nothing,Integer}, edit_correction::Bool) =
     _create_exact_engine(ParallelExhaustiveSearch, distance, textmodel, on_change, log_io, maxbatches)
 
 """
@@ -1254,7 +1277,9 @@ Creates a new, empty text search engine of the given index type. `minrecall` is 
 ignored on both, and `distance` is accepted and ignored on `BM25InvertedFile` (BM25 always
 scores via its own `bm25score`), so a caller can pass the same keyword set uniformly
 regardless of index type. `on_change`/`log_io` are as in the dense `create_engine` methods
-above. `TextInvertedFile` and `InvertedFile` select the same engine and are interchangeable
+above. `edit_correction` says whether the index's query pipeline holds an edit index (see
+[`_query_pipeline`](@ref)); the dense methods accept it and ignore it, as they do `minrecall`.
+`TextInvertedFile` and `InvertedFile` select the same engine and are interchangeable
 here; `TextInvertedFile` is the name of what actually gets built (see
 [`FullTextEngine`](@ref)).
 
@@ -1280,24 +1305,24 @@ be.
 # reaching for "a weighted inverted file" writes.
 function _create_text_engine(selector::Type, distance, textmodel,
                              on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO},
-                             adj_factory::Union{Nothing,Function}, maxbatches::Union{Nothing,Integer})
+                             adj_factory::Union{Nothing,Function}, maxbatches::Union{Nothing,Integer}, edit_correction::Bool)
     spec = _require_textmodel(selector, textmodel)
     kind = selector === BM25InvertedFile ? BM25InvertedFile : TextInvertedFile
     dist = kind === BM25InvertedFile ? nothing : distance
     profile = _initial_profile(spec)
-    index = profile === nothing ? nothing : _text_index(profile, kind, dist, adj_factory)
+    index = profile === nothing ? nothing : _text_index(profile, kind, dist, adj_factory, edit_correction)
     backend = TextBackend(index, InvertedFileContext(; _batch_cap(maxbatches)..., _engine_logging(on_change, log_io)...),
-                          kind, dist, adj_factory)
+                          kind, dist, adj_factory, edit_correction)
     FullTextEngine(backend, profile, _deferred_fit(spec), String[],
                    ContextPool(_search_context(InvertedFileContext)), Set{UInt32}(), ReadWriteLock())
 end
 
-create_engine(::Type{BM25InvertedFile}; distance, minrecall, textmodel::Union{Nothing,AbstractTextModelSpec}, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function}, maxbatches::Union{Nothing,Integer}) =
-    _create_text_engine(BM25InvertedFile, distance, textmodel, on_change, log_io, adj_factory, maxbatches)
-create_engine(::Type{InvertedFile}; distance, minrecall, textmodel::Union{Nothing,AbstractTextModelSpec}, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function}, maxbatches::Union{Nothing,Integer}) =
-    _create_text_engine(InvertedFile, distance, textmodel, on_change, log_io, adj_factory, maxbatches)
-create_engine(::Type{TextInvertedFile}; distance, minrecall, textmodel::Union{Nothing,AbstractTextModelSpec}, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function}, maxbatches::Union{Nothing,Integer}) =
-    _create_text_engine(TextInvertedFile, distance, textmodel, on_change, log_io, adj_factory, maxbatches)
+create_engine(::Type{BM25InvertedFile}; distance, minrecall, textmodel::Union{Nothing,AbstractTextModelSpec}, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function}, maxbatches::Union{Nothing,Integer}, edit_correction::Bool) =
+    _create_text_engine(BM25InvertedFile, distance, textmodel, on_change, log_io, adj_factory, maxbatches, edit_correction)
+create_engine(::Type{InvertedFile}; distance, minrecall, textmodel::Union{Nothing,AbstractTextModelSpec}, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function}, maxbatches::Union{Nothing,Integer}, edit_correction::Bool) =
+    _create_text_engine(InvertedFile, distance, textmodel, on_change, log_io, adj_factory, maxbatches, edit_correction)
+create_engine(::Type{TextInvertedFile}; distance, minrecall, textmodel::Union{Nothing,AbstractTextModelSpec}, on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, adj_factory::Union{Nothing,Function}, maxbatches::Union{Nothing,Integer}, edit_correction::Bool) =
+    _create_text_engine(TextInvertedFile, distance, textmodel, on_change, log_io, adj_factory, maxbatches, edit_correction)
 
 """
     create_engine(::Type{InvertedFile}; distance, dimension, on_change, log_io) -> SparseEngine
@@ -1436,6 +1461,8 @@ own `build_*` function needs instead:
   `staged` (every raw text ever staged, flattened from `Persistence.load_staged_text_blocks`,
   which can be longer than what the index holds if a backlog was still pending an `index!` call
   when the project last closed). Nothing is rebuilt here: a text index is assembled or absent.
+  `edit_correction` is the value an index built later by `index!` uses (see
+  [`_query_pipeline`](@ref)); it is not persisted, and `prebuilt_index` must already agree with it.
 - `SparseEngine`: `distance`, `dimension`, and `object_blocks` -- the same encoded posting-list
   blocks a text project replays, minus the profile there is no vocabulary for.
 """
@@ -1478,7 +1505,7 @@ function restore_engine(::Val{:text}, state; on_change::Union{Nothing,Function},
     # recomputed here.
     index = state.prebuilt_index
     backend = TextBackend(index, InvertedFileContext(; _batch_cap(maxbatches)..., _engine_logging(on_change, log_io)...),
-                          kind, state.distance, state.adj_factory)
+                          kind, state.distance, state.adj_factory, state.edit_correction)
     FullTextEngine(backend, profile, state.fitspec, state.staged,
                    ContextPool(_search_context(InvertedFileContext)), state.deleted_ids, ReadWriteLock())
 end
@@ -1556,7 +1583,8 @@ function index!(engine::FullTextEngine)
             # staged text. One statement covers both: an engine with a profile and no index gets
             # one, and the block below then indexes everything staged.
             engine.backend.index = _text_index(engine.profile, engine.backend.kind,
-                                               engine.backend.distance, engine.backend.adj_factory)
+                                               engine.backend.distance, engine.backend.adj_factory,
+                                               engine.backend.edit_correction)
             already = 0
         end
         already < n || return engine

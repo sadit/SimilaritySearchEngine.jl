@@ -735,12 +735,13 @@ const ACCENT_ITEMS = vcat(
                 @test occursin("textsearch", msg)
                 @test occursin(spec.nickname, msg)
 
-                # it resolves if the legacy paragraph nickname is present
+                # A file under a nickname from before format 1.1 is not a fallback: those
+                # profiles are in format 1.0, which TextSearch 1.2 does not load.
                 mkpath(joinpath(home, "profiles"))
                 touch(joinpath(home, "profiles", "wiki20231101-es-paragraphs.zip"))
-                @test default_profile_path(spec) == joinpath(home, "profiles", "wiki20231101-es-paragraphs.zip")
+                @test_throws ProfileNotInstalled default_profile_path(spec)
 
-                # and the official nickname takes priority once present
+                # it resolves once the official nickname is present
                 touch(joinpath(home, "profiles", spec.nickname * ".zip"))
                 @test default_profile_path(spec) == joinpath(home, "profiles", spec.nickname * ".zip")
             end
@@ -777,6 +778,66 @@ const ACCENT_ITEMS = vcat(
             h2 = open_project(workdir, "policy_ds")
             @test all(r -> startswith(r.doc_id, "acc_"), ftsearch(h2, "musica", 5))
             close_project!(h2)
+        end
+    end
+
+    @testset "text project: edit_correction corrects a token the vocabulary lacks, only when asked" begin
+        mktempworkdir() do workdir
+            texts = vcat(["la guerra civil del periodo $i" for i in 1:5],
+                         ["un tratado de paz firmado en $i" for i in 1:5])
+            items = [TextItem(t; doc_id=(i <= 5 ? "g$i" : "p$i")) for (i, t) in enumerate(texts)]
+            war(hits) = length(hits) == 5 && all(r -> startswith(r.doc_id, "g"), hits)
+
+            # Off by default: `guerar` is not in the vocabulary, and no fold reaches `guerra`.
+            h = create_project(workdir, "edits_bm25"; engine=FullTextEngine, backend=BM25InvertedFile,
+                               textmodel=FitFromCorpus())
+            append_items!(h, items)
+            index!(h)
+            @test isempty(ftsearch(h, "guerar", 5))
+            @test isempty(ftexplain(h, "guerar"))
+            close_project!(h)
+
+            # Opening with it on assembles the persisted index with an edit index.
+            h = open_project(workdir, "edits_bm25"; edit_correction=true)
+            @test war(ftsearch(h, "guerar", 5))
+            lines = ftexplain(h, "guerar")
+            @test length(lines) == 1
+            @test occursin("guerra (edit)", lines[1])
+            # The policy still decides per query.
+            @test isempty(ftsearch(h, "guerar", 5; policy=QueryPolicy(correction=:off)))
+            # A token the vocabulary holds is never replaced by a guess.
+            @test isempty(ftexplain(h, "guerra"))
+            close_project!(h)
+
+            # The value is not persisted: a plain open is off again.
+            h = open_project(workdir, "edits_bm25")
+            @test isempty(ftsearch(h, "guerar", 5))
+            close_project!(h)
+
+            # Set at creation, it reaches the index that the first index! builds, on the weighted
+            # backend too.
+            h = create_project(workdir, "edits_weighted"; engine=FullTextEngine, backend=TextInvertedFile,
+                               textmodel=FitFromCorpus(), edit_correction=true)
+            append_items!(h, items)
+            index!(h)
+            @test war(ftsearch(h, "guerar", 5))
+            close_project!(h)
+
+            # A BaseProfile builds its index at creation, which is the third place it applies.
+            profile = fit_profile(FitFromCorpus(), texts)
+            h = create_project(workdir, "edits_base"; engine=FullTextEngine, backend=BM25InvertedFile,
+                               textmodel=BaseProfile(profile), edit_correction=true)
+            append_items!(h, items)
+            index!(h)
+            @test war(ftsearch(h, "guerar", 5))
+            close_project!(h)
+
+            # A project without text has no tokens to correct.
+            @test_throws InvalidOption create_project(workdir, "edits_dense"; edit_correction=true)
+            close_project!(create_project(workdir, "dense_ok"; engine=DenseEngine, backend=ExhaustiveSearch))
+            @test_throws InvalidOption open_project(workdir, "dense_ok"; edit_correction=true)
+            # The refused open released the project's lock.
+            close_project!(open_project(workdir, "dense_ok"))
         end
     end
 

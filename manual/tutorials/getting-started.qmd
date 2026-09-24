@@ -397,6 +397,10 @@ hes = create_project(workdir, "news_es"; engine=FullTextEngine, backend=BM25Inve
 
 The project then uses the stopword lists, lemma clusters and query-expansion networks derived from a reference corpus, with term frequencies adjusted to the dataset of the project.
 
+The refit keeps most of the vocabulary of the profile. Measured on 2026-09-24 with TextSearch 1.2.1, the Spanish profile holds 730,320 tokens. A refit against 962 paragraphs of Spanish books kept 591,494 of them, and 9,382 of those occur in the paragraphs. A term that the project has not stored yet is therefore usually searchable when a later batch adds it.
+
+The profiles are installed under `~/.textsearch/profiles`. TextSearch 1.2 reads profile format 1.1 only. A profile installed with an earlier version of TextSearch is in format 1.0 and does not load. Install it again with `download_profile("es"; force=true)`.
+
 ### 2. `FitFromCorpus`
 
 Fits a `TextProfile` directly from the staged corpus without an external reference profile:
@@ -442,6 +446,27 @@ ftsearch(hes, "musica clasica", 5; policy=QueryPolicy(correction=:off))
 ```julia
 ftexplain(hes, "musica clasica")
 ```
+
+### Correcting Misspelled Tokens: `edit_correction`
+
+The default correction folds case and diacritics, so it maps `musica` to `música`. It does not map `guerar` to `guerra`, because that correction exchanges two letters. The keyword `edit_correction=true` adds this kind of correction. A query token that is absent from the vocabulary is replaced by the only vocabulary token at Damerau-Levenshtein distance 1 from it. The Damerau-Levenshtein distance counts insertions, deletions, substitutions and exchanges of two adjacent letters. If there are two or more such tokens, the query token is not replaced.
+
+```julia
+hes = open_project(workdir, "news_es"; edit_correction=true)
+ftexplain(hes, "guerar civil")    # ["guerar not found, searched as guerra (edit) instead"]
+```
+
+The keyword is `false` by default, and the value is not stored with the project. Each call to `open_project` or `create_project` sets it again. `QueryPolicy(correction=:off)` disables it for one query.
+
+It is disabled by default because it has a cost. The engine builds the edit index from the vocabulary each time it opens the project. Measured on 2026-09-24 over the Spanish profile (730,320 tokens):
+
+| Measurement | Without `edit_correction` | With `edit_correction` |
+|---|---|---|
+| Build the edit index, 64 threads | -- | 1.2 s |
+| Build the edit index, 1 thread | -- | 5.0 s |
+| Memory of the edit index | -- | 81 MiB |
+| Resolve a query whose tokens are all in the vocabulary | 7.3 µs | 7.6 µs |
+| Resolve a query with one token absent from the vocabulary | 7.3 µs | 18.7 ms |
 
 ---
 

@@ -93,6 +93,7 @@ developed by path.
   - `BaseProfile(p)` uses an existing `TextProfile`.
   - `FitFromCorpus(cfg)` fits a profile from the staged corpus, up to `max_documents`.
   - A query accepts a `QueryPolicy`, which determines orthographic correction and query expansion.
+  - `edit_correction=true`, given to `create_project` or `open_project`, also corrects a query token that is absent from the vocabulary when exactly one vocabulary token is at edit distance 1 from it.
 - **Typed interface**: input is given in typed containers (`DenseItem`, `SparseItem`, `TextItem`), and queries return structured results (`SearchResult`, `StoredItem`, `ExistsResult`).
 - **Logical deletion**: `delete_item!` marks a document as deleted without modifying the index. Queries return such candidates with an explicit `deleted` field.
 - **Recall calibration**: `calibrate!` optimizes the beam search parameters for a set of target recall values, which `minrecall` then selects. `SearchStats` reports the number of distance computations a query performed.

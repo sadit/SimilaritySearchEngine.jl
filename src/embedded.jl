@@ -311,7 +311,7 @@ _invfile_adj_factory(store::Persistence.InvertedIndexStore; maxlists::Int, basel
     vocsize -> Persistence.LazyPostings(store, vocsize, maxlists, baselists)
 
 """
-    _assemble_text_index(profile, kind, distance, store, adj_factory) -> AbstractInvertedFile
+    _assemble_text_index(profile, kind, distance, store, adj_factory, edit_correction) -> AbstractInvertedFile
 
 Rebuilds a queryable text index from what was persisted, without reindexing anything.
 
@@ -327,26 +327,29 @@ Measured on 265k Gutenberg paragraphs, 2026-09-11: 1.1s against 20.4s to recompu
 index from the raw objects, and that is *with* the document vectors loaded eagerly.
 """
 function _assemble_text_index(profile::TextProfile, kind::Type, distance,
-                              store::Persistence.InvertedIndexStore, adj_factory::Function)
+                              store::Persistence.InvertedIndexStore, adj_factory::Function,
+                              edit_correction::Bool)
     docvecs = Persistence.load_invfile_docvecs(store)
     if kind === BM25InvertedFile
         template = BM25InvertedFile(profile)
         doclens = Int32[Int32(sum(v.nzval; init=UInt32(0))) for v in docvecs]
         return BM25InvertedFile(template.voc, template.bm25, adj_factory(length(template.adj)),
                                 doclens, VectorDatabase(docvecs), Ref(Int64(length(docvecs))),
-                                template.query)
+                                IndexEngine._query_pipeline(template.query, template.voc, edit_correction))
     end
     template = TextInvertedFile(profile; dist=distance)
     inner = template.invfile
     sizes = UInt32[UInt32(Persistence.docvec_nnz(v)) for v in docvecs]
     rebuilt = InvertedFile(inner.dist, adj_factory(length(inner.adj)), sizes,
                                             VectorDatabase(docvecs), Ref(Int64(length(docvecs))))
-    TextInvertedFile(template.model, rebuilt, template.query)
+    TextInvertedFile(template.model, rebuilt,
+                     IndexEngine._query_pipeline(template.query, template.model.voc, edit_correction))
 end
 
 """
     create_project(workdir, dataset; engine=DenseEngine, backend=nothing, distance=nothing,
-                   minrecall=0.9, dimension=nothing, textmodel=nothing, schema_version=1) -> EmbeddedEngine
+                   minrecall=0.9, dimension=nothing, textmodel=nothing, schema_version=1,
+                   edit_correction=false) -> EmbeddedEngine
 
 Creates a brand-new project directly on disk at `<workdir>/<dataset>`, with no HTTP server or
 CLI subprocess involved -- the same on-disk layout `similarity-search build` already produces,
@@ -409,6 +412,17 @@ backend's, because `InvertedFile` is a legal backend for both a sparse and a tex
 backend alone cannot answer it. The spec is persisted with the project and restored verbatim by
 [`open_project`](@ref).
 
+`edit_correction=true` lets a text project's queries correct a token that is absent from the
+vocabulary to the only vocabulary token at Damerau-Levenshtein distance 1 from it, for example
+`guerar` -> `guerra`. [`ftexplain`](@ref) reports such a correction with the reason `:edit`.
+The correction runs only when `policy.correction` is not `:off`, only for a token the vocabulary
+does not hold, and only when the other corrections found nothing for it. It is `false` by
+default because of its cost, which `IndexEngine._query_pipeline` gives with measurements: the
+edit index is derived from the vocabulary each time the text index is assembled, and a query
+with a token absent from the vocabulary takes milliseconds instead of microseconds to resolve.
+The value is not persisted. [`open_project`](@ref) takes the same keyword, and each open
+decides it again. It is an error on a dense or sparse project.
+
 `schema_version` is stamped onto every `Schema.MetadataRecord` [`append_items!`](@ref)
 writes for this project's lifetime (not persisted/restored itself -- like `minrecall`
 before it was carried on the engine, a caller reopening this same project later must pass
@@ -435,7 +449,8 @@ function create_project(workdir::String, dataset::String;
                         textmodel::Union{Nothing,IndexEngine.AbstractTextModelSpec}=nothing,
                         index_type=nothing, schema_version::Int=1, meta_schema=nothing,
                         maxbatches::Union{Nothing,Integer}=nothing,
-                        postings_cache_max::Int=4096, postings_cache_base::Int=2048)
+                        postings_cache_max::Int=4096, postings_cache_base::Int=2048,
+                        edit_correction::Bool=false)
     index_type === nothing || invalid_option(:index_type, """
         `index_type` is gone: a project now names the kind of data it holds and, separately, the
         index that holds it.
@@ -459,6 +474,9 @@ function create_project(workdir::String, dataset::String;
         invalid_option(:textmodel, "`textmodel` only applies to a text project; $(nameof(engine)) indexes $kind " *
               "vectors, which have no text to tokenize and no vocabulary to fit")
     end
+    kind === :text || !edit_correction ||
+        invalid_option(:edit_correction, "`edit_correction` only applies to a text project; $(nameof(engine)) " *
+              "indexes $kind vectors, and its queries have no tokens to correct")
     if kind === :sparse
         dimension === nothing &&
             invalid_option(:dimension, "a sparse project needs `dimension`: an InvertedFile is a fixed array of " *
@@ -501,7 +519,7 @@ function create_project(workdir::String, dataset::String;
     dist = distance === nothing ? IndexEngine.default_distance(back) : distance
     eng = kind === :sparse ?
         IndexEngine.create_sparse_engine(; distance=dist, dimension, on_change, log_io=nothing, maxbatches) :
-        IndexEngine.create_engine(back; distance=dist, minrecall, textmodel, on_change, log_io=nothing, adj_factory, maxbatches)
+        IndexEngine.create_engine(back; distance=dist, minrecall, textmodel, on_change, log_io=nothing, adj_factory, maxbatches, edit_correction)
     Persistence.save_fields!(store, IndexEngine.snapshot_state(eng))
     schema = _as_meta_schema(meta_schema)
     isempty(schema) || Persistence.save_field!(store, :meta_schema, schema)
@@ -510,7 +528,7 @@ function create_project(workdir::String, dataset::String;
 end
 
 """
-    open_project(workdir, dataset; read_only=false) -> EmbeddedEngine
+    open_project(workdir, dataset; read_only=false, edit_correction=false) -> EmbeddedEngine
 
 Reopens a project previously created by [`create_project`](@ref), restoring its search
 engine -- including the `minrecall` target and any calibrated `opt_beamsearch` it was
@@ -526,10 +544,15 @@ another script) still has open for writing (mirrors `Project.open_project`'s own
 `read_only` kwarg, used the same way by the CLI's `describe` command) -- a plain
 (non-`read_only`) open against a directory something else already has open for writing
 raises RocksDB's own real lock error, not a friendly one this function invents.
+
+`edit_correction=true` derives an edit index from a text project's vocabulary, so that its
+queries can correct a token the vocabulary does not hold (see [`create_project`](@ref)). It is
+`false` by default, and it is an error on a project that does not hold text.
 """
 function open_project(workdir::String, dataset::String; read_only::Bool=false, schema_version::Int=1,
                       maxbatches::Union{Nothing,Integer}=nothing,
-                      postings_cache_max::Int=4096, postings_cache_base::Int=2048)
+                      postings_cache_max::Int=4096, postings_cache_base::Int=2048,
+                      edit_correction::Bool=false)
     dir = joinpath(workdir, dataset)
     project = Project.open_project(dir, dataset; read_only, extra_cf_names=[Persistence.ENGINE_CF, Persistence.ADJACENCY_CF, Persistence.INVFILE_DB_CF,
                                                  Persistence.STAGED_TEXT_CF, Persistence.INVFILE_POSTINGS_CF,
@@ -543,13 +566,19 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
     # rather than a migration.
     kind = Persistence.load_field(store, :kind, nothing)
     backend = Persistence.load_field(store, :backend, nothing)
+    if edit_correction && kind !== :text
+        Project.close_project(project)
+        invalid_option(:edit_correction, "`edit_correction` only applies to a text project; this one holds " *
+              "$(something(kind, :dense)) vectors, and its queries have no tokens to correct")
+    end
     engine = if kind === nothing
         # Never saved: create the same default project `create_project` would have, and save it,
         # mirroring `Server._reload_one_dataset!`'s own create-if-absent fallback.
         on_change = _searchgraph_on_change(store, Persistence.open_adjacency_store(project.db))
         engine = IndexEngine.create_engine(SearchGraph;
             distance=IndexEngine.default_distance(SearchGraph), minrecall=0.9,
-            textmodel=nothing, on_change, log_io=nothing, maxbatches)
+            textmodel=nothing, on_change, log_io=nothing, adj_factory=nothing, maxbatches,
+            edit_correction=false)
         Persistence.save_fields!(store, IndexEngine.snapshot_state(engine))
         engine
     elseif kind === :dense && backend === :graph
@@ -603,7 +632,7 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
         # reconstructs an index from the raw objects a pre-persistence project saved -- see
         # `index!`'s own docstring for what to do with one of those.
         prebuilt = profile !== nothing && Persistence.has_inverted_index(invfile_store) ?
-            _assemble_text_index(profile, kindtype, distance, invfile_store, adj_factory) : nothing
+            _assemble_text_index(profile, kindtype, distance, invfile_store, adj_factory, edit_correction) : nothing
         state = (
             kind=kind, backend=backend,
             profile=profile,
@@ -611,6 +640,7 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
             distance=distance,
             prebuilt_index=prebuilt,
             adj_factory=adj_factory,
+            edit_correction=edit_correction,
             staged=vcat(String[], Persistence.load_staged_text_blocks(staged_store)...),
             deleted_ids=Persistence.load_field(store, :deleted_ids, nothing),
         )
