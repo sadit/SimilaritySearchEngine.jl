@@ -29,7 +29,7 @@ RocksDB = "1"
 # queries both text backends: a field-order change fails it rather than corrupting an index.
 SimilaritySearch = "1.5.1"
 SparseArrays = "1"
-TextSearch = "1.2.1"
+TextSearch = "1.3"
 # 1.12, which is what CI verifies and what development happens on. This said 1.10 while
 # nothing tested 1.10 -- a promise nobody checked, which is the shape of problem the packaging
 # pass went looking for. The subpackage under server/ needs 1.12 outright (`[apps]`).
