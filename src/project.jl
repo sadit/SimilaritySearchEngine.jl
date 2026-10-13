@@ -142,7 +142,7 @@ function backfill_docid_index!(manager::ProjectManager)
     b = RocksDB.WriteBatch()
     for (_, v) in RocksDB.DBIterator(manager.db; cf=manager.cf_records)
         record = JSON3.read(v, MetadataRecord)
-        isempty(record.doc_id) && continue
+        something(record.doc_id, "") == "" && continue
         RocksDB.put!(b, docid_key(record.doc_id, record._id), UInt8[], cf=manager.cf_idx_docid)
         n += 1
     end
@@ -232,7 +232,8 @@ function put_metadata!(manager::ProjectManager, record::MetadataRecord, meta)
     RocksDB.put!(b, key_bytes, record_bytes, cf=manager.cf_records)
     meta === nothing || RocksDB.put!(b, key_bytes, Schema.encode_meta(meta), cf=manager.cf_meta)
 
-    isempty(record.doc_id) ||
+    # `doc_id` is optional: an item without one has nothing to index under
+    something(record.doc_id, "") == "" ||
         RocksDB.put!(b, docid_key(record.doc_id, record._id), UInt8[], cf=manager.cf_idx_docid)
 
     for kw in record.keywords

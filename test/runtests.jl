@@ -958,6 +958,21 @@ const ACCENT_ITEMS = vcat(
     end
 
 
+    @testset "an item without a doc_id is stored, searched and fetched by _id" begin
+        mktempworkdir() do workdir
+            # `doc_id` is optional on every item type; the doc_id index used to call
+            # `isempty(nothing)` on such an item and fail the whole append.
+            h = create_project(workdir, "no_docid_ds"; engine=DenseEngine, backend=ExhaustiveSearch)
+            @test append_items!(h, [DenseItem(Float32[i, 0, 0, 0]) for i in 1:5]) == 5
+            hits = search(h, Float32[3, 0, 0, 0], 1)
+            @test hits[1]._id == 3 && hits[1].doc_id === nothing
+            @test only(fetch_items(h, [3])).doc_id === nothing
+            close_project!(h)
+            # the startup backfill of the doc_id index reads such records too
+            close_project!(open_project(workdir, "no_docid_ds"))
+        end
+    end
+
     @testset "doc_id resolves through an index, and a shared doc_id returns every item" begin
         mktempworkdir() do workdir
             items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:30]]
