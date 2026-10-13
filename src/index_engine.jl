@@ -1070,11 +1070,13 @@ The library's default, `8 * Threads.nthreads()`, is right for an operation that 
 many elements with `@BATCHES` -- insertion, `allknn`, `searchbatch`. A single query is one
 element and uses one slot.
 
-The difference is not small for a `SearchGraph`, whose context preallocates one visited-set
-buffer per slot: measured on 64 threads, 128.2 MB with the default against 0.25 MB with one
-slot, and the same query answers with the same identifiers either way. Multiplied by the
-number of concurrent searches a server admits, that is the difference between gigabytes of
-scratch that never shrink and a few megabytes (see [`ContextPool`](@ref)).
+For a `SearchGraph`, each slot holds a set of visited vertices. SimilaritySearch 1.6.5
+allocates that set when a search first uses the slot: 128 KB for a graph of up to `2^20`
+vertices. Measured on 2026-10-13 with 64 threads, over a graph of 20,000 vertices, a context
+with one slot holds 0.13 MB after a search. The default context has 512 slots on 64 threads.
+It holds 0.3 MB after one search, and 62.7 MB after a `searchbatch` that used 500 of its
+slots. The two contexts returned the same identifiers for each of 1,000 queries (see
+[`ContextPool`](@ref)).
 """
 const SEARCH_CONTEXT_MAXBATCHES = 1
 

@@ -1225,8 +1225,9 @@ const ACCENT_ITEMS = vcat(
             pooled = IndexEngine.checkout!(h.engine.search_ctx_pool)
             @test pooled.maxbatches == IndexEngine.SEARCH_CONTEXT_MAXBATCHES == 1
             @test h.engine.backend.ctx.maxbatches > 1
-            # A `SearchGraphContext` preallocates a visited-set buffer per slot, so the
-            # difference is the memory a concurrent search holds
+            # A `SearchGraphContext` holds a beam and a set of visited vertices per slot (the
+            # set is allocated when a search first uses the slot), so the difference is the
+            # memory a concurrent search holds
             @test Base.summarysize(pooled) < Base.summarysize(h.engine.backend.ctx)
             IndexEngine.checkin!(h.engine.search_ctx_pool, pooled)
 
