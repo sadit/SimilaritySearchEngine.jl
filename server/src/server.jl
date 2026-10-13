@@ -745,6 +745,7 @@ function dataset_descriptor(app::AppState, id::String)
     get!(base, "holds_metadata", false)
     get!(base, "key", nothing)
     get!(base, "beamsearch_baseline", nothing)
+    get!(base, "calibration", nothing)
     get!(base, "edit_correction", false)
 
     loaded = haskey(app.handles, id)
@@ -1302,7 +1303,14 @@ the index's new default, and persists it into the dataset's descriptor. Only app
 `searchgraph` (approximate dense) index — exact/exhaustive indices have no `BeamSearch` to
 tune, and text indices aren't in scope for this pass.
 
-Body (all optional): `{"minrecall": 0.9, "numqueries": 64, "ksearch": 10, "queries": [[...], ...]}`.
+Body (all optional): `{"minrecall": 0.9, "numqueries": 64, "ksearch": 10, "queries": [[...], ...],
+"tradeoff": 1.5, "transition": [-1, 1]}`. `tradeoff` and `transition` shape the tuning goal (see
+`IndexEngine.calibrate!`); an invalid value is the engine's `InvalidOption`, a `400`.
+
+The response carries the configuration as `baseline` and its measured recall as `calibration`:
+the mean over the validation queries, the interval `recall_lo`-`recall_hi` at `confidence`, the
+number of queries, the mean distance evaluations per query, and `heldout`, whether those queries
+took no part in the tuning. Both are written to the descriptor.
 """
 function handle_calibrate(req::HTTP.Request, app::AppState, index::String)
     haskey(app.handles, index) || return json_response(404, Dict("error" => "dataset_not_found"))
@@ -1319,13 +1327,29 @@ function handle_calibrate(req::HTTP.Request, app::AppState, index::String)
     numqueries = Int(get(data, "numqueries", 64))
     ksearch = Int(get(data, "ksearch", 10))
     queries = get(data, "queries", nothing)
+    tradeoff = get(data, "tradeoff", 1.5)
+    tradeoff isa Real || return json_response(400, Dict("error" => "'tradeoff' must be a number"))
+    transition = get(data, "transition", [-1, 1])
+    transition isa AbstractVector && length(transition) == 2 && all(x -> x isa Real, transition) ||
+        return json_response(400, Dict("error" => "'transition' must be a pair of numbers [lo, hi]"))
+    transition = (Float64(transition[1]), Float64(transition[2]))
 
-    bs = SSE.calibrate!(app.handles[index]; levels=minrecall, numqueries, ksearch, queries)
-    algo = bs[Float32(minrecall)]
+    cal = try
+        only(SSE.calibrate!(app.handles[index]; levels=minrecall, numqueries, ksearch, queries, tradeoff, transition))
+    catch e
+        e isa SSE.EngineError || rethrow()
+        return engine_error_response(e)
+    end
+    algo = cal.beamsearch
     baseline = Dict("bsize" => Int(algo.bsize), "delta" => Float64(algo.Δ), "maxvisits" => Int(algo.maxvisits))
-    _update_descriptor!(app, index, Dict("beamsearch_baseline" => baseline))
+    calibration = Dict("minrecall" => Float64(cal.minrecall), "recall" => cal.recall,
+                       "recall_lo" => cal.recall_lo, "recall_hi" => cal.recall_hi,
+                       "confidence" => cal.confidence, "numqueries" => cal.numqueries,
+                       "distance_evaluations" => cal.distance_evaluations, "heldout" => cal.heldout)
+    _update_descriptor!(app, index, Dict("beamsearch_baseline" => baseline, "calibration" => calibration))
 
-    return json_response(200, Dict("status" => "calibrated", "id" => index, "baseline" => baseline))
+    return json_response(200, Dict("status" => "calibrated", "id" => index, "baseline" => baseline,
+                                   "calibration" => calibration))
 end
 
 function handle_ftsearch(req::HTTP.Request, app::AppState, index::String)

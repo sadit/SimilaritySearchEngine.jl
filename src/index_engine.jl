@@ -8,6 +8,7 @@ using TextSearch
 using Base.Threads
 using SparseArrays: SparseVector
 using Dates: Dates
+using Random: AbstractRNG, default_rng
 using ..Errors
 
 export AbstractSearchEngine, DenseEngine, SparseEngine, FullTextEngine
@@ -16,7 +17,7 @@ export ReadWriteLock, read_lock, write_lock
 export ContextPool, checkout!, checkin!
 export create_engine, create_sparse_engine, restore_engine, snapshot_state, extra_state_fields, add_item!, index!, search_live, mark_deleted!
 export stored_payload
-export calibrate!, current_beamsearch, OptBeamSearch, DEFAULT_MINRECALL_LEVELS
+export calibrate!, current_beamsearch, OptBeamSearch, CalibrationLevel, DEFAULT_MINRECALL_LEVELS
 export direct_neighbors, apply_searchgraph_vectors!, build_searchgraph
 export invertedfile_objects, build_sparseinvertedfile
 export text_profile, text_vocabulary, resolve_query
@@ -175,6 +176,48 @@ end
 recall quality (see [`calibrate!`](@ref) and [`DenseEngine`](@ref)).
 """
 const OptBeamSearch = Dict{Float32, BeamSearch}
+
+"""
+    CalibrationLevel
+
+What [`calibrate!`](@ref) reports for one target recall: the `BeamSearch` it chose, and the
+recall that configuration reaches, measured on queries that took no part in choosing it.
+
+- `minrecall`: the target recall.
+- `beamsearch`: the configuration stored in [`OptBeamSearch`](@ref) for `minrecall`.
+- `recall`: the mean recall over the validation queries.
+- `recall_std`: the standard deviation of that mean under resampling of the queries.
+- `recall_lo`, `recall_hi`: the percentile interval of the mean at `confidence`.
+- `confidence`: the level of that interval, for example `0.95`.
+- `numqueries`: how many validation queries were measured.
+- `distance_evaluations`: the mean number of distance evaluations per validation query.
+- `heldout`: `true` when the validation queries are disjoint from the tuning queries, and
+  `false` when they are the same queries (see [`calibrate!`](@ref)).
+
+The interval comes from `SimilaritySearch.bootstrapscore`: the per-query recalls are resampled
+with replacement, and the interval is read from the distribution of their means. It describes
+how much the measured recall depends on which queries were sampled. It does not cover queries
+that differ in kind from the sampled ones.
+"""
+struct CalibrationLevel
+    minrecall::Float32
+    beamsearch::BeamSearch
+    recall::Float64
+    recall_std::Float64
+    recall_lo::Float64
+    recall_hi::Float64
+    confidence::Float64
+    numqueries::Int
+    distance_evaluations::Float64
+    heldout::Bool
+end
+
+function Base.show(io::IO, c::CalibrationLevel)
+    print(io, "CalibrationLevel(minrecall=", c.minrecall, ", recall=", round(c.recall; digits=4),
+          ", ", round(100 * c.confidence; digits=1), "% [", round(c.recall_lo; digits=4), ", ",
+          round(c.recall_hi; digits=4), "], ", c.numqueries, c.heldout ? " held-out" : " tuning",
+          " queries, ", round(c.distance_evaluations; digits=1), " evaluations/query)")
+end
 
 """
     DEFAULT_MINRECALL_LEVELS
@@ -1661,40 +1704,181 @@ current_beamsearch(engine::DenseEngine{GraphBackend}) = read_lock(() -> engine.b
 current_beamsearch(::AbstractSearchEngine) = nothing
 
 """
-    calibrate!(engine::DenseEngine{GraphBackend}; levels=DEFAULT_MINRECALL_LEVELS, numqueries=64, ksearch=10, queries=nothing) -> OptBeamSearch
+    calibrate!(engine::DenseEngine{GraphBackend}; levels=DEFAULT_MINRECALL_LEVELS, numqueries=64,
+               ksearch=10, queries=nothing, tradeoff=1.5, transition=(-1, 1), nboot=1000,
+               confidence=0.95, rng=default_rng()) -> Vector{CalibrationLevel}
 
-Runs `SimilaritySearch.jl`'s real `optimize_index!` hyperparameter sweep (PLAN.md §5.6 —
-a `SearchModels`-driven stochastic search over `BeamSearchSpace`, not a hand-rolled one)
-against `engine.backend.index` once per recall level in `levels`, storing each resulting
-`BeamSearch` into `engine.backend.opt_beamsearch[level]` (and returning that table) so
-[`search_live`](@ref) can later serve a per-request `minrecall` from calibrated
-hyperparameters instead of a single one-size-fits-all default. Only defined for a
-`DenseEngine{GraphBackend}`; errors for any other engine kind, which has no `BeamSearch` to
-calibrate. Re-running this periodically as the indexed data changes keeps `opt_beamsearch`
-accurate -- the right hyperparameters for a given recall level drift as the index grows.
+Runs `SimilaritySearch.jl`'s `optimize_index!` hyperparameter search (PLAN.md §5.6) against
+`engine.backend.index` once per recall level in `levels`. Each resulting `BeamSearch` is stored
+in `engine.backend.opt_beamsearch[level]`, so that [`search_live`](@ref) can serve a per-request
+`minrecall` from it. Then the recall of that configuration is measured on a second sample of
+queries, and the result is one [`CalibrationLevel`](@ref) per level. Only defined for a
+`DenseEngine{GraphBackend}`; any other engine kind has no `BeamSearch` to calibrate. The right
+configuration for a recall level changes as the index grows, so run this again after the
+index has grown.
+
+# The goal
+
+Each level is tuned with `MinRecall(level; tradeoff, transition)`. Since SimilaritySearch 1.6
+this goal is not a threshold. It minimizes the logarithm of the search cost plus a penalty that
+grows with the shortfall below `level`. Near `level`, across a zone whose width is the standard
+error of the recall measurement, the penalty is quadratic. So a configuration slightly below
+the target is charged for its shortfall instead of being discarded. SimilaritySearch reports
+that a target of 0.9 lands at a recall of 0.900-0.913 with the default `transition`
+(SISAP 2025 `ccnews`, 64 or 256 tuning queries).
+
+# The queries
+
+Without `queries`, two disjoint samples of `numqueries` objects are drawn from the index: one
+tunes, and the other measures. Both are *internal* queries: objects of the index. Since
+SimilaritySearch 1.6, `optimize_index!` marks an internal query's own vertex as visited before
+it searches. Without that, the search reaches the query at distance 0 and reads its stored
+neighbors, which are close to the answer. The measurement here does the same, and leaves the
+query out of its own gold standard. SimilaritySearch measured the effect of the earlier
+behavior: parameters tuned that way reached a recall@10 of 0.69 on external queries, against
+0.90 on the tuning queries. When the index holds fewer than `2 * numqueries` objects, each sample
+takes half of them. With fewer than 8 objects, one sample both tunes and measures, and the
+report says `heldout == false`.
+
+With `queries`, those vectors both tune and measure, and the report says `heldout == false`:
+the interval then describes the tuning queries, and it is optimistic for other queries.
 
 # Keyword Arguments
-- `levels`: a single target recall or a collection of them (0-1) to calibrate for — see
-  `MinRecall`. Defaults to [`DEFAULT_MINRECALL_LEVELS`](@ref).
-- `numqueries`: size of the query sample drawn from the already-indexed database when
-  `queries` isn't given.
-- `ksearch`: neighbors retrieved per query while evaluating candidate configurations.
-- `queries::Union{Nothing, AbstractVector{<:AbstractVector{Float32}}}`: an explicit
-  ground-truth query set (PLAN.md §5.6's "supplied ... set") instead of an internally
-  sampled one.
+- `levels`: a single target recall or a collection of them (0-1). Defaults to
+  [`DEFAULT_MINRECALL_LEVELS`](@ref).
+- `numqueries`: the size of each sample drawn from the index when `queries` is not given.
+- `ksearch`: the number of neighbors retrieved per query, in tuning and in measuring.
+- `queries::Union{Nothing, AbstractVector{<:AbstractVector{Float32}}}`: an explicit query set.
+- `tradeoff`: the cost factor `MinRecall` accepts per 1% of recall near the target. `1.5`
+  accepts up to 50% more distance evaluations for each 1% of recall. Must be finite and above 1.
+- `transition`: the pair `(lo, hi)` that places the quadratic zone of `MinRecall`, in units of
+  the measurement's standard error, around the target. `(-1, 1)` is one unit on each side.
+  `(-2, 0)` ends the zone at the target, which tunes one or two units above it: use it when the
+  target is a floor. `lo` must not exceed `hi`.
+- `nboot`: the number of resamples behind each interval; at least 2.
+- `confidence`: the level of each interval, strictly between 0 and 1.
+- `rng`: draws the query samples and the resamples, so that a run can be repeated.
 """
-function calibrate!(engine::DenseEngine{GraphBackend}; levels=DEFAULT_MINRECALL_LEVELS, numqueries::Int=64, ksearch::Int=10, queries=nothing)
-    Q = queries === nothing ? nothing : VectorDatabase([convert(Vector{Float32}, q) for q in queries])
+function calibrate!(engine::DenseEngine{GraphBackend}; levels=DEFAULT_MINRECALL_LEVELS, numqueries::Int=64,
+                    ksearch::Int=10, queries=nothing, tradeoff::Real=1.5, transition=(-1, 1),
+                    nboot::Int=1000, confidence::Real=0.95, rng::AbstractRNG=default_rng())
+    tradeoff > 1 && isfinite(tradeoff) ||
+        invalid_option(:tradeoff, "tradeoff must be a finite number above 1; got $tradeoff")
+    length(transition) == 2 && all(isfinite, transition) && transition[1] <= transition[2] ||
+        invalid_option(:transition, "transition must be a pair (lo, hi) of finite numbers with lo <= hi; got $(repr(transition))")
+    nboot >= 2 || invalid_option(:nboot, "nboot must be at least 2; got $nboot")
+    0 < confidence < 1 || invalid_option(:confidence, "confidence must be strictly between 0 and 1; got $confidence")
+    numqueries >= 1 || invalid_option(:numqueries, "numqueries must be at least 1; got $numqueries")
     target_levels = levels isa Real ? Float32[levels] : Float32.(levels)
 
     write_lock(engine.lock) do
-        for r in target_levels
-            optimize_index!(engine.backend.index, engine.backend.ctx, MinRecall(r); queries=Q, numqueries, ksearch)
-            engine.backend.opt_beamsearch[r] = engine.backend.index.algo[]
+        index, ctx = engine.backend.index, engine.backend.ctx
+        tuning, measuring, heldout = _calibration_queries(index, queries, numqueries, rng)
+        gold = _calibration_gold(index, ctx, measuring, ksearch)
+        map(target_levels) do r
+            # Since SimilaritySearch 1.6, `numqueries` (64 by default) is how many queries one
+            # optimization uses: from a larger set it draws that many with replacement and drops
+            # the repeats, 52 distinct queries out of 200. This function tunes with the whole
+            # tuning sample, as its docstring says.
+            optimize_index!(index, ctx, MinRecall(r; tradeoff, transition); queries=tuning.db,
+                            queries_identifiers=tuning.internal ? tuning.ids : nothing,
+                            numqueries=length(tuning.db), ksearch)
+            bs = index.algo[]
+            engine.backend.opt_beamsearch[r] = bs
+            perquery, evals = _calibration_recalls(index, ctx, bs, measuring, gold, ksearch)
+            b = bootstrapscore(perquery; nboot, level=confidence, rng)
+            CalibrationLevel(r, bs, b.mean, b.std, b.lo, b.hi, b.level, length(perquery), evals, heldout)
         end
     end
+end
 
-    return engine.backend.opt_beamsearch
+"""
+    _calibration_queries(index, queries, numqueries, rng) -> (tuning, measuring, heldout)
+
+The two query sets of [`calibrate!`](@ref). Each is a named tuple `(db, ids, internal)`: `db`
+is what the searches read, `ids[i]` is the index's own id for query `i` when the query is an
+object of the index or `0` for an external query, and `internal` says which of the two the set
+holds.
+
+`optimize_index!` is told which queries are internal through its `queries_identifiers` keyword,
+with `ids`; it does not infer it from `db`. Ids above `length(index)` are never drawn: those
+objects are staged and not in the graph yet.
+"""
+function _calibration_queries(index::SearchGraph, queries, numqueries::Int, rng::AbstractRNG)
+    if queries !== nothing
+        db = VectorDatabase([convert(Vector{Float32}, q) for q in queries])
+        external = (db=db, ids=zeros(UInt32, length(db)), internal=false)
+        return external, external, false
+    end
+    n = length(index)
+    m = min(numqueries, n ÷ 2)
+    if m < 4
+        # too few objects to split: one sample tunes and measures
+        ids = _distinct_ids(rng, n, min(numqueries, n))
+        same = (db=SubDatabase(database(index), ids), ids=ids, internal=true)
+        return same, same, false
+    end
+    ids = _distinct_ids(rng, n, 2m)
+    t, v = ids[1:m], ids[m+1:2m]
+    (db=SubDatabase(database(index), t), ids=t, internal=true), (db=SubDatabase(database(index), v), ids=v, internal=true), true
+end
+
+"`k` distinct ids drawn from `1:n`, in the order they were drawn."
+function _distinct_ids(rng::AbstractRNG, n::Int, k::Int)
+    seen = Set{UInt32}()
+    ids = UInt32[]
+    while length(ids) < k
+        i = UInt32(rand(rng, 1:n))
+        i in seen && continue
+        push!(seen, i)
+        push!(ids, i)
+    end
+    ids
+end
+
+"""
+    _calibration_gold(index, ctx, queries, ksearch) -> Vector{Set{UInt32}}
+
+The exact `ksearch` nearest neighbors of each query among the indexed objects, by exhaustive
+search. An internal query is its own nearest neighbor at distance 0. It is removed from its own
+gold set, because the measured search masks it (see [`_calibration_recalls`](@ref)).
+"""
+function _calibration_gold(index::SearchGraph, ctx, queries, ksearch::Int)
+    seq = ExhaustiveSearch(distance(index), view(database(index), 1:length(index)))
+    map(eachindex(queries.ids)) do i
+        res = knnqueue(KnnSorted, ksearch)
+        search(seq, ctx, queries.db[i], res)
+        g = Set{UInt32}(SimilaritySearch.IdView(res))
+        delete!(g, queries.ids[i])
+        g
+    end
+end
+
+"""
+    _calibration_recalls(index, ctx, bs, queries, gold, ksearch) -> (Vector{Float64}, Float64)
+
+The recall of `bs` on each query, and the mean number of distance evaluations per query.
+
+An internal query's vertex is marked as visited before the search starts, as `optimize_index!`
+does since SimilaritySearch 1.6. The search therefore cannot reach the query at distance 0 and
+read its stored neighbors; it has to find them the way an external query does. A query whose
+gold set is empty scores 1.
+"""
+function _calibration_recalls(index::SearchGraph, ctx, bs::BeamSearch, queries, gold, ksearch::Int)
+    recalls = Vector{Float64}(undef, length(gold))
+    evals = 0
+    for i in eachindex(gold)
+        res = knnqueue(KnnSorted, ksearch)
+        vstate = SimilaritySearch.getvstate(length(index), ctx)
+        id = queries.ids[i]
+        id == 0 || SimilaritySearch.visit!(vstate, UInt64(id))
+        snap = copy(ctx.costdists)
+        search(bs, index, ctx, queries.db[i], res, index.hints, vstate)
+        evals += SimilaritySearch.distance_evaluations(ctx, snap)
+        found = count(in(gold[i]), SimilaritySearch.IdView(res))
+        recalls[i] = isempty(gold[i]) ? 1.0 : found / length(gold[i])
+    end
+    recalls, evals / max(length(gold), 1)
 end
 calibrate!(::AbstractSearchEngine; kwargs...) = unsupported_operation(:calibrate!, "calibrate! only applies to a dense project on a SearchGraph backend -- nothing else has a BeamSearch to tune")
 

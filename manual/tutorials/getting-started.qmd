@@ -211,14 +211,27 @@ A query returns such candidates with the field `deleted::Bool`, so that an appli
 
 ### 9. Calibrating Search Hyperparameters: `calibrate!`
 
-The `calibrate!` function executes an internal hyperparameter optimization pass over the graph, calibrating `BeamSearch` parameters across multiple recall thresholds:
+The `calibrate!` function tunes the `BeamSearch` parameters of the graph for each target recall in `levels`. It returns one `CalibrationLevel` per level, with the recall that the chosen parameters reach:
 
 ```julia
-calibrate!(h; levels=[0.8, 0.9, 0.95, 0.97])
+cal = calibrate!(h; levels=[0.8, 0.9, 0.95, 0.97])
 
-# Execute search enforcing minimum 95% target recall
+# Search with the parameters tuned for a target recall of 0.95
 precise_results = search(h, query, 5; minrecall=0.95)
 ```
+
+`calibrate!` draws two samples of objects from the project. The first sample tunes the parameters. The second sample measures the recall of the result, so these queries took no part in the tuning. For each level, `CalibrationLevel` reports the mean recall, an interval at 95% confidence, and the mean number of distance computations per query. The interval comes from bootstrap resampling of the per-query recalls. It shows how much the measured recall depends on which queries were sampled.
+
+A target recall is not a floor. Since SimilaritySearch 1.6, the tuning minimizes the cost of the search plus a penalty for the recall missing below the target. The penalty is small inside a zone around the target, whose width is the measurement's standard error. So the tuned recall can land slightly below the target when that saves enough cost. Two keywords change this:
+
+- `tradeoff` (default `1.5`): the cost factor accepted per 1% of recall near the target. `1.5` accepts up to 50% more distance computations for each 1% of recall.
+- `transition` (default `(-1, 1)`): the zone, in units of the standard error, relative to the target. `(-2, 0)` ends the zone at the target, which tunes one or two units above it. Use it when the target is a minimum.
+
+```julia
+calibrate!(h; levels=0.95, transition=(-2, 0))
+```
+
+Also since SimilaritySearch 1.6, a query taken from the project cannot use itself as an entry point to the graph. Before, such a query reached itself at distance 0 and read its stored neighbors, which are close to the answer. The calibration then chose parameters that were too small for queries that are not in the project.
 
 A higher recall target requires more distance computations, and that cost can be measured. Pass a [`SearchStats`](https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html#SimilaritySearchEngine.SearchStats) instance, and the engine records the cost of that call:
 
@@ -231,7 +244,7 @@ search(h, query, 5; minrecall=0.95, stats)
 precise = stats.distance_evaluations     # larger: a wider beam examines more of the graph
 ```
 
-Over 20,000 random vectors of 32 dimensions, a query for 5 nearest neighbors performs 242 distance computations with `minrecall=0.8` and 927 with `minrecall=0.95`. On that collection, 927 is also the cost of the default beam search, before calibration. An exhaustive scan of the same collection performs 20,000.
+Over 20,000 random vectors of 32 dimensions, a query for 5 nearest neighbors performs 974 distance computations on average with `minrecall=0.8` and 1,757 with `minrecall=0.95`. These are means over 100 queries and three builds of the graph, measured on 2026-10-13 with SimilaritySearch 1.6.5. The mean of one build ranged from 875 to 1,048 for `minrecall=0.8`, and from 1,621 to 1,846 for `minrecall=0.95`. On that collection, the default beam search performs 1,301 before calibration. An exhaustive scan of the same collection performs 20,000. For the same calibrations, `calibrate!` reported a mean recall of 0.83 for the target 0.8 and 0.97 for the target 0.95, measured on 64 queries that took no part in the tuning.
 
 Each call overwrites the field; the values are not accumulated, so the field must be read before the next query is issued. [`ftsearch`](https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html#SimilaritySearchEngine.ftsearch) and the filtered form of [`search`](https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html#SimilaritySearchEngine.search) also accept `stats`. For a filtered search, the reported value is the cost of the candidate search that was executed, not of the `k` results that satisfied the predicate. An exhaustive backend reports the size of the collection.
 

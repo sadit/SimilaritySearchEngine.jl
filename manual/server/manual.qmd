@@ -190,6 +190,10 @@ flag decides it for that run. On a dataset without text the command exits with c
 - `POST /api/v1/datasets/{id}/delete` — logical deletion. Takes `_id`, the integer a search
   or a fetch reported.
 - `POST /api/v1/datasets/{id}/calibrate` — recall calibration for a graph-backed project.
+  Accepts `minrecall`, `numqueries`, `ksearch`, `queries`, and the shape of the tuning goal,
+  `tradeoff` and `transition` (see the `calibrate!` section of the getting-started tutorial).
+  The response reports the configuration as `baseline` and the recall it reaches as
+  `calibration`, measured on queries that took no part in the tuning, with a 95% interval.
 - `POST /api/v1/search/hybrid` and `POST /api/v1/search/group` — reciprocal rank fusion over
   two datasets, and a text query sent to every dataset of a join group.
 
@@ -197,7 +201,10 @@ flag decides it for that run. On a dataset without text the command exits with c
 POST .../append     {"status":"appended","id":"ds","inserted":5}
 POST .../delete     {"status":"soft_deleted","id":"ds","_id":1}
 POST .../calibrate  {"status":"calibrated","id":"ds",
-                     "baseline":{"bsize":4,"delta":1,"maxvisits":1000000}}
+                     "baseline":{"bsize":4,"delta":1.129,"maxvisits":962},
+                     "calibration":{"minrecall":0.9,"recall":0.9167,"recall_lo":0.8924,
+                                    "recall_hi":0.941,"confidence":0.95,"numqueries":64,
+                                    "distance_evaluations":281.3,"heldout":true}}
 
 POST .../search  and  POST .../ftsearch
 {"status":"searched","id":"ds",

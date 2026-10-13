@@ -1,12 +1,13 @@
 using Test
 using SimilaritySearchEngine
 using SimilaritySearchEngine: Schema, IndexEngine
-using SimilaritySearch: SearchGraph, Dist, MatrixDatabase
+using SimilaritySearch: SearchGraph, Dist, MatrixDatabase, SearchGraphContext, InformativeLog
 using TextSearch: BM25InvertedFile, InvertedFile, TextInvertedFile, NormalizationConfig,
                   AppliedArtifacts, vocsize, gettrainsize, gettextconfig,
                   lineage_summary, token2id
 using JSON
 using RocksDB
+using Random: Xoshiro
 using SparseArrays: sparsevec, SparseVector, nonzeros, nonzeroinds
 
 # ---------------------------------------------------------------------------------------
@@ -115,10 +116,32 @@ const ACCENT_ITEMS = vcat(
             @test res[1]._id == 1
             @test res[1].distance ≈ 0.0 atol=1e-6
 
-            # calibrate! returns a minrecall::Float32 => BeamSearch table, not a lone BeamSearch.
-            bs = calibrate!(h; numqueries=20)
-            @test !isempty(bs)
-            @test all(v -> v.bsize isa Integer, values(bs))
+            # calibrate! reports one CalibrationLevel per level: the BeamSearch it stored for that
+            # level, and the recall it reaches on 20 queries that took no part in tuning it.
+            # No warning: the sampled queries are declared internal (`queries_identifiers`), and
+            # SimilaritySearch warns when a view of the index's own database arrives undeclared.
+            cal = @test_logs min_level=Base.CoreLogging.Warn calibrate!(h; numqueries=20, rng=Xoshiro(1))
+            @test [c.minrecall for c in cal] == IndexEngine.DEFAULT_MINRECALL_LEVELS
+            table = h.engine.backend.opt_beamsearch
+            @test all(c -> table[c.minrecall] == c.beamsearch, cal)
+            @test all(c -> 0 <= c.recall_lo <= c.recall <= c.recall_hi <= 1, cal)
+            @test all(c -> c.heldout && c.numqueries == 20 && c.confidence == 0.95, cal)
+            @test all(c -> c.distance_evaluations > 0, cal)
+
+            # The same rng draws the same samples and resamples.
+            again = calibrate!(h; levels=0.9, numqueries=20, rng=Xoshiro(1), tradeoff=3.0, transition=(-2, 0))
+            @test only(again).minrecall == 0.9f0
+            @test only(again).numqueries == 20
+
+            # Explicit queries both tune and measure, and the report says so.
+            ext = calibrate!(h; levels=0.9, queries=[it["vector"] for it in items[1:30]], nboot=200)
+            @test !only(ext).heldout && only(ext).numqueries == 30
+
+            # The goal's and the bootstrap's parameters are checked here, with the engine's own error.
+            @test_throws InvalidOption calibrate!(h; levels=0.9, tradeoff=1.0)
+            @test_throws InvalidOption calibrate!(h; levels=0.9, transition=(1, -1))
+            @test_throws InvalidOption calibrate!(h; levels=0.9, confidence=1.0)
+            @test_throws InvalidOption calibrate!(h; levels=0.9, nboot=1)
 
             ak = allknn(h; k=5)
             @test length(ak) == 100
@@ -156,6 +179,25 @@ const ACCENT_ITEMS = vcat(
             @test length(filtered) == 1
             @test filtered[1].doc_id == "frankenstein_1"
 
+            close_project!(h)
+        end
+    end
+
+    @testset "calibrate! tunes with its whole sample, above the library's default of 64 too" begin
+        mktempworkdir() do workdir
+            # Since SimilaritySearch 1.6, `optimize_index!` draws `numqueries` (64 by default)
+            # queries out of a larger set it is given; calibrate! passes the size of its own
+            # sample. The library reports how many queries it used only on a verbose context.
+            h = create_project(workdir, "calib_pool"; engine=DenseEngine, backend=SearchGraph)
+            rng = Xoshiro(7)
+            append_items!(h, [DenseItem(rand(rng, Float32, 8)) for _ in 1:400])
+            index!(h)
+            log = IOBuffer()
+            h.engine.backend.ctx = SearchGraphContext(h.engine.backend.ctx; verbose=true,
+                                                      reporters=InformativeLog(log; dt=0))
+            cal = calibrate!(h; levels=0.9, numqueries=150, rng=Xoshiro(1))
+            @test only(cal).numqueries == 150 && only(cal).heldout
+            @test occursin("using 150 of a pool of 150", String(take!(log)))
             close_project!(h)
         end
     end

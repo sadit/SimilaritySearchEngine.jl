@@ -96,7 +96,7 @@ developed by path.
   - `edit_correction=true`, given to `create_project` or `open_project`, also corrects a query token that is absent from the vocabulary when exactly one vocabulary token is at edit distance 1 from it.
 - **Typed interface**: input is given in typed containers (`DenseItem`, `SparseItem`, `TextItem`), and queries return structured results (`SearchResult`, `StoredItem`, `ExistsResult`).
 - **Logical deletion**: `delete_item!` marks a document as deleted without modifying the index. Queries return such candidates with an explicit `deleted` field.
-- **Recall calibration**: `calibrate!` optimizes the beam search parameters for a set of target recall values, which `minrecall` then selects. `SearchStats` reports the number of distance computations a query performed.
+- **Recall calibration**: `calibrate!` optimizes the beam search parameters for a set of target recall values, which `minrecall` then selects. It reports the recall each configuration reaches on queries that took no part in the tuning, with a bootstrap interval. `SearchStats` reports the number of distance computations a query performed.
 - **Operations over an entire collection**: in-process execution of all-pairs nearest neighbors (`allknn`), center selection (`fft`), closest pairs (`closestpairs`), and closest pairs between two collections (`bichromatic_kclosestpairs`).
 - **Persistence**: RocksDB column families for metadata and index structures, and memory-mapped files for dense vectors (`dense_vectors.mmapdb`).
 - **Typed errors**: a failure raised by the engine is an `EngineError` in one of four categories (`InvalidRequest`, `NotFound`, `ConflictingState`, `StorageFailure`), so that a caller can act on a failure without interpreting its message.

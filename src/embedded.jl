@@ -388,6 +388,9 @@ across every index kind. `minrecall` is the target recall a `DenseEngine{GraphBa
 at creation, since it's carried on the engine and restored verbatim by [`open_project`](@ref)
 rather than re-derived later -- `calibrate!` remains available afterwards as a separate,
 explicit re-optimization pass. Ignored for index types with no `BeamSearch` to autotune.
+`minrecall` is a target and not a floor: since SimilaritySearch 1.6 the tuning goal accepts a
+configuration slightly below it when the saving in cost is large enough (see
+`IndexEngine.calibrate!`). [`calibrate!`](@ref) reports the recall each configuration reaches.
 `textmodel` says where a *text* project's vocabulary comes from, and a text project cannot be
 created without it (see `IndexEngine.AbstractTextModelSpec` for why it has no default). Three
 forms, in the order worth preferring them:
@@ -1521,20 +1524,39 @@ function exists(handle::EmbeddedEngine, ids)
 end
 
 """
-    calibrate!(handle::EmbeddedEngine; levels=IndexEngine.DEFAULT_MINRECALL_LEVELS, numqueries=64, ksearch=10, queries=nothing) -> IndexEngine.OptBeamSearch
+    calibrate!(handle::EmbeddedEngine; levels=IndexEngine.DEFAULT_MINRECALL_LEVELS, numqueries=64,
+               ksearch=10, queries=nothing, tradeoff=1.5, transition=(-1, 1), nboot=1000,
+               confidence=0.95, rng=Random.default_rng()) -> Vector{CalibrationLevel}
 
-Runs `IndexEngine.calibrate!`'s real hyperparameter sweep for each recall level in
-`levels` and immediately persists just the resulting `opt_beamsearch` table (consulted by
-`search`'s own `minrecall` keyword) so it survives a later `close_project!` +
-`open_project` round-trip -- there is no `descriptor.json` in this embedded API for
-`Server.handle_calibrate`'s separate persistence path to write to, so this `EngineStore`
-field is this API's sole persistence mechanism for it.
+Tunes the project's `BeamSearch` for each recall level in `levels`, and measures the recall
+each chosen configuration reaches, with an interval (see `IndexEngine.calibrate!` for the goal,
+the query samples and each keyword). Returns one [`CalibrationLevel`](@ref) per level.
+
+For example, over the 724 vectors of 128 dimensions in `test/data/frankenstein.jsonl`, measured
+on 2026-10-13 with SimilaritySearch 1.6.5:
+
+```julia
+julia> calibrate!(h; levels=[0.9, 0.95], rng=Xoshiro(1))
+2-element Vector{CalibrationLevel}:
+ CalibrationLevel(minrecall=0.9, recall=0.9167, 95.0% [0.8924, 0.941], 64 held-out queries, 281.3 evaluations/query)
+ CalibrationLevel(minrecall=0.95, recall=0.9497, 95.0% [0.9306, 0.967], 64 held-out queries, 330.5 evaluations/query)
+```
+
+The second level reached a recall of 0.9497, below its target of 0.95. The goal accepts a small
+shortfall when it saves enough cost (see `IndexEngine.calibrate!`).
+
+The table of configurations, one per level, is persisted at once, so that `search`'s
+`minrecall` keyword finds it after a `close_project!` and `open_project`. The measurements are
+returned and not persisted.
 """
-function calibrate!(handle::EmbeddedEngine; levels=IndexEngine.DEFAULT_MINRECALL_LEVELS, numqueries::Int=64, ksearch::Int=10, queries=nothing)
+function calibrate!(handle::EmbeddedEngine; levels=IndexEngine.DEFAULT_MINRECALL_LEVELS, numqueries::Int=64,
+                    ksearch::Int=10, queries=nothing, tradeoff::Real=1.5, transition=(-1, 1),
+                    nboot::Int=1000, confidence::Real=0.95, rng::AbstractRNG=Random.default_rng())
     handle.wrote[] = true
-    opt_bs = IndexEngine.calibrate!(handle.engine; levels, numqueries, ksearch, queries)
-    Persistence.save_field!(handle.store, :opt_beamsearch, opt_bs)
-    return opt_bs
+    report = IndexEngine.calibrate!(handle.engine; levels, numqueries, ksearch, queries, tradeoff,
+                                    transition, nboot, confidence, rng)
+    Persistence.save_field!(handle.store, :opt_beamsearch, handle.engine.backend.opt_beamsearch)
+    return report
 end
 
 """
