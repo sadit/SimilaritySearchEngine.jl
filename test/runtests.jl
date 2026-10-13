@@ -143,6 +143,10 @@ const ACCENT_ITEMS = vcat(
             @test_throws InvalidOption calibrate!(h; levels=0.9, confidence=1.0)
             @test_throws InvalidOption calibrate!(h; levels=0.9, nboot=1)
 
+            # neardup's epsilon is a distance: a negative or NaN one is refused before the library sees it.
+            @test_throws InvalidOption neardup(h, -0.1)
+            @test_throws InvalidOption neardup(h, NaN)
+
             ak = allknn(h; k=5)
             @test length(ak) == 100
             @test ak[1]._id == 1

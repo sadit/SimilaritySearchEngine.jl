@@ -1651,10 +1651,19 @@ finds the ``ϵ``-net of non-duplicate objects whose mutual distances are at leas
 Objects closer than `epsilon` to an existing center are considered near-duplicates and assigned to it.
 Errors if the project is not a dense index or is empty.
 
+`epsilon` is a distance, on the scale of the project's distance function, and it must be zero
+or positive. A negative or `NaN` value raises `InvalidOption`. Since SimilaritySearch 1.6, a
+value below `1f-5` is raised to `1f-5` (`SimilaritySearch.NEARDUP_NUMERICAL_ZERO`): the distance
+between two identical vectors is often not exactly `0f0` after rounding, and `epsilon=0` would
+then miss some exact duplicates. So `epsilon=0` finds exact duplicates, including the ones
+whose distance rounds to a small positive value.
+
 Returns a [`NearDupResult`](@ref).
 """
 function neardup(handle::EmbeddedEngine, epsilon::Real; verbose::Bool=false, recall::Real=1.0)
     engine = handle.engine
+    epsilon >= 0 ||
+        invalid_option(:epsilon, "neardup needs epsilon >= 0, a distance on the scale of the project's distance function; got $epsilon")
     IndexEngine.payload_kind(engine) === :dense ||
         unsupported_operation(:neardup, "neardup requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
     length(engine.backend.index) == 0 && empty_project(:neardup, "neardup requires a non-empty dense index")
