@@ -35,7 +35,7 @@ julia -t 8 --project=tutorials tutorials/prepare.jl --smoke
 
 Each stage (`corpora`, `profiles`, `projects`) writes its result to disk, so a later execution repeats only the stages that are missing. A single stage can also be requested by name, and `--force` rebuilds it: `julia -t 8 --project=tutorials tutorials/prepare.jl projects --force`.
 
-The times reported in this page were measured with 8 threads. Indexing uses them, so a different number of threads changes the values in the last table.
+The times reported in this page were measured on 2026-10-23 with 8 threads, SimilaritySearch 1.6.8 and TextSearch 1.3.0. Indexing uses the threads, so a different number of threads changes the values in the last table.
 
 ::: {.callout-note}
 ## Quarto Rendering Configuration
