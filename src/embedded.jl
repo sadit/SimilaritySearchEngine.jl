@@ -1533,17 +1533,20 @@ each chosen configuration reaches, with an interval (see `IndexEngine.calibrate!
 the query samples and each keyword). Returns one [`CalibrationLevel`](@ref) per level.
 
 For example, over the 724 vectors of 128 dimensions in `test/data/frankenstein.jsonl`, measured
-on 2026-10-13 with SimilaritySearch 1.6.5:
+on 2026-10-23 with SimilaritySearch 1.6.8:
 
 ```julia
 julia> calibrate!(h; levels=[0.9, 0.95], rng=Xoshiro(1))
 2-element Vector{CalibrationLevel}:
- CalibrationLevel(minrecall=0.9, recall=0.9167, 95.0% [0.8924, 0.941], 64 held-out queries, 281.3 evaluations/query)
- CalibrationLevel(minrecall=0.95, recall=0.9497, 95.0% [0.9306, 0.967], 64 held-out queries, 330.5 evaluations/query)
+ CalibrationLevel(minrecall=0.9, recall=0.9288, 95.0% [0.9062, 0.9497], 64 held-out queries, 287.7 evaluations/query)
+ CalibrationLevel(minrecall=0.95, recall=0.9479, 95.0% [0.927, 0.9653], 64 held-out queries, 332.5 evaluations/query)
 ```
 
-The second level reached a recall of 0.9497, below its target of 0.95. The goal accepts a small
-shortfall when it saves enough cost (see `IndexEngine.calibrate!`).
+The second level reached a recall of 0.9479, below its target of 0.95. The goal accepts a small
+shortfall when it saves enough cost (see `IndexEngine.calibrate!`). The construction of the graph
+is not deterministic, so the result changes from one build to the next. Over 7 builds of the same
+collection, the first level reached a recall from 0.910 to 0.939. The second level reached a
+recall from 0.948 to 0.969, and 2 of the 7 builds ended below 0.95.
 
 The table of configurations, one per level, is persisted at once, so that `search`'s
 `minrecall` keyword finds it after a `close_project!` and `open_project`. The measurements are

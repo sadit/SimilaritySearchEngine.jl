@@ -257,9 +257,9 @@ A context is also what decides how far an operation spreads over threads:
 context therefore want opposite sizes. An operation over many elements -- insertion,
 `allknn`, `searchbatch` -- wants every slot; a single query is one element and uses one.
 
-The contexts in the pool are built with one slot. SimilaritySearch 1.6.5 allocates the set of
-visited vertices of a slot when a search first uses the slot: 128 KB for a graph of up to
-`2^20` vertices. Measured on 2026-10-13 with 64 threads, over a graph of 20,000 vertices, a
+The contexts in the pool are built with one slot. Since version 1.6.5, SimilaritySearch
+allocates the set of visited vertices of a slot when a search first uses the slot: 128 KB for
+a graph of up to `2^20` vertices. Measured on 2026-10-13 with 64 threads, over a graph of 20,000 vertices, a
 context of the pool holds 0.13 MB after a search. A default context has 512 slots on 64
 threads. It holds 0.3 MB after one search, and 62.7 MB after a `searchbatch` that used 500 of
 its slots. The two contexts returned the same identifiers for each of 1,000 queries. The

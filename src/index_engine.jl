@@ -1113,9 +1113,9 @@ The library's default, `8 * Threads.nthreads()`, is right for an operation that 
 many elements with `@BATCHES` -- insertion, `allknn`, `searchbatch`. A single query is one
 element and uses one slot.
 
-For a `SearchGraph`, each slot holds a set of visited vertices. SimilaritySearch 1.6.5
-allocates that set when a search first uses the slot: 128 KB for a graph of up to `2^20`
-vertices. Measured on 2026-10-13 with 64 threads, over a graph of 20,000 vertices, a context
+For a `SearchGraph`, each slot holds a set of visited vertices. Since version
+1.6.5, SimilaritySearch allocates that set when a search first uses the slot: 128 KB for a
+graph of up to `2^20` vertices. Measured on 2026-10-13 with 64 threads, over a graph of 20,000 vertices, a context
 with one slot holds 0.13 MB after a search. The default context has 512 slots on 64 threads.
 It holds 0.3 MB after one search, and 62.7 MB after a `searchbatch` that used 500 of its
 slots. The two contexts returned the same identifiers for each of 1,000 queries (see
