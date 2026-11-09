@@ -145,6 +145,63 @@ of it exist.
    measurements that would answer this are now reported: `simsearch_queries_waiting`,
    `simsearch_query_wait_seconds_total`, and the histogram of request durations. A server
    whose waiting count stays at zero does not need either.
+10. **Partitioned text indexes (§5.9)** — designed on 2026-11-09, not implemented. A text
+    project declares one `meta` field as its partition, and the engine keeps one set of
+    posting lists per value of that field, next to the global lists. A search names a
+    partition and evaluates only its documents. The scores are the global scores, because
+    the vocabulary, the scoring statistics and the document vectors are shared. This changes
+    the decision of item 5 that no `meta` field is indexed, for one field and equality only.
+11. **Removing `key`, `join_group` and `holds_metadata`** — decided on 2026-11-09, not done
+    yet. Today these three fields are used by one route, `POST /api/v1/search/group`. That
+    route sends a text query to the members of a join group: one member chosen by `key`, or
+    every text member with `key: "*"`. It returns the results grouped by `key`, and it reads
+    each result's `doc_id` from the member marked `holds_metadata`. `hybrid` does not use them:
+    it receives the ids of its two datasets.
+
+    The reason is §5.9. A partition restricts a search to a group of records, and that is the
+    case that comes up most often. `key` restricts a search to a field. Two ways to keep
+    per-field search were compared:
+
+    - **Each field in its own dataset, without `key` (chosen).** Each field keeps its own
+      profile: its vocabulary, its document frequencies, its average length for BM25, its
+      `TextConfig` and its backend. A field can be refitted, added or removed without touching
+      the others.
+    - **Each field as a partition of one project (rejected).** Each record would be appended
+      once per field, with the field name as partition value. The fields would then share one
+      profile. The document frequency of a token would be computed over titles and abstracts
+      together. BM25 would compare a 10-word title with the average length of all the items,
+      and score it as a very short document. Each field could not have its own `TextConfig` or
+      backend, and a `rebuild` would refit every field. A record would have one `_id` per
+      field, and a search without partition would return the same record more than once.
+
+    Compared with today, the chosen option costs no storage and no memory: `key` already
+    used one dataset per field. The searches run are the same, since the group route ran one
+    search per member. What is lost, and what replaces it:
+
+    - **One request for N fields.** The client sends N `ftsearch` requests. The Python client
+      gets a helper, `ftsearch_fields(fields, text, k)`, where `fields` maps a field name to a
+      dataset id. It sends the N requests concurrently through `async_client` and returns the
+      results grouped by field name, the shape of the current route's response. This is the
+      only replacement that needs code.
+    - **Hydration from `holds_metadata`.** Each field dataset is appended with the record's
+      `doc_id`, so its results carry it. The rest of the metadata comes from a `fetch` to the
+      dataset that holds it, with the `doc_id`s of all the fields. The manual describes this;
+      no code is needed.
+    - **The list of datasets of a collection** (`GET /api/v1/datasets/{id}/join_group`). The
+      caller keeps the map from field to dataset id. The server does not keep it, because a
+      tag on each dataset that groups them is `join_group` again.
+    - **Not planned:** a route that runs several searches in one request. It would save N-1
+      HTTP round trips. It is worth adding only if a measurement shows that those round trips
+      matter next to the time of the searches.
+
+    To remove: `handle_ftsearch_group` and `handle_get_join_group` with their routes,
+    `join_group_members`, `_hydrate_join_id`, the three fields at creation and in
+    `descriptor.json`, `dump` and `load` (`server/src/server.jl`, `server/src/cli_handlers.jl`),
+    `server/test/api/test_06_join_group_text_search.jl` and the parts of
+    `test_05_dataset_admin_and_health.jl` about them, `ftsearch_group`, `get_join_group` and the
+    three arguments of `create_dataset` in the Python client, and their text in
+    `manual/server/manual.qmd`. A dump written before the removal must still load: `load` will ignore
+    the three fields.
 
 The stemmer registry of §5.3 and §9's phase 5 is not on this list: it was discarded. Stemming
 was the way this specification proposed to make a query match a word it does not equal. That
@@ -303,6 +360,8 @@ Both `similarity-search` and `similarity-search-serve` must offer an **interacti
 
   !!! note "Use case: multi-representation search (e.g. hybrid) via a join dataset, not multiple indices per dataset"
       The scenario that used to motivate "multiple indices over one dataset" — e.g. dense semantic search *and* BM25 lexical search over the *same* logical documents — is instead handled with **multiple single-index datasets sharing a common `doc_id` space, plus one designated dataset holding the full metadata for random-access-by-id batch retrieval.** Concretely: create one dataset per representation (a `searchgraph` dataset over dense embeddings, a `bm25_invfile` dataset over the raw text), each storing only the minimum it needs to build/search its own index (vectors, or tokenized text) plus the shared `doc_id`. Exactly one of these datasets — or a dedicated metadata-only dataset with no index at all — carries the *complete* metadata record per `doc_id` and answers `GET /api/v1/simsearch/{index}/fetch?ids=...`-style batch exact-id lookups; the others carry only the minimal join key (`doc_id`) needed to look up that metadata by id after a search. Fusion (§6) and rerank (see the updated `build` warning below) both reduce to: search the smaller per-representation index(es), then batch-`fetch` the join dataset by the resulting ids to hydrate metadata/original vectors before merging/reranking. This pattern should be documented explicitly as the recommended way to model hybrid or multi-representation search, since it is the direct consequence of the strict one-index-per-dataset rule above.
+
+      **Superseded on 2026-11-09 (§0, item 11):** the next paragraph describes `key` and join groups, which are being removed. A field stays a dataset of its own, and the caller keeps the map from field to dataset.
 
       This same pattern generalizes beyond "one dense + one lexical" to **N per-field text indices**: a join group can hold any number of lexical-index members, each tagged with a `key` (e.g. `"title"`, `"body"`, `"tags"`) identifying which text field it indexes, alongside zero or one dense member and the metadata-holding member. See §5.3 for how `ftindex`/`ftsearch` address a specific `key` (or fan out to all of them).
 
@@ -547,6 +606,8 @@ Exposes the advanced/administrative capabilities of the underlying index — as 
   !!! note "Resolved: the separate, independently-existing `invfile`/`weighted_invfile` bug (raw BOW scored under NormCosine) is fixed"
       Unlike BM25 above, `WeightedInvertedFile` (`= InvertedFile(vocsize, Dist.NormCosine())`) was broken by *this application*, not by a library incompatibility: `TextSearch.jl`'s `191103c` (2026-08-04) dropped the `Dict`-based `dot`/`norm`/`evaluate` overloads a raw bag-of-words needs, so pushing/searching a `BOW` directly into a `NormCosine`-distance `InvertedFile` threw. Fixed in `IndexEngine` by building a `TextSearch.VectorModel(IdfWeighting(), TfWeighting(), voc)` once the vocabulary is trained (`ensure_trained!`) and calling `vectorize(model, text)` — which returns a real `SparseVector{Float32,Int32}` — instead of `bagofwords` for this index kind specifically (`BM25Kind` is unaffected and still uses `bagofwords`/`BOW`, which is what `BM25InvertedFile` actually wants). Verified via direct CLI reproduction: `build --index-kind invfile` → `searchbatch` now returns each document as its own top hit (near-zero self-distance) instead of throwing, and `rebuild`/`dump`/`load` round-trip correctly.
 
+  !!! warning "Superseded on 2026-11-09 by §0, item 11: `key`, `join_group` and `holds_metadata` are being removed. The note below describes the current route, not the plan."
+
   !!! note "Resolved: multi-field documents are modeled as N `key`-tagged join-group members, per the §1 update"
       A document is rarely one blob of text — it typically has several distinct text fields (`title`, `body`, `tags`, ...) that are worth scoring separately rather than concatenated into one bag of words. Given the strict one-index-per-dataset rule, this is modeled as: **each field gets its own dataset+index, tagged with a `key` string, all members of the same `join_group`** (§1, §7) as whatever dense/metadata datasets exist for that logical document collection.
       * **Indexing:** `POST /api/v1/datasets` accepts an optional `key` alongside `index_kind` when creating a text-index dataset (§5.7). `ftindex` still targets exactly one `{index}` per call — same as every other endpoint in this spec — so indexing a multi-field document means one `ftindex` call per populated key/field, each carrying the same shared `doc_id`. A document missing a given field simply isn't appended to that key's index; per-key posting lists are allowed to have different coverage over the shared `doc_id` space, same as any inverted index with absent terms.
@@ -680,6 +741,174 @@ Heavy/offline operations (`search` when denied by the §3 policy, `allknn`, `nea
 * `GET /readyz`: Readiness — working directory RocksDB handles open, no crash-recovery WAL replay pending.
 * `GET /metrics`: Prometheus-format counters/gauges derived from `op_log` (`distance_evaluations_total`, `query_latency_seconds` histogram, `active_jobs`, `thread_pool_utilization`, per-index tombstone ratio).
 
+### 5.9. Partitioned Text Indexes (design, 2026-11-09)
+
+Status: designed, not implemented. Item 10 of §0 tracks it.
+
+#### The use case
+
+Many applications search inside a group of documents that is known before the query. Examples
+are one customer of a shared service, one institution, one language, one collection, or one
+access group. The same application also needs the search over all the documents. In this
+section a *partition* is such a group, and the *partition field* is the `meta` field that
+names it.
+
+The sizes of the partitions can differ by a large factor. In ReposMx, 446,857
+documents are spread over 91 repositories. The largest has 139,605 documents and the smallest
+has 8, a factor of 17,450.
+
+#### What the engine offers today
+
+There are two ways to restrict a search to a partition. Neither one works for a small
+partition.
+
+- **A filter after the search.** `search(...; filter=f, candidates=n)` asks the index for `n`
+  candidates and keeps the ones that pass `f` (§5.4). The cost depends on the size of the whole
+  index, not on the size of the partition. For a partition that holds a fraction `1/m` of the
+  documents, about `m * k` candidates are needed to fill a page of `k`. If `candidates` is
+  smaller, the search returns fewer than `k` results.
+- **One project per partition.** Each project stores its own copy of the metadata. A record in
+  several partitions is stored once in each. Each project fits its own vocabulary and its own
+  document frequencies, so the score of a document depends on the project it is in. A search
+  over all the documents then has to merge lists whose scores cannot be compared.
+
+ReposMx used the first way until 2026-11-09. It searched again with a window 4 times larger
+until the page was full. The mean time of a query with a repository filter was 1,801 ms, and
+2,515 ms for the repository with 8 documents.
+
+#### Why the scores do not change
+
+A text project fits its profile once (`train_profile` in `index!`). The profile fixes the
+vocabulary, the document frequency of each token, and the scoring parameters: `trainsize` and
+the average document length for BM25, or the weighting model for `TextInvertedFile`. Documents
+indexed later do not change any of them.
+
+The score of a candidate is computed from those fixed values and from the candidate's document
+vector. The posting lists only decide which documents are candidates. An index with the same
+profile and the same document vectors, but with the posting lists of one partition, therefore
+gives each of its documents the same score that the global index gives. A search in the
+partition returns the same ids, in the same order and with the same scores, as the global
+search filtered by partition with an unlimited candidate budget.
+
+ReposMx built this on 2026-11-09 for its two BM25 indexes, outside the engine (`LazyBM25.jl`,
+commit `c71b52d` of ReposMx). Over 390 queries with a repository filter, the results were
+identical to those of the filtered global index. The mean time went from 1,801 ms to 7.7 ms for
+documents and from 1,998 ms to 4.0 ms for authors. The database grew from 4.1 GB to 4.2 GB.
+
+#### Declaration
+
+- `create_project(...; partition_by="repo")` declares the partition field of a new text
+  project. A project has at most one partition field.
+- `declare_partition!(handle, "repo")` declares it on an existing project. It reads the `meta`
+  of every record once, and it splits the existing global posting lists. It does not
+  re-tokenize any text. In ReposMx the same step took 33.5 s for 37.2 million posting entries
+  (35.7 million for documents and 1.45 million for authors).
+- The value of the field in a record is a string or a list of strings. A list puts the record
+  in several partitions; in ReposMx an author belongs to every repository where they have
+  documents. A record without the field belongs to no partition. It is found only by the
+  global search.
+- The field does not have to be declared in the `MetaSchema` (§4.5). If it is declared, its
+  type must be `:string`.
+- An item is not modified after it is appended, so its partitions do not change. Deleting the
+  item and appending it again is how a record changes partition.
+
+#### Storage
+
+Three new column families, opened with the others in `Project.open_project`:
+
+- `partition_table`: the partition names and their numbers. A number is a `UInt32`, assigned
+  in the order in which the names first appear, and never reused. The table is small and is
+  kept in memory while the project is open.
+- `partition_members`: key `_id`, value the partition numbers of that record. It is written
+  when the item is appended, in the same `WriteBatch` as its metadata. `index!` reads it, so
+  indexing does not decode `meta`.
+- `partition_postings`: key `[partition number][token id]`, both big-endian (`Schema.be_key`),
+  value the ascending document ids, with the same encoding as `invfile_postings`. With this
+  key the lists of one partition are contiguous, and a range delete removes one partition.
+
+The global lists in `invfile_postings` do not change. Each document id appears once in the
+global list of each of its tokens, and once more for each partition of the record.
+
+#### Writing
+
+- `append!` resolves the partition names of each item to numbers, adds new names to
+  `partition_table`, and writes `partition_members`.
+- `_index_text_block!` already builds the posting lists of a block and passes them to
+  `persist_block!`. It also receives the partition numbers of each document of the block, and
+  splits each list by partition. `write_invfile_block!` writes the global lists and the
+  partition lists in the same `WriteBatch`. A crash during a block therefore leaves both at the
+  end of the previous block.
+- `IndexEngine` does not name RocksDB, and that does not change. `embedded.jl` reads the
+  partition numbers of the block from `partition_members` and passes them through `index!`.
+- Document ids grow with every block, so appending a block's ids to a partition list keeps it
+  ascending, as for the global lists.
+- `rebuild` rebuilds the partition lists together with the global index. `dump` stores
+  `partition_by` with the project configuration. `load` recomputes the partition lists from
+  `meta`.
+
+#### Reading
+
+- `ftsearch(handle, text, k; partition="unicach")` searches one partition. Without
+  `partition` it searches the global index, as today.
+- For each query, the engine builds the index of the partition from the global one: the same
+  `voc`, scorer, `doclens` or `sizes`, document vectors, `len` and query pipeline, and a
+  `PartitionPostings <: AbstractAdjList{UInt32}` in place of `adj`. Building it reads nothing
+  from disk.
+- `PartitionPostings` reads `[partition][token]` on demand. It uses one cache, keyed by the pair
+  `(partition, token)`, with the eviction rule of `LazyPostings`: evict only between queries,
+  never inside one.
+- A partition name that is not in `partition_table` raises `UnknownPartition <: NotFound`
+  (HTTP 404). An empty result would make a misspelled name look like a partition without
+  matches. The error message lists the names closest to the one requested.
+- A name is in `partition_table` from the moment the first item with that value is appended,
+  before `index!` runs. A search in such a partition returns an empty result, which is
+  correct: the partition exists and has no indexed documents.
+- `partition` on a project that declares no partition field raises `InvalidOption` (HTTP 400).
+- `partitions(handle)` lists the names and the number of documents in each.
+- Soft-deleted documents are handled as in the global search (`search_live`).
+- In the server, `filter` (§5.4) is applied after the partition, to the results of the
+  partition.
+
+#### Server
+
+- `ftsearch` accepts a `partition` field in the request body (`FtSearchRequest`, §7).
+- `GET /api/v1/datasets/{id}/partitions` returns what `partitions(handle)` returns.
+- Creating a dataset accepts `partition_by`. The CLI search command accepts `--partition`.
+- `POST /api/v1/search/group` accepts `partition`. That route sends one text query to the
+  members of a join group: datasets that hold different text fields of the same records, each
+  with a `key` such as `title` or `body`. With `key: "*"` it searches every member and returns
+  the results grouped by key. With `partition`, every member searched must declare a
+  partition field and must have the requested name in its table. Otherwise the request fails
+  with the error of the first member that does not satisfy this, and the error names that
+  member. No member is searched without the partition, because the response would mix
+  results from the partition with results from the whole member.
+
+#### Not in the first version
+
+- **Sparse projects.** Their index is rebuilt in memory from `InvertedFileObjectStore` on
+  every open. Their partition lists would be built in memory at the same time, from
+  `partition_members`. The scoring argument above applies to them unchanged.
+- **Dense projects.** A `SearchGraph` has no posting lists. Two options exist: an exact scan
+  over the members of a small partition, and a graph per partition. Neither is designed here.
+- More than one partition field, or a search over the intersection of two partitions.
+
+#### Tests
+
+- A partition search returns the same ids, order and scores as the global search filtered by
+  partition, on a synthetic corpus with partitions of very different sizes. ReposMx has this
+  test (`test/runtests.jl`, "LazyBM25 per-repository indices").
+- A record with several partitions is in each partition's lists, and each list stays sorted.
+- The partition lists survive closing and reopening the project.
+- `declare_partition!` on an existing project gives the same lists as declaring the field at
+  creation.
+- Both text backends: `BM25InvertedFile` and `TextInvertedFile`.
+
+#### ReposMx
+
+ReposMx moves to the engine following `docs/plan-motor.md` of ReposMx. With this feature, its
+`repo_postings` column family, `RepoPostingsAdjList` and `split-index` are replaced by
+`partition_by="repo"` on its documents project and on its authors project.
+
 ## 6. Hybrid Search Readiness (Suggestions & Specifications)
 
 The architecture must inherently support Hybrid Search (the fusion of dense semantic search and sparse lexical search).
@@ -707,6 +936,8 @@ Strictly one index per dataset (§1) — `index_kind` is singular, not a list:
 ```
 
 ### JoinGroup (new — backs the §1 join-dataset use case and §6 hybrid search)
+
+Superseded on 2026-11-09: see §0, item 11. This type is being removed.
 
 Datasets that share a `doc_id` space (e.g. one `searchgraph` dataset over dense embeddings + one `bm25_invfile` dataset over the same documents' text, plus an optional metadata-only dataset) are tagged with a common `join_group` id. Exactly one member is flagged `holds_metadata: true` and answers batch `fetch`; the rest carry only `doc_id` plus whatever their own index needs. A text/lexical member may additionally carry a `key` (§5.3) — `null` for non-text members (dense, metadata-only) and for a text member indexing a single undifferentiated field; a join group may hold any number of distinct-`key` text members, one per indexed field:
 
