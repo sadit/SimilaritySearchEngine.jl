@@ -565,7 +565,7 @@ version = "1.11.0"
 deps = ["Accessors", "Dates", "Distances", "Distributions", "LinearAlgebra", "Mmap", "MultivariateStats", "ProgressMeter", "Random", "SIMD", "SearchModels", "SparseArrays", "Statistics", "StatsBase"]
 path = "../../SimilaritySearch.jl"
 uuid = "053f045d-5466-53fd-b400-a066f88fe02a"
-version = "1.6.8"
+version = "1.6.11"
 
 [[deps.SimilaritySearchEngine]]
 deps = ["Avro", "Dates", "JSON", "JSON3", "PrecompileTools", "Random", "RocksDB", "SimilaritySearch", "SparseArrays", "TextSearch"]
