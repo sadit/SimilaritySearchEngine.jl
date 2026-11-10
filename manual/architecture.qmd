@@ -365,6 +365,15 @@ The global posting lists in `invfile_postings` do not change. A document identif
 
 **Reading.** A search in a partition runs on an index built for that query from the live one. It keeps the vocabulary, the scorer, the document vectors and the query pipeline, and replaces the posting lists with a `PartitionPostings` of that partition. Building it reads nothing from disk. The merge then considers only the documents of the partition. The score of a candidate is computed from the vocabulary statistics, the scoring parameters and the candidate's document vector, which are the global ones. A document therefore gets the same score in the partition search and in the global search. Partition lists are read on demand and kept in one cache per project, with the eviction rule of the global lists.
 
+**Measurement.** The values below were measured on 2026-11-10 with 64 threads, Julia 1.12.7, SimilaritySearch 1.6.11 and TextSearch 1.3.0. The project was a `BM25InvertedFile` project with 446,857 documents of the ReposMx corpus, in 91 partitions of 8 to 139,605 documents. The queries were the 114 distinct document queries of the ReposMx reference set, with `k = 10`.
+
+- `declare_partition!` took 12.0 s on the indexed project. `index!` had taken 207.9 s.
+- The partition lists hold 1,798,840 keys and 144.1 MiB of keys and values. The global lists hold 174,106 keys and 131.1 MiB.
+- A global search took 12.0 ms on average, with a median of 5.2 ms.
+- A search in a partition took 0.42 ms on average, over 10 partitions of different sizes. The median was 0.17 ms, and the maximum 26.4 ms. The mean was 0.11 ms for the partition of 8 documents and 2.21 ms for the partition of 139,605 documents.
+- A global search followed by a filter took 373 ms on average for the same 10 partitions. It asked for 40 results, and for 4 times as many each time the filter kept fewer than 10.
+- In the 1,140 pairs, the partition search and the filtered global search returned the same identifiers, in the same order, with equal scores.
+
 **Projects written before partitions existed.** A writable open creates the three column families. A read-only open cannot create them, so it opens only the column families that exist on disk.
 
 ### External Identifier Resolution

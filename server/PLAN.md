@@ -168,6 +168,11 @@ of it exist.
       `return` that should end the command was inside a `do` block. It now exits with the
       error's code. This was found by the test of an unknown partition.
     - Not done: a `partition` for `POST /api/v1/search/group`. Item 11 removes that route.
+    - Measured on 2026-11-10 over the 446,857 documents of ReposMx in 91 partitions, with the
+      114 document queries of its reference set (`manual/architecture.qmd`, "Partitioned Text
+      Indexes"): 0.42 ms on average in a partition, 12.0 ms for the global search, and 373 ms
+      for the global search followed by a filter. `declare_partition!` took 12.0 s. The
+      results of the 1,140 partition searches equal those of the filtered global search.
 11. **Removing `key`, `join_group` and `holds_metadata`** — decided on 2026-11-09, not done
     yet. Today these three fields are used by one route, `POST /api/v1/search/group`. That
     route sends a text query to the members of a join group: one member chosen by `key`, or
