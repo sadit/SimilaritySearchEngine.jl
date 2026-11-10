@@ -94,6 +94,8 @@ function build_settings()
         "--workdir"
             help = "Working directory for the database"
             default = "data"
+        "--partition-by"
+            help = "Text index only: the meta field that partitions the dataset; a search can then be restricted to one value of it (searchbatch --partition)"
     end
 
     @add_arg_table! s["searchbatch"] begin
@@ -116,6 +118,8 @@ function build_settings()
         "--edit-correction"
             help = "Text dataset only: replace a query token absent from the vocabulary with the only vocabulary token at edit distance 1"
             action = :store_true
+        "--partition"
+            help = "Text dataset only: search one partition (a value of the dataset's partition field) instead of the whole dataset"
     end
 
     @add_arg_table! s["allknn"] begin

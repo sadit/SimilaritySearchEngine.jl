@@ -145,12 +145,29 @@ of it exist.
    measurements that would answer this are now reported: `simsearch_queries_waiting`,
    `simsearch_query_wait_seconds_total`, and the histogram of request durations. A server
    whose waiting count stays at zero does not need either.
-10. **Partitioned text indexes (§5.9)** — designed on 2026-11-09, not implemented. A text
+10. ~~**Partitioned text indexes (§5.9)**~~ Implemented on 2026-11-09, in the engine and the
+    server, for both text backends. A text
     project declares one `meta` field as its partition, and the engine keeps one set of
     posting lists per value of that field, next to the global lists. A search names a
     partition and evaluates only its documents. The scores are the global scores, because
     the vocabulary, the scoring statistics and the document vectors are shared. This changes
     the decision of item 5 that no `meta` field is indexed, for one field and equality only.
+
+    What differs from §5.9, or was decided while implementing it:
+    - `partitions(handle)` counts the items appended to each partition, including deleted
+      items and items not indexed yet. The engine keeps no count of live items per partition.
+    - A field declared `:string` in the `MetaSchema` holds one value per item, because the
+      declared type refuses a list. A list of partitions needs an undeclared field.
+    - `dump` and `load` needed no change: the bundle copies the project directory, which holds
+      the partition field and the three column families. `rebuild` passes `partition_by` to
+      the new project.
+    - A read-only open now opens only the column families that exist on disk
+      (`Project.existing_column_families`). Without that, every project written before this
+      change would fail to open read-only, because it lacks the three new column families.
+    - `similarity-search searchbatch` exited with code 0 after an engine error in a query: the
+      `return` that should end the command was inside a `do` block. It now exits with the
+      error's code. This was found by the test of an unknown partition.
+    - Not done: a `partition` for `POST /api/v1/search/group`. Item 11 removes that route.
 11. **Removing `key`, `join_group` and `holds_metadata`** — decided on 2026-11-09, not done
     yet. Today these three fields are used by one route, `POST /api/v1/search/group`. That
     route sends a text query to the members of a join group: one member chosen by `key`, or
@@ -743,7 +760,7 @@ Heavy/offline operations (`search` when denied by the §3 policy, `allknn`, `nea
 
 ### 5.9. Partitioned Text Indexes (design, 2026-11-09)
 
-Status: designed, not implemented. Item 10 of §0 tracks it.
+Status: implemented on 2026-11-09. Item 10 of §0 lists what differs from this design.
 
 #### The use case
 

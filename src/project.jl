@@ -99,6 +99,12 @@ Opens or creates a RocksDB-backed project at the given path.
   caller that creates one ad hoc after the fact and never adds it here would find the
   *next* `open_project` call failing.
 
+  A writable open creates the listed column families that do not exist yet. A read-only open
+  cannot create one, and RocksDB refuses to open a column family that does not exist, so a
+  read-only open opens only the listed ones that exist. A project written before a column
+  family was added (for example the partition ones, PLAN.md §5.9) is then readable without a
+  writable open first. Code that reads such a column family must check that it is open.
+
 # Returns
 - `ProjectManager`: The initialized project manager object.
 """
@@ -108,6 +114,7 @@ function open_project(path::String, dataset::String; read_only::Bool=false, extr
     cf_names = ["default", "records", "meta", "op_log", "idx_keywords", "idx_refs", DOCID_CF]
     append!(cf_names, extra_cf_names)
 
+    read_only && (cf_names = intersect(cf_names, existing_column_families(path)))
     db = read_only ?
         RocksDB.opendb(path, column_families=cf_names, read_only=true) :
         RocksDB.opendb(path, column_families=cf_names, create_if_missing=true, create_missing_column_families=true)
@@ -117,6 +124,24 @@ function open_project(path::String, dataset::String; read_only::Bool=false, extr
                              cfs["idx_keywords"], cfs["idx_refs"], cfs[DOCID_CF])
     read_only || backfill_docid_index!(manager)
     return manager
+end
+
+"""
+    existing_column_families(path::String) -> Vector{String}
+
+The names of the column families of the RocksDB database at `path`, empty when there is no
+database there.
+"""
+function existing_column_families(path::String)
+    isfile(joinpath(path, "CURRENT")) || return String[]
+    opts = RocksDB.Options()
+    len = Ref{Csize_t}(0)
+    list = RocksDB.checked() do errptr
+        RocksDB.Lib.rocksdb_list_column_families(opts.ptr, path, len, errptr)
+    end
+    names = [unsafe_string(unsafe_load(list, i)) for i in 1:Int(len[])]
+    RocksDB.Lib.rocksdb_list_column_families_destroy(list, len[])
+    names
 end
 
 """

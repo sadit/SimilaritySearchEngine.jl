@@ -74,6 +74,7 @@ export TextConfig, TextProfile, QueryPolicy, load_profile, save_profile,
 # a `FitFromCorpus` method to -- also one function, for the same reason.
 export text_profile, fit_profile
 export meta_schema, declare_meta_schema!, MetaSchema, MetaField
+export partition_field, partitions, declare_partition!
 export vocabulary_report, DEFAULT_OOV_SCAN_SAMPLE
 
 # The text-model decision a text project is created with: `create_project` refuses to guess,
@@ -105,8 +106,8 @@ export payload_kind
 # to reach into a submodule for the name.
 export EngineError, InvalidRequest, NotFound, ConflictingState, StorageFailure
 export PayloadMismatch, WrongDimension, UnknownBackend, InvalidOption, UnsupportedOperation
-export ProfileNotInstalled, PendingBacklog, NothingStaged, NoIndex, NotTrained, EmptyProject
-export CorruptedStorage
+export ProfileNotInstalled, UnknownPartition, PendingBacklog, NothingStaged, NoIndex, NotTrained
+export EmptyProject, CorruptedStorage
 
 # ---------------------------------------------------------------------------------------
 # Precompilation workload.

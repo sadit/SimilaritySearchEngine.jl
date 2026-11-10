@@ -17,6 +17,9 @@ export StagedTextStore, STAGED_TEXT_CF, open_staged_text_store, append_staged_te
 export InvertedIndexStore, INVFILE_POSTINGS_CF, INVFILE_DOCVECS_CF, open_inverted_index_store, has_inverted_index,
        write_invfile_block!, load_invfile_docvecs, docvec_nnz, DocVec, WeightedDocVec, BagDocVec
 export LazyPostings, trim_postings_cache!, invalidate_postings!
+export PartitionStore, PartitionPostings, PARTITION_TABLE_CF, PARTITION_MEMBERS_CF, PARTITION_POSTINGS_CF,
+       open_partition_store, assign_partitions!, partition_number, partition_names, partition_counts,
+       clear_partitions!, split_partition_postings!, trim_partition_cache!
 export DumpRecord, write_dump_records, read_dump_records
 
 # ---------------------------------------------------------
@@ -701,6 +704,21 @@ merge in `TextSearch.jl`'s search relies on.
 """
 function write_invfile_block!(store::InvertedIndexStore, base::Integer, docvecs, postings::Dict{UInt32,Vector{UInt32}})
     b = RocksDB.WriteBatch()
+    _add_invfile_block!(b, store, base, docvecs, postings)
+    RocksDB.write!(store.db, b)
+    return nothing
+end
+
+"""
+    _add_invfile_block!(b::RocksDB.WriteBatch, store::InvertedIndexStore, base, docvecs, postings)
+
+The writes of [`write_invfile_block!`](@ref), added to `b` instead of written. A block of a
+partitioned project adds its partition lists to the same batch
+([`add_partition_postings!`](@ref)), so the global lists and the partition lists change
+together or not at all.
+"""
+function _add_invfile_block!(b::RocksDB.WriteBatch, store::InvertedIndexStore, base::Integer, docvecs,
+                             postings::Dict{UInt32,Vector{UInt32}})
     for (i, v) in enumerate(docvecs)
         RocksDB.put!(b, _be_key(base + i), _encode_docvec(v); cf=store.docvecs)
     end
@@ -709,8 +727,7 @@ function write_invfile_block!(store::InvertedIndexStore, base::Integer, docvecs,
         merged = raw === nothing ? Vector{UInt32}(newids) : vcat(_decode_ids(raw), UInt32.(newids))
         RocksDB.put!(b, _be_key(token), _encode_ids(merged); cf=store.postings)
     end
-    RocksDB.write!(store.db, b)
-    return nothing
+    return b
 end
 
 """
@@ -759,8 +776,356 @@ function load_invfile_docvecs(store::InvertedIndexStore)
     issorted(ids) ? out : out[sortperm(ids)]
 end
 
+# ---------------------------------------------------------
+# Partitions of a text project (PLAN.md §5.9)
+# ---------------------------------------------------------
+
 """
-    LazyPostings(store::InvertedIndexStore, vocsize::Int, maxlists::Int, baselists::Int)
+    PARTITION_TABLE_CF
+    PARTITION_MEMBERS_CF
+    PARTITION_POSTINGS_CF
+
+The three column families of a partitioned text project (PLAN.md §5.9). A *partition* is the
+set of items whose partition field (one `meta` field, declared per project) holds a given
+value. They are opened with every project, partitioned or not, for the same reason as the
+others: every column family that exists on disk must be listed on every open.
+
+- `PARTITION_TABLE_CF`: key the partition name (UTF-8), value its number (`UInt32`) and the
+  number of items appended to it (`Int64`). Numbers start at 1, are assigned in the order the
+  names first appear, and are never reused.
+- `PARTITION_MEMBERS_CF`: key an item's `_id` (big-endian), value the numbers of its
+  partitions. An item without the field has no entry.
+- `PARTITION_POSTINGS_CF`: key `[partition number][token id]`, both big-endian, value the
+  ascending ids of the documents of that partition that hold the token. The encoding is the
+  one of [`INVFILE_POSTINGS_CF`](@ref). The lists of one partition are contiguous.
+"""
+const PARTITION_TABLE_CF = "partition_table"
+
+"See [`PARTITION_TABLE_CF`](@ref)."
+const PARTITION_MEMBERS_CF = "partition_members"
+
+"See [`PARTITION_TABLE_CF`](@ref)."
+const PARTITION_POSTINGS_CF = "partition_postings"
+
+"""
+    PartitionStore
+
+The partitions of one text project: its three column families, the partition table held in
+memory, and one cache of decoded partition lists for every [`PartitionPostings`](@ref) built
+from it.
+
+`field` is the `meta` field the project is partitioned by. `names[i]` is the name of partition
+`i`, `numbers` maps a name back to it, and `counts[i]` is the number of items appended to
+partition `i`, deleted ones included. `lk` guards the table and the cache: an append updates
+the table while searches read it.
+
+The cache follows the rule of [`LazyPostings`](@ref): a read never evicts, and
+[`trim_partition_cache!`](@ref) runs only after a query has resolved.
+"""
+mutable struct PartitionStore
+    db::RocksDB.DB
+    table::RocksDB.ColumnFamily
+    members::RocksDB.ColumnFamily
+    postings::RocksDB.ColumnFamily
+    field::String
+    numbers::Dict{String,UInt32}
+    names::Vector{String}
+    counts::Vector{Int}
+    cache::Dict{UInt64,Vector{UInt32}}
+    uses::Dict{UInt64,Int}
+    lk::Threads.ReentrantLock
+    maxlists::Int
+    baselists::Int
+end
+
+_encode_table_row(number::UInt32, count::Integer) =
+    vcat(Vector{UInt8}(reinterpret(UInt8, [number])), Vector{UInt8}(reinterpret(UInt8, [Int64(count)])))
+
+# The cache key of a partition list: the partition number in the high half, the token in the
+# low one. Both are `UInt32`, so the pair is one integer and the cache is one flat `Dict`.
+_partition_cache_key(number::Integer, token::Integer) = (UInt64(number) << 32) | UInt64(UInt32(token))
+
+_partition_postings_key(number::Integer, token::Integer) = vcat(_be_key(number), _be_key(token))
+
+"""
+    open_partition_store(db::RocksDB.DB, field::String, maxlists::Integer, baselists::Integer) -> PartitionStore
+
+The partitions of the project whose RocksDB connection is `db`, partitioned by `field`. Reads
+the partition table into memory. `maxlists` and `baselists` bound the cache of partition
+lists, as for [`LazyPostings`](@ref).
+"""
+function open_partition_store(db::RocksDB.DB, field::String, maxlists::Integer, baselists::Integer)
+    baselists <= maxlists ||
+        invalid_option(:postings_cache_base, "the posting cache's base size ($baselists) cannot exceed its maximum ($maxlists)")
+    table = db.column_families[PARTITION_TABLE_CF]
+    rows = Tuple{UInt32,String,Int}[]
+    for (k, v) in RocksDB.DBIterator(db; cf=table)
+        length(v) == 12 ||
+            corrupted_storage("a row of $(PARTITION_TABLE_CF) holds $(length(v)) bytes; it should hold 12")
+        number = reinterpret(UInt32, v[1:4])[1]
+        count = Int(reinterpret(Int64, v[5:12])[1])
+        push!(rows, (number, String(copy(k)), count))
+    end
+    sort!(rows)
+    all(i -> rows[i][1] == i, eachindex(rows)) ||
+        corrupted_storage("the partition numbers in $(PARTITION_TABLE_CF) are not 1 to $(length(rows))")
+    names = String[r[2] for r in rows]
+    PartitionStore(db, table, db.column_families[PARTITION_MEMBERS_CF], db.column_families[PARTITION_POSTINGS_CF],
+                   field, Dict{String,UInt32}(n => UInt32(i) for (i, n) in enumerate(names)), names,
+                   Int[r[3] for r in rows], Dict{UInt64,Vector{UInt32}}(), Dict{UInt64,Int}(),
+                   Threads.ReentrantLock(), Int(maxlists), Int(baselists))
+end
+
+"""
+    partition_number(store::PartitionStore, name::AbstractString) -> Union{Nothing,UInt32}
+
+The number of partition `name`, or `nothing` when the table does not hold it.
+"""
+partition_number(store::PartitionStore, name::AbstractString) =
+    lock(() -> get(store.numbers, String(name), nothing), store.lk)
+
+"The partition names, in number order. A copy: the table can grow while the caller reads it."
+partition_names(store::PartitionStore) = lock(() -> copy(store.names), store.lk)
+
+"The number of items appended to each partition, in number order. A copy, as for [`partition_names`](@ref)."
+partition_counts(store::PartitionStore) = lock(() -> copy(store.counts), store.lk)
+
+"""
+    assign_partitions!(store::PartitionStore, first_id::Integer, values::AbstractVector) -> Vector{Vector{UInt32}}
+
+Records the partitions of the items `first_id`, `first_id + 1`, ...: `values[i]` holds the
+partition names of item `first_id + i - 1`, possibly none. Adds the names the table does not
+hold yet, writes [`PARTITION_MEMBERS_CF`](@ref) and the counts in one `WriteBatch`, and returns
+the partition numbers of each item.
+
+The table in memory changes only after the batch is written, so a failed write leaves the
+store as it was.
+"""
+function assign_partitions!(store::PartitionStore, first_id::Integer, values::AbstractVector)
+    lock(store.lk) do
+        newnames = String[]
+        provisional = Dict{String,UInt32}()
+        delta = Dict{UInt32,Int}()
+        numbers_of = Vector{Vector{UInt32}}(undef, length(values))
+        b = RocksDB.WriteBatch()
+        for (i, names) in enumerate(values)
+            nums = UInt32[]
+            for name in names
+                num = get(store.numbers, name, get(provisional, name, UInt32(0)))
+                if num == 0
+                    push!(newnames, name)
+                    num = UInt32(length(store.names) + length(newnames))
+                    provisional[name] = num
+                end
+                delta[num] = get(delta, num, 0) + 1
+                push!(nums, num)
+            end
+            numbers_of[i] = nums
+            isempty(nums) || RocksDB.put!(b, _be_key(first_id + i - 1), _encode_ids(nums); cf=store.members)
+        end
+        nold = length(store.names)
+        for (num, d) in delta
+            name = num <= nold ? store.names[num] : newnames[num - nold]
+            count = (num <= nold ? store.counts[num] : 0) + d
+            RocksDB.put!(b, Vector{UInt8}(codeunits(name)), _encode_table_row(num, count); cf=store.table)
+        end
+        RocksDB.write!(store.db, b)
+        append!(store.names, newnames)
+        append!(store.counts, zeros(Int, length(newnames)))
+        merge!(store.numbers, provisional)
+        for (num, d) in delta
+            store.counts[num] += d
+        end
+        numbers_of
+    end
+end
+
+"""
+    _load_members(store::PartitionStore, ids::AbstractUnitRange) -> Vector{Vector{UInt32}}
+
+The partition numbers of each item in `ids`, empty for an item without the partition field.
+"""
+function _load_members(store::PartitionStore, ids::AbstractUnitRange)
+    map(ids) do id
+        raw = RocksDB.get(store.db, _be_key(id); cf=store.members)
+        raw === nothing ? UInt32[] : _decode_ids(raw)
+    end
+end
+
+"""
+    add_partition_postings!(b::RocksDB.WriteBatch, store::PartitionStore, base::Integer, ndocs::Integer,
+                            postings::Dict{UInt32,Vector{UInt32}}) -> Vector{UInt64}
+
+Adds to `b` the partition lists of the block of documents `base+1 … base+ndocs`, whose global
+lists are `postings` (token to ascending global ids). Each list is split by the partitions of
+its documents and appended to that partition's list for the token. Returns the cache keys of
+the lists it changed, for the caller to drop from the cache once `b` is written.
+
+Appending keeps each list ascending for the reason given in [`write_invfile_block!`](@ref):
+every id of a block is larger than every id indexed before it.
+"""
+function add_partition_postings!(b::RocksDB.WriteBatch, store::PartitionStore, base::Integer, ndocs::Integer,
+                                 postings::Dict{UInt32,Vector{UInt32}})
+    members = _load_members(store, base+1:base+ndocs)
+    all(isempty, members) && return UInt64[]
+    grouped = Dict{UInt64,Vector{UInt32}}()
+    for (token, ids) in postings
+        for id in ids
+            for num in members[id - base]
+                push!(get!(Vector{UInt32}, grouped, _partition_cache_key(num, token)), UInt32(id))
+            end
+        end
+    end
+    for (ck, newids) in grouped
+        key = _partition_postings_key(ck >> 32, ck & 0xffffffff)
+        raw = RocksDB.get(store.db, key; cf=store.postings)
+        merged = raw === nothing ? newids : vcat(_decode_ids(raw), newids)
+        RocksDB.put!(b, key, _encode_ids(merged); cf=store.postings)
+    end
+    collect(keys(grouped))
+end
+
+"""
+    split_partition_postings!(store::PartitionStore, invfile::InvertedIndexStore,
+                              members::AbstractVector, flush_ids::Integer) -> Int
+
+Builds every partition list from the global lists already in `invfile`, for a project whose
+partition field is declared after it was indexed. `members[_id]` holds the partition numbers
+of each item. Reads each global list once, splits it by partition, and writes the batch each
+time it holds `flush_ids` ids. Returns the number of ids written.
+
+Reads no text and tokenizes nothing: the global lists already say which documents hold each
+token.
+"""
+function split_partition_postings!(store::PartitionStore, invfile::InvertedIndexStore,
+                                   members::AbstractVector, flush_ids::Integer)
+    b = RocksDB.WriteBatch()
+    pending = 0
+    total = 0
+    for (k, v) in RocksDB.DBIterator(invfile.db; cf=invfile.postings)
+        token = _decode_be_key(k)
+        byparts = Dict{UInt32,Vector{UInt32}}()
+        for id in _decode_ids(v)
+            for num in members[id]
+                push!(get!(Vector{UInt32}, byparts, num), id)
+            end
+        end
+        for (num, ids) in byparts
+            RocksDB.put!(b, _partition_postings_key(num, token), _encode_ids(ids); cf=store.postings)
+            pending += length(ids)
+        end
+        if pending >= flush_ids
+            RocksDB.write!(store.db, b)
+            total += pending
+            pending = 0
+            b = RocksDB.WriteBatch()
+        end
+    end
+    RocksDB.write!(store.db, b)
+    total += pending
+    lock(() -> (empty!(store.cache); empty!(store.uses)), store.lk)
+    return total
+end
+
+"""
+    clear_partitions!(store::PartitionStore) -> PartitionStore
+
+Deletes every partition: the table, the members and the lists, on disk and in memory. Used
+before declaring a partition field, so that what an interrupted declaration left behind is not
+mixed with the new one.
+"""
+function clear_partitions!(store::PartitionStore)
+    for cf in (store.table, store.members, store.postings)
+        b = RocksDB.WriteBatch()
+        n = 0
+        for (k, _) in RocksDB.DBIterator(store.db; cf)
+            RocksDB.delete!(b, copy(k); cf)
+            n += 1
+            if n % 100_000 == 0
+                RocksDB.write!(store.db, b)
+                b = RocksDB.WriteBatch()
+            end
+        end
+        RocksDB.write!(store.db, b)
+    end
+    lock(store.lk) do
+        empty!(store.numbers); empty!(store.names); empty!(store.counts)
+        empty!(store.cache); empty!(store.uses)
+    end
+    store
+end
+
+"""
+    PartitionPostings(store::PartitionStore, number::UInt32, vocsize::Int)
+
+The posting lists of partition `number`, as an `AbstractAdjList{UInt32}` that a text index
+can be built around in place of its global lists. It reads `[number][token]` from
+[`PARTITION_POSTINGS_CF`](@ref) on demand, through the store's cache.
+
+A search over it evaluates only the documents of the partition. Each document gets the score
+the global index gives it, because the index built around these lists keeps the global
+vocabulary, scorer and document vectors (PLAN.md §5.9).
+"""
+struct PartitionPostings <: SimilaritySearch.AbstractAdjList{UInt32}
+    store::PartitionStore
+    number::UInt32
+    n::Int
+end
+
+function SimilaritySearch.neighbors(a::PartitionPostings, i)
+    store = a.store
+    ck = _partition_cache_key(a.number, i)
+    hit = lock(store.lk) do
+        cached = get(store.cache, ck, nothing)
+        cached === nothing || (store.uses[ck] = get(store.uses, ck, 0) + 1)
+        cached
+    end
+    hit === nothing || return hit
+    raw = RocksDB.get(store.db, _partition_postings_key(a.number, i); cf=store.postings)
+    ids = raw === nothing ? UInt32[] : _decode_ids(raw)
+    lock(store.lk) do
+        store.cache[ck] = ids
+        store.uses[ck] = get(store.uses, ck, 0) + 1
+    end
+    ids
+end
+
+SimilaritySearch.neighbors_length(a::PartitionPostings, i) = length(SimilaritySearch.neighbors(a, i))
+Base.eachindex(a::PartitionPostings) = Base.OneTo(a.n)
+Base.length(a::PartitionPostings) = a.n
+
+SimilaritySearch.add!(::PartitionPostings, args...) =
+    unsupported_operation(:add!, "PartitionPostings is read-only: a block's partition lists are written " *
+          "by add_partition_postings!, in the batch of its global lists")
+
+"""
+    trim_partition_cache!(store::PartitionStore) -> Int
+
+Evicts the least used partition lists down to `store.baselists` when the cache holds more than
+`store.maxlists`; returns how many it dropped. Same rule as [`trim_postings_cache!`](@ref).
+"""
+trim_partition_cache!(store::PartitionStore) =
+    lock(() -> _trim_lfu!(store.cache, store.uses, store.maxlists, store.baselists), store.lk)
+
+"""
+    _trim_lfu!(cache, uses, maxlists, baselists) -> Int
+
+Evicts the least used entries of `cache` down to `baselists` when it holds more than
+`maxlists`, and returns how many it dropped. The caller holds the lock that guards `cache`.
+"""
+function _trim_lfu!(cache::AbstractDict, uses::AbstractDict, maxlists::Int, baselists::Int)
+    length(cache) <= maxlists && return 0
+    victims = sort!(collect(keys(cache)); by=t -> get(uses, t, 0))
+    ndrop = length(cache) - baselists
+    for t in view(victims, 1:ndrop)
+        delete!(cache, t)
+        delete!(uses, t)
+    end
+    ndrop
+end
+
+"""
+    LazyPostings(store::InvertedIndexStore, vocsize::Int, maxlists::Int, baselists::Int, partitions)
 
 A `BM25InvertedFile`'s posting lists, read from RocksDB on demand instead of held in memory,
 with a bounded cache in front.
@@ -798,13 +1163,18 @@ mutable struct LazyPostings <: SimilaritySearch.AbstractAdjList{UInt32}
     lk::Threads.ReentrantLock
     maxlists::Int
     baselists::Int
+    # The project's partitions, shared with its handle, or `nothing` when it declares no
+    # partition field. A reference rather than a value: `declare_partition!` sets it on a
+    # project whose index already exists.
+    partitions::Base.RefValue{Union{Nothing,PartitionStore}}
 end
 
-function LazyPostings(store::InvertedIndexStore, vocsize::Integer, maxlists::Integer, baselists::Integer)
+function LazyPostings(store::InvertedIndexStore, vocsize::Integer, maxlists::Integer, baselists::Integer,
+                      partitions::Base.RefValue{Union{Nothing,PartitionStore}})
     baselists <= maxlists ||
         invalid_option(:postings_cache_base, "the posting cache's base size ($baselists) cannot exceed its maximum ($maxlists)")
     LazyPostings(store, Int(vocsize), Dict{UInt32,Vector{UInt32}}(), Dict{UInt32,Int}(),
-                 Threads.ReentrantLock(), Int(maxlists), Int(baselists))
+                 Threads.ReentrantLock(), Int(maxlists), Int(baselists), partitions)
 end
 
 function SimilaritySearch.neighbors(a::LazyPostings, i)
@@ -842,18 +1212,7 @@ more than `a.maxlists` of them; returns how many it dropped.
 Call it after a query (or a batch of them) has fully resolved -- never from inside one. See
 [`LazyPostings`](@ref).
 """
-function trim_postings_cache!(a::LazyPostings)
-    lock(a.lk) do
-        length(a.cache) <= a.maxlists && return 0
-        victims = sort!(collect(keys(a.cache)); by=t -> get(a.uses, t, 0))
-        ndrop = length(a.cache) - a.baselists
-        for t in view(victims, 1:ndrop)
-            delete!(a.cache, t)
-            delete!(a.uses, t)
-        end
-        ndrop
-    end
-end
+trim_postings_cache!(a::LazyPostings) = lock(() -> _trim_lfu!(a.cache, a.uses, a.maxlists, a.baselists), a.lk)
 
 """
     invalidate_postings!(a::LazyPostings, tokens)
@@ -876,11 +1235,23 @@ end
 # memory (see its `persist_block!`/`maybe_trim_cache!`): this module is loaded after that one
 # precisely so it can add these methods without `IndexEngine` ever naming RocksDB.
 function IndexEngine.persist_block!(a::LazyPostings, base::Int, docvecs, postings::Dict{UInt32,Vector{UInt32}})
-    write_invfile_block!(a.store, base, docvecs, postings)
+    b = RocksDB.WriteBatch()
+    _add_invfile_block!(b, a.store, base, docvecs, postings)
+    parts = a.partitions[]
+    touched = parts === nothing ? UInt64[] : add_partition_postings!(b, parts, base, length(docvecs), postings)
+    RocksDB.write!(a.store.db, b)
     invalidate_postings!(a, keys(postings))
+    if !isempty(touched)
+        lock(parts.lk) do
+            for ck in touched
+                delete!(parts.cache, ck)
+            end
+        end
+    end
     return nothing
 end
 
 IndexEngine.maybe_trim_cache!(a::LazyPostings) = trim_postings_cache!(a)
+IndexEngine.maybe_trim_cache!(a::PartitionPostings) = trim_partition_cache!(a.store)
 
 end # module

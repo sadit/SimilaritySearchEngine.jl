@@ -362,6 +362,43 @@ An insertion after the first `index!` writes only the data that the new block mo
 
 ---
 
+## Searching One Partition
+
+Some searches are restricted to a group of documents that is known before the query: one repository, one customer, one collection. A text project can declare one `meta` field as its *partition field*. Each value of that field is a *partition*. The engine then keeps one set of posting lists per partition, next to the global posting lists.
+
+```julia
+hp = create_project(workdir, "frankenstein_parts";
+                    engine=FullTextEngine, backend=BM25InvertedFile,
+                    textmodel=FitFromCorpus(), partition_by="volume")
+
+append_items!(hp, [
+    TextItem(it["text"]; doc_id = it["doc_id"],
+             meta = Dict{String,Any}("volume" => i <= 100 ? "first" : "second"))
+    for (i, it) in enumerate(items[1:200])
+])
+index!(hp)
+
+ftsearch(hp, "monster creature fear", 5)                       # all 200 paragraphs
+ftsearch(hp, "monster creature fear", 5; partition="second")   # paragraphs 101 to 200
+partitions(hp)    # [(name = "first", items = 100), (name = "second", items = 100)]
+```
+
+A search with `partition` reads only the posting lists of that partition, so it evaluates only the documents of that partition. It returns the same identifiers, in the same order and with the same scores, as the global search restricted to the partition. The scores do not change because the partition lists share the vocabulary, the scoring statistics and the document vectors of the global index. The profile fixes those values when it is fitted, and documents indexed later do not change them.
+
+The value of the partition field is a non-empty string or a list of non-empty strings. A list puts the item in each partition it names. An item without the field belongs to no partition, and only the global search finds it. If `meta_schema` declares the field, it must declare it `:string`, which allows one value per item.
+
+Errors are raised, not returned as empty results:
+
+- A partition name that the project does not hold raises `UnknownPartition`, a `NotFound`. Its message lists the closest names, so a misspelled name is not mistaken for a partition without matches.
+- A partition field value that is not a non-empty string raises `PayloadMismatch`, and `append_items!` writes nothing from that call.
+- `partition` on a project without a partition field raises `InvalidOption`.
+
+A name exists from the moment an item with that value is appended. Before `index!` indexes that item, a search in its partition returns no results.
+
+`declare_partition!(h, "volume")` partitions a project that already exists. It reads the `meta` of every item once and splits the global posting lists that are already stored. It does not read or tokenize text. A project has one partition field, and it cannot be changed.
+
+---
+
 ## What the Vocabulary Does Not Cover
 
 A text project fits its vocabulary once, from the documents staged when `index!` first ran.

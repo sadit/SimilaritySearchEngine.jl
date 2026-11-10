@@ -262,6 +262,7 @@ window.Quarto = {
   <li><a href="#persistence-architecture" id="toc-persistence-architecture" class="nav-link" data-scroll-target="#persistence-architecture">Persistence Architecture</a>
   <ul class="collapse">
   <li><a href="#the-persisted-text-index" id="toc-the-persisted-text-index" class="nav-link" data-scroll-target="#the-persisted-text-index">The Persisted Text Index</a></li>
+  <li><a href="#partitioned-text-indexes" id="toc-partitioned-text-indexes" class="nav-link" data-scroll-target="#partitioned-text-indexes">Partitioned Text Indexes</a></li>
   <li><a href="#external-identifier-resolution" id="toc-external-identifier-resolution" class="nav-link" data-scroll-target="#external-identifier-resolution">External Identifier Resolution</a></li>
   <li><a href="#compaction" id="toc-compaction" class="nav-link" data-scroll-target="#compaction">Compaction</a></li>
   <li><a href="#storage-subsystems" id="toc-storage-subsystems" class="nav-link" data-scroll-target="#storage-subsystems">Storage Subsystems</a></li>
@@ -573,6 +574,9 @@ window.Quarto = {
         sparsedb[("sparse_db&lt;br/&gt;&lt;small&gt;Encoded object blocks&lt;/small&gt;")]
         postings[("invfile_postings&lt;br/&gt;&lt;small&gt;token → document ids&lt;/small&gt;")]
         docvecs[("invfile_docvecs&lt;br/&gt;&lt;small&gt;document → indexed vector&lt;/small&gt;")]
+        ptable[("partition_table&lt;br/&gt;&lt;small&gt;name → number, item count&lt;/small&gt;")]
+        pmembers[("partition_members&lt;br/&gt;&lt;small&gt;_id → partition numbers&lt;/small&gt;")]
+        ppostings[("partition_postings&lt;br/&gt;&lt;small&gt;(partition, token) → document ids&lt;/small&gt;")]
     end
     mmapfile[["dense_vectors.mmapdb&lt;br/&gt;&lt;small&gt;Memory-Mapped Vector File&lt;/small&gt;"]]
 
@@ -587,6 +591,9 @@ window.Quarto = {
     InvertedFileObjectStore -- "append_objects!" --&gt; sparsedb
     InvertedIndexStore -- "write_invfile_block!" --&gt; postings
     InvertedIndexStore -- "write_invfile_block! / load_invfile_docvecs" --&gt; docvecs
+    PartitionStore -- "assign_partitions!" --&gt; ptable
+    PartitionStore -- "assign_partitions!" --&gt; pmembers
+    PartitionStore -- "add_partition_postings!" --&gt; ppostings
     append_dense["append_items! (Dense)"] --&gt; mmapfile
     append_text["append_items! (Text)"] --&gt; stagedtext
 </pre>
@@ -606,6 +613,19 @@ window.Quarto = {
 <p><strong>There is no migration from the previous format.</strong> A project written before the index was persisted opens with its profile and its staged text, and with no index. A search against it reports this condition, and one call to <code>index!</code> builds the index from the staged text, which was always persisted independently of the index. Supporting the previous format would require keeping the reconstruction procedure for projects that do not yet exist, since no version has been released. The migration is therefore explicit:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>h <span class="op">=</span> <span class="fu">open_project</span>(workdir, dataset)</span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="fu">index!</span>(h)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="partitioned-text-indexes" class="level3">
+<h3 class="anchored" data-anchor-id="partitioned-text-indexes">Partitioned Text Indexes</h3>
+<p>A text project can declare one <code>meta</code> field as its partition field (<code>partition_by</code>, or <code>declare_partition!</code> later). Each value of the field is a partition. Three column families store the partitions:</p>
+<ul>
+<li><code>partition_table</code> maps each partition name to a number and to the number of items appended to it. Numbers start at 1, follow the order in which the names first appear, and are not reused. The table is read into memory when the project is opened.</li>
+<li><code>partition_members</code> maps the <code>_id</code> of an item to the numbers of its partitions. <code>append_items!</code> writes it before the staged text, so that an item never exists without its partitions.</li>
+<li><code>partition_postings</code> holds one posting list per partition and token, under the key <code>[partition number][token id]</code>, both big-endian. The lists of one partition are therefore contiguous.</li>
+</ul>
+<p>The global posting lists in <code>invfile_postings</code> do not change. A document identifier appears once in the global list of each of its tokens, and once more for each partition of its item.</p>
+<p><strong>Writing.</strong> <code>persist_block!</code> writes the global lists and the partition lists of a block in the same <code>WriteBatch</code>. It reads the partitions of the block’s documents from <code>partition_members</code>, splits each global list of the block by partition, and appends each part to the stored list of that partition and token. A failure during a block therefore leaves both kinds of list at the end of the previous block. <code>declare_partition!</code> builds the partition lists of a project that is already indexed by splitting each stored global list once. It reads no text.</p>
+<p><strong>Reading.</strong> A search in a partition runs on an index built for that query from the live one. It keeps the vocabulary, the scorer, the document vectors and the query pipeline, and replaces the posting lists with a <code>PartitionPostings</code> of that partition. Building it reads nothing from disk. The merge then considers only the documents of the partition. The score of a candidate is computed from the vocabulary statistics, the scoring parameters and the candidate’s document vector, which are the global ones. A document therefore gets the same score in the partition search and in the global search. Partition lists are read on demand and kept in one cache per project, with the eviction rule of the global lists.</p>
+<p><strong>Projects written before partitions existed.</strong> A writable open creates the three column families. A read-only open cannot create them, so it opens only the column families that exist on disk.</p>
 </section>
 <section id="external-identifier-resolution" class="level3">
 <h3 class="anchored" data-anchor-id="external-identifier-resolution">External Identifier Resolution</h3>

@@ -2164,7 +2164,39 @@ function search_live(engine::Union{DenseEngine{<:ExactBackend}, SparseEngine}, q
     end
 end
 
-function search_live(engine::FullTextEngine, query, k::Int; bs_override, minrecall, policy::QueryPolicy)
+search_live(engine::FullTextEngine, query, k::Int; bs_override, minrecall, policy::QueryPolicy) =
+    _search_text_live(engine, query, k, policy, nothing)
+
+"""
+    search_partition_live(engine::FullTextEngine, partition_adj::Function, query, k::Int; policy) -> (id=..., dist=..., deleted=..., distance_evaluations=...)
+
+[`search_live`](@ref) over one partition of a text project (PLAN.md §5.9). `partition_adj`
+takes the vocabulary size and returns that partition's posting lists as an
+`AbstractAdjList{UInt32}`. The search runs on an index that is the live one with those lists in
+place of its own: same vocabulary, scorer, document vectors and query pipeline, so each
+document gets the score the global index gives it, and only the partition's documents are
+evaluated. Same locking and soft-delete reporting as [`search_live`](@ref).
+"""
+search_partition_live(engine::FullTextEngine, partition_adj::Function, query, k::Int; policy::QueryPolicy) =
+    _search_text_live(engine, query, k, policy, partition_adj)
+
+"""
+    _with_adj(index, adj) -> AbstractInvertedFile
+
+`index` with `adj` as its posting lists and every other field shared, not copied. Building one
+reads nothing from disk and allocates only the wrapper. It depends on the field order of
+`BM25InvertedFile` and `InvertedFile`, as [`_text_index`](@ref) does.
+"""
+_with_adj(index::BM25InvertedFile, adj) =
+    BM25InvertedFile(index.voc, index.bm25, adj, index.doclens, index.db, index.len, index.query)
+
+function _with_adj(index::TextInvertedFile, adj)
+    inner = index.invfile
+    TextInvertedFile(index.model, InvertedFile(inner.dist, adj, inner.sizes, inner.db, inner.len), index.query)
+end
+
+function _search_text_live(engine::FullTextEngine, query, k::Int, policy::QueryPolicy,
+                           partition_adj::Union{Nothing,Function})
     read_lock(engine.lock) do
         profile = engine.profile
         profile === nothing && return (id=Int32[], dist=Float32[], deleted=Bool[], distance_evaluations=0)
@@ -2183,13 +2215,15 @@ function search_live(engine::FullTextEngine, query, k::Int; bs_override, minreca
             # call while the variant map and the expansion network stay on the index, derived
             # once by the profile-taking constructor. This module used to do all four steps
             # itself, and keep a second variant map, only to be able to vary the policy.
-            search(engine.backend.index, ctx, query, res; policy)
+            live = engine.backend.index
+            index = partition_adj === nothing ? live : _with_adj(live, partition_adj(length(live.adj)))
+            search(index, ctx, query, res; policy)
             evals = SimilaritySearch.distance_evaluations(ctx, snap)
             out = _collect_live(engine, res, evals)
             # The query is resolved: nothing is still walking a posting list this call read, so
             # this is the one moment a cache in front of them may drop anything. See
             # [`maybe_trim_cache!`](@ref).
-            maybe_trim_cache!(engine.backend.index.adj)
+            maybe_trim_cache!(index.adj)
             return out
         finally
             checkin!(engine.search_ctx_pool, ctx)

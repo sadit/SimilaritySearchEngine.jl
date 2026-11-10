@@ -50,11 +50,11 @@ def metrics():
 # --- datasets -------------------------------------------------------------------------
 
 def create_dataset(id=None, index_type="searchgraph", distance="L2", join_group=None,
-                    holds_metadata=False, key=None, meta_schema=None):
+                    holds_metadata=False, key=None, meta_schema=None, partition_by=None):
     body = _compact({
         "id": id, "index_type": index_type, "distance": distance,
         "join_group": join_group, "holds_metadata": holds_metadata or None,
-        "key": key, "meta_schema": meta_schema,
+        "key": key, "meta_schema": meta_schema, "partition_by": partition_by,
     })
     return "POST", "/api/v1/datasets", body, None
 
@@ -95,8 +95,12 @@ def search(index, vector, k=10, filter=None, beamsearch_overrides=None, page_siz
     return "POST", f"/api/v1/datasets/{index}/search", body, None
 
 
-def ftsearch(index, text, k=10):
-    return "POST", f"/api/v1/datasets/{index}/ftsearch", {"text": text, "k": k}, None
+def ftsearch(index, text, k=10, partition=None):
+    return "POST", f"/api/v1/datasets/{index}/ftsearch", _compact({"text": text, "k": k, "partition": partition}), None
+
+
+def get_partitions(id):
+    return "GET", f"/api/v1/datasets/{id}/partitions", None, None
 
 
 def ftsearch_group(join_group, key, text, k=10):

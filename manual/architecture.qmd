@@ -306,6 +306,9 @@ flowchart TB
         sparsedb[("sparse_db<br/><small>Encoded object blocks</small>")]
         postings[("invfile_postings<br/><small>token → document ids</small>")]
         docvecs[("invfile_docvecs<br/><small>document → indexed vector</small>")]
+        ptable[("partition_table<br/><small>name → number, item count</small>")]
+        pmembers[("partition_members<br/><small>_id → partition numbers</small>")]
+        ppostings[("partition_postings<br/><small>(partition, token) → document ids</small>")]
     end
     mmapfile[["dense_vectors.mmapdb<br/><small>Memory-Mapped Vector File</small>"]]
 
@@ -320,6 +323,9 @@ flowchart TB
     InvertedFileObjectStore -- "append_objects!" --> sparsedb
     InvertedIndexStore -- "write_invfile_block!" --> postings
     InvertedIndexStore -- "write_invfile_block! / load_invfile_docvecs" --> docvecs
+    PartitionStore -- "assign_partitions!" --> ptable
+    PartitionStore -- "assign_partitions!" --> pmembers
+    PartitionStore -- "add_partition_postings!" --> ppostings
     append_dense["append_items! (Dense)"] --> mmapfile
     append_text["append_items! (Text)"] --> stagedtext
 ```
@@ -344,6 +350,22 @@ Posting lists read on demand are kept in a least-frequently-used cache. The cach
 h = open_project(workdir, dataset)
 index!(h)
 ```
+
+### Partitioned Text Indexes
+
+A text project can declare one `meta` field as its partition field (`partition_by`, or `declare_partition!` later). Each value of the field is a partition. Three column families store the partitions:
+
+- `partition_table` maps each partition name to a number and to the number of items appended to it. Numbers start at 1, follow the order in which the names first appear, and are not reused. The table is read into memory when the project is opened.
+- `partition_members` maps the `_id` of an item to the numbers of its partitions. `append_items!` writes it before the staged text, so that an item never exists without its partitions.
+- `partition_postings` holds one posting list per partition and token, under the key `[partition number][token id]`, both big-endian. The lists of one partition are therefore contiguous.
+
+The global posting lists in `invfile_postings` do not change. A document identifier appears once in the global list of each of its tokens, and once more for each partition of its item.
+
+**Writing.** `persist_block!` writes the global lists and the partition lists of a block in the same `WriteBatch`. It reads the partitions of the block's documents from `partition_members`, splits each global list of the block by partition, and appends each part to the stored list of that partition and token. A failure during a block therefore leaves both kinds of list at the end of the previous block. `declare_partition!` builds the partition lists of a project that is already indexed by splitting each stored global list once. It reads no text.
+
+**Reading.** A search in a partition runs on an index built for that query from the live one. It keeps the vocabulary, the scorer, the document vectors and the query pipeline, and replaces the posting lists with a `PartitionPostings` of that partition. Building it reads nothing from disk. The merge then considers only the documents of the partition. The score of a candidate is computed from the vocabulary statistics, the scoring parameters and the candidate's document vector, which are the global ones. A document therefore gets the same score in the partition search and in the global search. Partition lists are read on demand and kept in one cache per project, with the eviction rule of the global lists.
+
+**Projects written before partitions existed.** A writable open creates the three column families. A read-only open cannot create them, so it opens only the column families that exist on disk.
 
 ### External Identifier Resolution
 

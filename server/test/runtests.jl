@@ -57,6 +57,7 @@ const FULL = "full" in ARGS || lowercase(get(ENV, "SSE_TEST_LEVEL", "light")) ==
             include("api/test_13_ctl_cli.jl")
             include("api/test_14_auth.jl")
             include("api/test_15_meta_schema.jl")
+            include("api/test_16_partitions.jl")
         end
 
         @testset "CLI Commands" begin
@@ -65,6 +66,7 @@ const FULL = "full" in ARGS || lowercase(get(ENV, "SSE_TEST_LEVEL", "light")) ==
             include("cli/test_03_describe_rebuild_closestpair.jl")
             include("cli/test_04_dump_load.jl")
             include("cli/test_05_interactive.jl")
+            include("cli/test_06_partitions.jl")
         end
     else
         @info "light run: the HTTP, job and CLI end-to-end suites were skipped; run with test_args=[\"full\"] before a release"

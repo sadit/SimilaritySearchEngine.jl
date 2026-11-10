@@ -2,8 +2,8 @@ module Errors
 
 export EngineError, InvalidRequest, NotFound, ConflictingState, StorageFailure
 export PayloadMismatch, WrongDimension, UnknownBackend, InvalidOption, UnsupportedOperation
-export ProfileNotInstalled, PendingBacklog, NothingStaged, NoIndex, NotTrained, EmptyProject
-export CorruptedStorage
+export ProfileNotInstalled, UnknownPartition, PendingBacklog, NothingStaged, NoIndex, NotTrained
+export EmptyProject, CorruptedStorage
 
 """
     EngineError <: Exception
@@ -98,6 +98,15 @@ struct ProfileNotInstalled <: NotFound
     msg::String
 end
 
+"""
+A partition name that the project's partition table does not hold. `name` is the name that
+was asked for; the message lists the names closest to it.
+"""
+struct UnknownPartition <: NotFound
+    name::String
+    msg::String
+end
+
 # --- ConflictingState ----------------------------------------------------------------
 
 """
@@ -148,7 +157,7 @@ Base.showerror(io::IO, e::EngineError) = print(io, e.msg)
 # interpolation, same multi-line `"""..."""` messages. They are not exported from the package:
 # a caller *catches* these types, it does not raise them, and the surface stays small.
 export payload_mismatch, wrong_dimension, unknown_backend, invalid_option, unsupported_operation
-export profile_not_installed, pending_backlog, nothing_staged, no_index, not_trained
+export profile_not_installed, unknown_partition, pending_backlog, nothing_staged, no_index, not_trained
 export empty_project, corrupted_storage
 
 payload_mismatch(msg...) = throw(PayloadMismatch(string(msg...)))
@@ -160,6 +169,7 @@ unsupported_operation(operation::Symbol, msg...) =
     throw(UnsupportedOperation(operation, string(msg...)))
 profile_not_installed(nickname, msg...) =
     throw(ProfileNotInstalled(String(nickname), string(msg...)))
+unknown_partition(name, msg...) = throw(UnknownPartition(String(name), string(msg...)))
 pending_backlog(operation::Symbol, staged::Integer, connected::Integer, msg...) =
     throw(PendingBacklog(operation, Int(staged), Int(connected), string(msg...)))
 nothing_staged(msg...) = throw(NothingStaged(string(msg...)))

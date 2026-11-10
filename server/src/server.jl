@@ -516,6 +516,11 @@ function handle_create_dataset(req::HTTP.Request, app::AppState)
     edit_correction = get(data, "edit_correction", false)
     edit_correction isa Bool ||
         return json_response(400, Dict("error" => "'edit_correction' must be true or false"))
+    # Stored by the engine inside the project (PLAN.md §5.9), so it is not written to
+    # `descriptor.json`: reopening the project restores it.
+    partition_by = get(data, "partition_by", nothing)
+    partition_by === nothing || partition_by isa AbstractString ||
+        return json_response(400, Dict("error" => "'partition_by' must be the name of a meta field"))
 
     engine_type, backend_type = try
         parse_index_kind(index_type)
@@ -538,7 +543,8 @@ function handle_create_dataset(req::HTTP.Request, app::AppState)
                 engine=engine_type, backend=backend_type, maxbatches=app.batch_cap,
                 distance=parse_distance(distance),
                 dimension=dimension === nothing ? nothing : Int(dimension),
-                textmodel=default_textmodel(engine_type), meta_schema=declared, edit_correction)
+                textmodel=default_textmodel(engine_type), meta_schema=declared, edit_correction,
+                partition_by)
         end
     catch e
         e isa SSE.EngineError || rethrow()
@@ -757,6 +763,7 @@ function dataset_descriptor(app::AppState, id::String)
         handle = app.handles[id]
         declared = SSE.meta_schema(handle)
         base["meta_schema"] = isempty(declared) ? nothing : serialize_meta_schema(declared)
+        base["partition_by"] = SSE.partition_field(handle)
         engine = handle.engine
         doc_count = engine.backend.index === nothing ? 0 : length(engine.backend.index)
         tombstones = length(engine.deleted_ids)
@@ -870,6 +877,28 @@ function handle_get_vocab(req::HTTP.Request, app::AppState, id::String)
         "error" => "dataset '$id' has no fitted vocabulary: it is not a text dataset, or it has never been indexed",
         "kind" => "NotTrained"))
     return json_response(200, merge(Dict{String,Any}("id" => id), report))
+end
+
+"""
+    handle_get_partitions(req, app, id) -> HTTP.Response
+
+`GET /api/v1/datasets/{id}/partitions` (PLAN.md §5.9): the partition field of a text dataset
+and its partitions, sorted by name, each with the number of items appended to it (deleted and
+not yet indexed items included). A dataset without a partition field answers 400, as the
+engine does.
+"""
+function handle_get_partitions(req::HTTP.Request, app::AppState, id::String)
+    valid_project_id(id) || return json_response(400, Dict("error" => "invalid dataset id"))
+    haskey(app.handles, id) || return json_response(404, Dict("error" => "dataset_not_found"))
+    handle = app.handles[id]
+    parts = try
+        SSE.partitions(handle)
+    catch e
+        e isa SSE.EngineError || rethrow()
+        return engine_error_response(e)
+    end
+    return json_response(200, Dict("status" => "ok", "id" => id, "partition_by" => SSE.partition_field(handle),
+                                   "partitions" => [Dict("name" => p.name, "items" => p.items) for p in parts]))
 end
 
 """
@@ -1175,7 +1204,7 @@ function _hydrate_raw(handle, raw)
 end
 
 """
-    _run_search(handle, index, req, query, k; filter_spec, bs_override, text, metrics, identity) -> Vector{SSE.SearchResult}
+    _run_search(handle, index, req, query, k; filter_spec, bs_override, text, partition, metrics, identity) -> Vector{SSE.SearchResult}
 
 Shared search call site for `handle_search` (dense, optionally post-filtered) and
 `handle_ftsearch` (single-index text): runs the search and logs exactly one `op_log`
@@ -1190,7 +1219,7 @@ calibrated target, rather than raw beam parameters). That one path still calls
 `IndexEngine.search_live`; it is the last search-side internal this module reaches for.
 """
 function _run_search(handle, index::String, req::HTTP.Request, query, k::Int;
-                     filter_spec=nothing, bs_override=nothing, text::Bool=false, metrics=nothing,
+                     filter_spec=nothing, bs_override=nothing, text::Bool=false, partition=nothing, metrics=nothing,
                      identity=(nothing, nothing))
     engine = handle.engine
     dataset = handle.project
@@ -1206,7 +1235,7 @@ function _run_search(handle, index::String, req::HTTP.Request, query, k::Int;
         stats.distance_evaluations = raw.distance_evaluations
         _hydrate_raw(handle, raw)
     elseif text
-        SSE.ftsearch(handle, query, k; stats)
+        SSE.ftsearch(handle, query, k; stats, partition)
     elseif filter_spec === nothing
         SSE.search(handle, query, k; stats)
     else
@@ -1360,10 +1389,13 @@ function handle_ftsearch(req::HTTP.Request, app::AppState, index::String)
     data = JSON3.read(codeunits(String(req.body)), Dict{String, Any})
     haskey(data, "text") || return json_response(400, Dict("error" => "ftsearch requires a 'text' field"))
     k = get(data, "k", 10)
+    partition = get(data, "partition", nothing)
+    partition === nothing || partition isa AbstractString ||
+        return json_response(400, Dict("error" => "'partition' must be a partition name (a string)"))
 
     hits = try
         _with_query_slot(app) do
-            _run_search(app.handles[index], index, req, data["text"], k; text=true,
+            _run_search(app.handles[index], index, req, data["text"], k; text=true, partition,
                         metrics=app.metrics, identity=_request_identity(app, req))
         end
     catch e
@@ -2018,6 +2050,7 @@ function run_server(host::String, port::Int, app::AppState; async::Bool=false)
     # administrative operation even though it is a GET.
     @get "/api/v1/datasets/{id}/log" (req, id) -> _guard(() -> handle_get_op_log(req, app, id), req, app, :admin, id)
     @get "/api/v1/datasets/{id}/vocab" (req, id) -> _guard(() -> handle_get_vocab(req, app, id), req, app, :read, id)
+    @get "/api/v1/datasets/{id}/partitions" (req, id) -> _guard(() -> handle_get_partitions(req, app, id), req, app, :read, id)
     @get "/api/v1/datasets/{id}" (req, id) -> _guard(() -> handle_get_dataset(req, app, id), req, app, :read, id)
     @delete "/api/v1/datasets/{id}" (req, id) -> _guard(() -> handle_delete_dataset(req, app, id), req, app, :admin, id)
 

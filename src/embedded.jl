@@ -213,6 +213,13 @@ mutable struct EmbeddedEngine
     dense_vectors::Base.RefValue{Union{Nothing,MMapMatrixDatabase}}
     read_only::Bool
     wrote::Base.RefValue{Bool}
+    # The project's partitions (PLAN.md §5.9), or `nothing` when it declares no partition
+    # field. The same reference is held by the text index's `Persistence.LazyPostings`, which
+    # writes the partition lists of every block it persists.
+    partitions::Base.RefValue{Union{Nothing,Persistence.PartitionStore}}
+    # `postings_cache_max` and `postings_cache_base`, kept for a partition store opened after
+    # the project (`declare_partition!`).
+    postings_cache::Tuple{Int,Int}
 end
 
 """
@@ -301,14 +308,16 @@ The project's persisted inverted index (posting lists and per-document vectors).
 _invfile_store(project::Project.ProjectManager) = Persistence.open_inverted_index_store(project.db)
 
 """
-    _invfile_adj_factory(store; maxlists, baselists) -> Function
+    _invfile_adj_factory(store, partitions; maxlists, baselists) -> Function
 
 The `vocsize -> AbstractAdjList` an inverted file is built around when its posting lists live
 in `store` instead of in memory. `IndexEngine` calls it when it constructs the index and never
 looks inside the result -- see `IndexEngine._text_index`.
 """
-_invfile_adj_factory(store::Persistence.InvertedIndexStore; maxlists::Int, baselists::Int) =
-    vocsize -> Persistence.LazyPostings(store, vocsize, maxlists, baselists)
+_invfile_adj_factory(store::Persistence.InvertedIndexStore,
+                     partitions::Base.RefValue{Union{Nothing,Persistence.PartitionStore}};
+                     maxlists::Int, baselists::Int) =
+    vocsize -> Persistence.LazyPostings(store, vocsize, maxlists, baselists, partitions)
 
 """
     _assemble_text_index(profile, kind, distance, store, adj_factory, edit_correction) -> AbstractInvertedFile
@@ -346,10 +355,17 @@ function _assemble_text_index(profile::TextProfile, kind::Type, distance,
                      IndexEngine._query_pipeline(template.query, template.model.voc, edit_correction))
 end
 
+# Every column family this package adds to a project, opened on every open (see
+# `Project.open_project`). The partition ones exist in every project, partitioned or not.
+const _PROJECT_CFS = [Persistence.ENGINE_CF, Persistence.ADJACENCY_CF, Persistence.INVFILE_DB_CF,
+                      Persistence.STAGED_TEXT_CF, Persistence.INVFILE_POSTINGS_CF, Persistence.INVFILE_DOCVECS_CF,
+                      Persistence.PARTITION_TABLE_CF, Persistence.PARTITION_MEMBERS_CF,
+                      Persistence.PARTITION_POSTINGS_CF]
+
 """
     create_project(workdir, dataset; engine=DenseEngine, backend=nothing, distance=nothing,
                    minrecall=0.9, dimension=nothing, textmodel=nothing, schema_version=1,
-                   edit_correction=false) -> EmbeddedEngine
+                   edit_correction=false, partition_by=nothing) -> EmbeddedEngine
 
 Creates a brand-new project directly on disk at `<workdir>/<dataset>`, with no HTTP server or
 CLI subprocess involved -- the same on-disk layout `similarity-search build` already produces,
@@ -426,6 +442,18 @@ with a token absent from the vocabulary takes milliseconds instead of microsecon
 The value is not persisted. [`open_project`](@ref) takes the same keyword, and each open
 decides it again. It is an error on a dense or sparse project.
 
+`partition_by="repo"` partitions a text project by the `meta` field `repo` (PLAN.md §5.9).
+The engine then keeps, next to the global posting lists, one set of posting lists per value of
+that field, and `ftsearch(h, q, k; partition="unicach")` searches only the items whose `repo`
+is `"unicach"`. Such a search returns the ids, order and scores of the global search restricted
+to those items, because the vocabulary, the scorer and the document vectors are shared. The
+value of the field is a non-empty string or a list of them; a list puts the item in several
+partitions. An item without the field belongs to no partition. If the field is declared in
+`meta_schema`, it must be declared `:string`, which also restricts it to one value per item. A
+project has at most one partition field, and it cannot be changed. See
+[`declare_partition!`](@ref) to partition a project that already exists, and
+[`partitions`](@ref) for the names and sizes. It is an error on a dense or sparse project.
+
 `schema_version` is stamped onto every `Schema.MetadataRecord` [`append_items!`](@ref)
 writes for this project's lifetime (not persisted/restored itself -- like `minrecall`
 before it was carried on the engine, a caller reopening this same project later must pass
@@ -453,7 +481,7 @@ function create_project(workdir::String, dataset::String;
                         index_type=nothing, schema_version::Int=1, meta_schema=nothing,
                         maxbatches::Union{Nothing,Integer}=nothing,
                         postings_cache_max::Int=4096, postings_cache_base::Int=2048,
-                        edit_correction::Bool=false)
+                        edit_correction::Bool=false, partition_by::Union{Nothing,AbstractString}=nothing)
     index_type === nothing || invalid_option(:index_type, """
         `index_type` is gone: a project now names the kind of data it holds and, separately, the
         index that holds it.
@@ -480,6 +508,13 @@ function create_project(workdir::String, dataset::String;
     kind === :text || !edit_correction ||
         invalid_option(:edit_correction, "`edit_correction` only applies to a text project; $(nameof(engine)) " *
               "indexes $kind vectors, and its queries have no tokens to correct")
+    schema = _as_meta_schema(meta_schema)
+    if partition_by !== nothing
+        kind === :text ||
+            invalid_option(:partition_by, "`partition_by` only applies to a text project; $(nameof(engine)) " *
+                  "indexes $kind vectors, and partitions are posting lists of a text index")
+        _check_partition_field(schema, partition_by)
+    end
     if kind === :sparse
         dimension === nothing &&
             invalid_option(:dimension, "a sparse project needs `dimension`: an InvertedFile is a fixed array of " *
@@ -491,12 +526,15 @@ function create_project(workdir::String, dataset::String;
 
     dir = joinpath(workdir, dataset)
     mkpath(dir)
-    project = Project.open_project(dir, dataset; extra_cf_names=[Persistence.ENGINE_CF, Persistence.ADJACENCY_CF, Persistence.INVFILE_DB_CF,
-                                                 Persistence.STAGED_TEXT_CF, Persistence.INVFILE_POSTINGS_CF,
-                                                 Persistence.INVFILE_DOCVECS_CF])
+    project = Project.open_project(dir, dataset; extra_cf_names=_PROJECT_CFS)
     store = Persistence.open_engine_store(project.db)
     pending_flush = Ref(false)
     dense_vectors = Ref{Union{Nothing,MMapMatrixDatabase}}(nothing)
+    partitions_ref = Ref{Union{Nothing,Persistence.PartitionStore}}(nothing)
+    if partition_by !== nothing
+        partitions_ref[] = Persistence.open_partition_store(project.db, String(partition_by),
+                                                        postings_cache_max, postings_cache_base)
+    end
 
     # Which storage a project persists incrementally into follows from what its backend
     # produces per insertion: a graph reports link blocks, an inverted file reports encoded
@@ -514,7 +552,8 @@ function create_project(workdir::String, dataset::String;
         (_, __, ___) -> (pending_flush[] = true)
     end
     adj_factory = kind === :text ?
-        _invfile_adj_factory(_invfile_store(project); maxlists=postings_cache_max, baselists=postings_cache_base) :
+        _invfile_adj_factory(_invfile_store(project), partitions_ref; maxlists=postings_cache_max,
+                             baselists=postings_cache_base) :
         nothing
 
     # The sentinel is resolved here, once, and everything below this line receives a real
@@ -524,10 +563,11 @@ function create_project(workdir::String, dataset::String;
         IndexEngine.create_sparse_engine(; distance=dist, dimension, on_change, log_io=nothing, maxbatches) :
         IndexEngine.create_engine(back; distance=dist, minrecall, textmodel, on_change, log_io=nothing, adj_factory, maxbatches, edit_correction)
     Persistence.save_fields!(store, IndexEngine.snapshot_state(eng))
-    schema = _as_meta_schema(meta_schema)
     isempty(schema) || Persistence.save_field!(store, :meta_schema, schema)
+    partition_by === nothing || Persistence.save_field!(store, :partition_by, String(partition_by))
     return EmbeddedEngine(workdir, dataset, dir, project, eng, store, pending_flush, schema_version,
-                          schema, OOVCounters(), dense_vectors, false, Ref(true))
+                          schema, OOVCounters(), dense_vectors, false, Ref(true), partitions_ref,
+                          (postings_cache_max, postings_cache_base))
 end
 
 """
@@ -557,12 +597,16 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
                       postings_cache_max::Int=4096, postings_cache_base::Int=2048,
                       edit_correction::Bool=false)
     dir = joinpath(workdir, dataset)
-    project = Project.open_project(dir, dataset; read_only, extra_cf_names=[Persistence.ENGINE_CF, Persistence.ADJACENCY_CF, Persistence.INVFILE_DB_CF,
-                                                 Persistence.STAGED_TEXT_CF, Persistence.INVFILE_POSTINGS_CF,
-                                                 Persistence.INVFILE_DOCVECS_CF])
+    project = Project.open_project(dir, dataset; read_only, extra_cf_names=_PROJECT_CFS)
     store = Persistence.open_engine_store(project.db)
     pending_flush = Ref(false)
     dense_vectors = Ref{Union{Nothing,MMapMatrixDatabase}}(nothing)
+    partitions_ref = Ref{Union{Nothing,Persistence.PartitionStore}}(nothing)
+    partition_by = Persistence.load_field(store, :partition_by, nothing)
+    if partition_by !== nothing
+        partitions_ref[] = Persistence.open_partition_store(project.db, partition_by,
+                                                        postings_cache_max, postings_cache_base)
+    end
 
     # `kind` and `backend` are symbols, not Julia types (see `IndexEngine.backend_tag`): the
     # on-disk format no longer names the types in `index_engine.jl`, so renaming one is a rename
@@ -627,7 +671,7 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
         profile = Persistence.load_field(store, :profile, nothing)
         invfile_store = _invfile_store(project)
         distance = Persistence.load_field(store, :distance, nothing)
-        adj_factory = _invfile_adj_factory(invfile_store; maxlists=postings_cache_max,
+        adj_factory = _invfile_adj_factory(invfile_store, partitions_ref; maxlists=postings_cache_max,
                                            baselists=postings_cache_base)
         kindtype = backend === :bm25 ? BM25InvertedFile : TextInvertedFile
         # No index on disk means no index: a text project is assembled from what was persisted or
@@ -658,7 +702,8 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
     return EmbeddedEngine(workdir, dataset, dir, project, engine, store, pending_flush, schema_version,
                           Persistence.load_field(store, :meta_schema, Schema.MetaSchema()),
                           Persistence.load_field(store, :oov_counters, OOVCounters()),
-                          dense_vectors, read_only, Ref(false))
+                          dense_vectors, read_only, Ref(false), partitions_ref,
+                          (postings_cache_max, postings_cache_base))
 end
 
 """
@@ -851,6 +896,11 @@ function append_items!(handle::EmbeddedEngine, items::AbstractVector{<:Schema.Ab
     staged_vectors = Vector{Float32}[]
     staged_texts = String[]
     text_sp = is_text ? _current_size(engine) + 1 : 0
+    # Checked for the whole batch before anything is written, so that a bad value in the last
+    # item does not leave the first ones stored without their partitions.
+    parts = handle.partitions[]
+    part_values = parts === nothing ? nothing :
+        [_partition_values(parts.field, item.meta) for item in items]
 
     for item in items
         _check_item(engine, item)
@@ -883,6 +933,10 @@ function append_items!(handle::EmbeddedEngine, items::AbstractVector{<:Schema.Ab
     end
 
     if is_text && !isempty(staged_texts)
+        # Before the staged text, which is what makes the items exist on the next open: an
+        # interrupted call then leaves partition entries for ids the next append overwrites,
+        # never items without their partitions.
+        parts === nothing || Persistence.assign_partitions!(parts, text_sp, part_values)
         Persistence.append_staged_texts!(Persistence.open_staged_text_store(project.db), text_sp, staged_texts)
     end
 
@@ -1180,7 +1234,7 @@ function search(handle::EmbeddedEngine, queries::AbstractVector{<:AbstractVector
 end
 
 """
-    ftsearch(handle::EmbeddedEngine, text, k::Int=10; policy=QueryPolicy()) -> Vector{SearchResult}
+    ftsearch(handle::EmbeddedEngine, text, k::Int=10; policy=QueryPolicy(), partition=nothing) -> Vector{SearchResult}
 
 Text search against a bm25/weighted-inverted-file project (mirrors `Server.handle_ftsearch`).
 Same soft-delete marker behavior as [`search`](@ref); `minrecall` is accepted only for
@@ -1198,13 +1252,203 @@ for one built on a profile that preserves them. Use [`ftexplain`](@ref) to see w
 was actually searched as.
 
 `stats` behaves exactly as in [`search`](@ref).
+
+`partition` searches one partition of a project created with `partition_by` (see
+[`create_project`](@ref) and [`declare_partition!`](@ref)): only the items of that partition are
+evaluated, and each gets the score the global search gives it. A name the project's partition
+table does not hold raises [`UnknownPartition`](@ref), whose message lists the closest names. A
+partition that exists but has no indexed item yet returns no results. `partition` on a project
+without a partition field raises `InvalidOption`.
 """
 function ftsearch(handle::EmbeddedEngine, text::AbstractString, k::Int=10; minrecall=nothing, policy::QueryPolicy=QueryPolicy(),
-                  stats::Union{Nothing,SearchStats}=nothing)
-    res_knn = IndexEngine.search_live(handle.engine, text, k; bs_override=nothing, minrecall, policy)
+                  stats::Union{Nothing,SearchStats}=nothing, partition::Union{Nothing,AbstractString}=nothing)
+    res_knn = partition === nothing ?
+        IndexEngine.search_live(handle.engine, text, k; bs_override=nothing, minrecall, policy) :
+        IndexEngine.search_partition_live(handle.engine, _partition_adj(handle, partition), text, k; policy)
     _count_oov!(handle, text)
     stats === nothing || (stats.distance_evaluations = res_knn.distance_evaluations)
     return _hydrate_results(handle.project, res_knn)
+end
+
+"""
+    partition_field(handle::EmbeddedEngine) -> Union{Nothing,String}
+
+The `meta` field this project is partitioned by, or `nothing` when it declares none (PLAN.md
+§5.9). See [`create_project`](@ref)'s `partition_by` and [`declare_partition!`](@ref).
+"""
+function partition_field(handle::EmbeddedEngine)
+    parts = handle.partitions[]
+    parts === nothing ? nothing : parts.field
+end
+
+"""
+    partitions(handle::EmbeddedEngine) -> Vector{@NamedTuple{name::String, items::Int}}
+
+The partitions of this project, sorted by name, each with the number of items appended to it.
+That number counts items that are not indexed yet and items deleted since, because both are
+still members of the partition. An item in several partitions is counted in each. Raises
+`InvalidOption` on a project without a partition field.
+"""
+function partitions(handle::EmbeddedEngine)
+    parts = _partition_store(handle, :partitions)
+    names = Persistence.partition_names(parts)
+    counts = Persistence.partition_counts(parts)
+    sort!([(name=n, items=c) for (n, c) in zip(names, counts)]; by=p -> p.name)
+end
+
+"""
+    declare_partition!(handle::EmbeddedEngine, field::AbstractString) -> Vector{@NamedTuple{name::String, items::Int}}
+
+Partitions an existing text project by the `meta` field `field`, as `create_project`'s
+`partition_by` does for a new one (PLAN.md §5.9), and returns [`partitions`](@ref).
+
+Reads the `meta` of every item once, and builds the partition lists by splitting the global
+lists already on disk. It does not read or tokenize any text. Items appended but not indexed
+yet get their partition lists from the next [`index!`](@ref index!(::EmbeddedEngine)) call. It
+holds the engine's write lock while it runs, so searches wait for it.
+
+Every value of the field is checked as [`append_items!`](@ref) checks it, and the first bad one
+raises `PayloadMismatch` before the declaration is recorded. The declaration is recorded last,
+so an interrupted call leaves the project unpartitioned, and calling it again starts over.
+
+Raises `InvalidOption` on a project that is not a text project or that already has a partition
+field, and `UnsupportedOperation` on a read-only handle.
+"""
+function declare_partition!(handle::EmbeddedEngine, field::AbstractString)
+    handle.read_only && unsupported_operation(:declare_partition!, "this project is open read-only")
+    engine = handle.engine
+    IndexEngine.payload_kind(engine) === :text ||
+        invalid_option(:partition_by, "only a text project can be partitioned; this one indexes " *
+              "$(IndexEngine.payload_kind(engine)) vectors")
+    current = partition_field(handle)
+    current === nothing ||
+        invalid_option(:partition_by, "this project is already partitioned by $(repr(current)); a project has " *
+              "one partition field, and it cannot be changed")
+    _check_partition_field(handle.meta_schema, field)
+    handle.wrote[] = true
+    parts = Persistence.open_partition_store(handle.project.db, String(field), handle.postings_cache...)
+    IndexEngine.write_lock(engine.lock) do
+        n = length(engine.staged)
+        values = Vector{Vector{String}}(undef, n)
+        for _id in 1:n
+            meta = get_meta(handle.project, _id; lazy=false)
+            values[_id] = meta === nothing ? String[] : _partition_values(String(field), meta)
+        end
+        Persistence.clear_partitions!(parts)
+        members = Persistence.assign_partitions!(parts, 1, values)
+        if engine.backend.index !== nothing && length(engine.backend.index) > 0
+            Persistence.split_partition_postings!(parts, _invfile_store(handle.project), members,
+                                                  DECLARE_PARTITION_FLUSH_IDS)
+        end
+        Persistence.save_field!(handle.store, :partition_by, String(field))
+        handle.partitions[] = parts
+    end
+    return partitions(handle)
+end
+
+"""
+    DECLARE_PARTITION_FLUSH_IDS
+
+How many posting ids [`declare_partition!`](@ref) accumulates in one `WriteBatch` before writing
+it. Bounds the memory of the batch; the value only changes how many writes the split takes.
+"""
+const DECLARE_PARTITION_FLUSH_IDS = 4_000_000
+
+"""
+    _partition_store(handle, operation::Symbol) -> Persistence.PartitionStore
+
+The project's partitions, or `InvalidOption` naming `operation` when it declares no partition
+field.
+"""
+function _partition_store(handle::EmbeddedEngine, operation::Symbol)
+    parts = handle.partitions[]
+    parts === nothing &&
+        invalid_option(operation === :partitions ? :partition_by : :partition,
+              "this project has no partition field, so `$operation` does not apply. Create it with " *
+              "`partition_by`, or call declare_partition!(handle, field).")
+    parts
+end
+
+"""
+    _partition_adj(handle, name) -> Function
+
+The `vocsize -> PartitionPostings` that [`IndexEngine.search_partition_live`](@ref) builds the
+partition's index around. Raises `UnknownPartition` for a name the table does not hold.
+"""
+function _partition_adj(handle::EmbeddedEngine, name::AbstractString)
+    parts = _partition_store(handle, :partition)
+    number = Persistence.partition_number(parts, name)
+    if number === nothing
+        names = Persistence.partition_names(parts)
+        nearest = _closest_names(names, String(name), 5)
+        unknown_partition(name, "this project has no partition $(repr(String(name))) in its field " *
+              "$(repr(parts.field)) ($(length(names)) partitions)" *
+              (isempty(nearest) ? "" : "; the closest names are $(join(repr.(nearest), ", "))"))
+    end
+    return vocsize -> Persistence.PartitionPostings(parts, number, vocsize)
+end
+
+"""
+    _check_partition_field(schema::Schema.MetaSchema, field)
+
+Refuses an empty field name, and a field the schema declares with a type other than
+`:string`, with `InvalidOption`.
+"""
+function _check_partition_field(schema::Schema.MetaSchema, field::AbstractString)
+    isempty(field) && invalid_option(:partition_by, "the partition field needs a name")
+    t = Schema.declared_type(schema, String(field))
+    t === nothing || t === :string ||
+        invalid_option(:partition_by, "the meta field $(repr(String(field))) is declared $(repr(t)); a partition " *
+              "field holds partition names, so it must be undeclared or declared :string")
+    return nothing
+end
+
+"""
+    _partition_values(field::String, meta) -> Vector{String}
+
+The partition names an item's `meta` gives it: none when `field` is absent or `nothing`, one for
+a string, and each distinct one for a list of strings. Anything else, and an empty string,
+raises `PayloadMismatch`: an item whose partition cannot be read is refused, not stored in no
+partition.
+"""
+function _partition_values(field::String, meta)
+    value = get(meta, field, nothing)
+    value === nothing && return String[]
+    value isa AbstractString && return [_partition_name(field, value)]
+    value isa AbstractVector && return unique!(String[_partition_name(field, v) for v in value])
+    _partition_name(field, value)
+end
+
+function _partition_name(field::String, value)
+    value isa AbstractString && !isempty(value) && return String(value)
+    payload_mismatch("meta field $(repr(field)) is this project's partition field: its value is a " *
+                     "non-empty string or a list of them; got $(repr(value))::$(typeof(value))")
+end
+
+"""
+    _closest_names(names, name::String, n::Int) -> Vector{String}
+
+Up to `n` of `names`, the closest to `name` by edit distance, for the message of an unknown
+partition. Ties are broken by name.
+"""
+function _closest_names(names::AbstractVector{String}, name::String, n::Int)
+    scored = sort!([(_edit_distance(lowercase(c), lowercase(name)), c) for c in names])
+    String[c for (_, c) in first(scored, n)]
+end
+
+"Levenshtein distance between two strings, counted in characters."
+function _edit_distance(a::AbstractString, b::AbstractString)
+    x, y = collect(a), collect(b)
+    prev = collect(0:length(y))
+    for i in eachindex(x)
+        cur = similar(prev)
+        cur[1] = i
+        for j in eachindex(y)
+            cur[j+1] = min(prev[j+1] + 1, cur[j] + 1, prev[j] + (x[i] == y[j] ? 0 : 1))
+        end
+        prev = cur
+    end
+    prev[end]
 end
 
 """

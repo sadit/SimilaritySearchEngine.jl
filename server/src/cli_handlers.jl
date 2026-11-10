@@ -17,7 +17,8 @@ function execute_build(cmd_args::Dict)
     handle = SSE.create_project(workdir, project_id;
         engine=engine_type, backend=backend_type,
         distance=Server.parse_distance(distance),
-        textmodel=Server.default_textmodel(engine_type))
+        textmodel=Server.default_textmodel(engine_type),
+        partition_by=get(cmd_args, "partition-by", nothing))
 
     kind = SSE.payload_kind(handle.engine)
     items = SSE.AbstractItem[]
@@ -282,15 +283,19 @@ function execute_searchbatch(cmd_args::Dict)
     handle isa Cint && return handle
     handle === nothing && return 1
     kind = SSE.payload_kind(handle.engine)
+    partition = get(cmd_args, "partition", nothing)
 
-    open(out_file, "w") do out_io
+    # The exit code of the first query the engine refused, or 0. A `return` inside the `do`
+    # block below would leave only the block, not this function: the command then exited 0
+    # after an engine error, which is how an unknown partition went unreported.
+    status = open(out_file, "w") do out_io
         for line in eachline(queries_file)
             isempty(strip(line)) && continue
             item = JSON3.read(codeunits(line), Dict{String, Any})
 
             hits = if kind === :text
                 haskey(item, "text") || continue
-                @cli_engine_call SSE.ftsearch(handle, item["text"], k)
+                @cli_engine_call SSE.ftsearch(handle, item["text"], k; partition)
             else
                 haskey(item, "vector") || continue
                 @cli_engine_call SSE.search(handle, convert(Vector{Float32}, item["vector"]), k)
@@ -300,8 +305,10 @@ function execute_searchbatch(cmd_args::Dict)
             out_obj = Dict("ids" => Int32[h._id for h in hits], "dists" => Float32[h.distance for h in hits])
             println(out_io, JSON3.write(out_obj))
         end
+        return Cint(0)
     end
     SSE.close_project!(handle)
+    status == 0 || return status
 
     println("Searchbatch completed. Output saved to $out_file")
     return 0
@@ -503,6 +510,9 @@ function execute_rebuild(cmd_args::Dict)
     kind = SSE.payload_kind(engine)
     field = kind === :text ? "text" : "vector"
     index_kind = wire_kind(engine)
+    # The fresh project is partitioned like the old one: the field lives in the project, and the
+    # partition lists are rebuilt from the items' `meta` as they are appended again.
+    partition_by = SSE.partition_field(handle)
     distance = kind === :text ? nothing : SimilaritySearch.distance(engine.backend.index)
 
     all_ids, live = _live_items(handle.project, engine)
@@ -532,7 +542,7 @@ function execute_rebuild(cmd_args::Dict)
     engine_type, backend_type = Server.parse_index_kind(index_kind)
     fresh = SSE.create_project(root, name;
         engine=engine_type, backend=backend_type, distance=distance,
-        textmodel=Server.default_textmodel(engine_type))
+        textmodel=Server.default_textmodel(engine_type), partition_by)
     reindexed = isempty(items) ? 0 : SSE.append_items!(fresh, items)
     reindexed > 0 && SSE.index!(fresh)
     SSE.close_project!(fresh)
