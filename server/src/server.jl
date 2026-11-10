@@ -1166,7 +1166,8 @@ function _run_search(handle, index::String, req::HTTP.Request, query, k::Int;
         stats.distance_evaluations = raw.distance_evaluations
         _hydrate_raw(handle, raw)
     elseif text
-        SSE.ftsearch(handle, query, k; stats, partition)
+        filter = filter_spec === nothing ? nothing : _filter_predicate(filter_spec, SSE.meta_schema(handle))
+        SSE.ftsearch(handle, query, k; stats, partition, filter, candidates=FILTER_CANDIDATES(k))
     elseif filter_spec === nothing
         SSE.search(handle, query, k; stats)
     else
@@ -1319,14 +1320,16 @@ function handle_ftsearch(req::HTTP.Request, app::AppState, index::String)
 
     data = JSON3.read(codeunits(String(req.body)), Dict{String, Any})
     haskey(data, "text") || return json_response(400, Dict("error" => "ftsearch requires a 'text' field"))
+    data["text"] isa AbstractString || return json_response(400, Dict("error" => "'text' must be a string"))
     k = get(data, "k", 10)
+    filter_spec = get(data, "filter", nothing)
     partition = get(data, "partition", nothing)
     partition === nothing || partition isa AbstractString ||
         return json_response(400, Dict("error" => "'partition' must be a partition name (a string)"))
 
     hits = try
         _with_query_slot(app) do
-            _run_search(app.handles[index], index, req, data["text"], k; text=true, partition,
+            _run_search(app.handles[index], index, req, data["text"], k; text=true, partition, filter_spec,
                         metrics=app.metrics, identity=_request_identity(app, req))
         end
     catch e

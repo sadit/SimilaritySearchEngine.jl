@@ -83,8 +83,8 @@ class SimilaritySearchClient:
     def search(self, index, vector, k=10, filter=None, beamsearch_overrides=None, page_size=None):
         return self._call(*p.search(index, vector, k, filter, beamsearch_overrides, page_size))
 
-    def ftsearch(self, index, text, k=10, partition=None):
-        return self._call(*p.ftsearch(index, text, k, partition))
+    def ftsearch(self, index, text, k=10, partition=None, filter=None):
+        return self._call(*p.ftsearch(index, text, k, partition, filter))
 
     def get_partitions(self, id):
         return self._call(*p.get_partitions(id))

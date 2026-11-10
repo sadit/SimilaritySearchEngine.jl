@@ -90,8 +90,9 @@ def search(index, vector, k=10, filter=None, beamsearch_overrides=None, page_siz
     return "POST", f"/api/v1/datasets/{index}/search", body, None
 
 
-def ftsearch(index, text, k=10, partition=None):
-    return "POST", f"/api/v1/datasets/{index}/ftsearch", _compact({"text": text, "k": k, "partition": partition}), None
+def ftsearch(index, text, k=10, partition=None, filter=None):
+    body = _compact({"text": text, "k": k, "partition": partition, "filter": filter})
+    return "POST", f"/api/v1/datasets/{index}/ftsearch", body, None
 
 
 def get_partitions(id):

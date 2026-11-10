@@ -246,7 +246,7 @@ precise = stats.distance_evaluations     # larger: a wider beam examines more of
 
 Over 20,000 random vectors of 32 dimensions, a query for 5 nearest neighbors performs 922 distance computations on average with `minrecall=0.8` and 1,623 with `minrecall=0.95`. These are means over 100 queries and three builds of the graph, measured on 2026-11-07 with 64 threads and SimilaritySearch 1.6.11. The mean of one build ranged from 882 to 960 for `minrecall=0.8`, and from 1,503 to 1,740 for `minrecall=0.95`. On that collection, the default beam search performs 1,265 before calibration. An exhaustive scan of the same collection performs 20,000. For the same calibrations, `calibrate!` reported a mean recall of 0.82 for the target 0.8 and 0.96 for the target 0.95, measured on 64 queries that took no part in the tuning.
 
-Each call overwrites the field; the values are not accumulated, so the field must be read before the next query is issued. [`ftsearch`](https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html#SimilaritySearchEngine.ftsearch) and the filtered form of [`search`](https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html#SimilaritySearchEngine.search) also accept `stats`. For a filtered search, the reported value is the cost of the candidate search that was executed, not of the `k` results that satisfied the predicate. An exhaustive backend reports the size of the collection.
+Each call overwrites the fields; the values are not accumulated, so the fields must be read before the next query is issued. [`ftsearch`](https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html#SimilaritySearchEngine.ftsearch) and the filtered form of [`search`](https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html#SimilaritySearchEngine.search) also accept `stats`. For a filtered search, the reported value is the cost of the candidate search that was executed, not of the `k` results that satisfied the predicate. An exhaustive backend reports the size of the collection. `stats.candidates` is the number of results the index returned before the filter. For a search without a filter, it is the number of results.
 
 This value cannot be obtained in another way. A query uses a context taken from a pool of the engine, and the context returns to the pool when the call ends, so counters read afterwards include the work of any query executed since. The server obtains the `distance_evaluations` field of its operation log from the same mechanism.
 
@@ -359,6 +359,36 @@ Posting lists are read from storage when a query requires them, and are kept in 
 A project written by an earlier version stored the indexed objects instead of the index. Such a project opens with no index, and a search against it reports this condition. `index!(h)` builds the index from the staged text, which was always stored separately. This is the complete migration procedure.
 
 An insertion after the first `index!` writes only the data that the new block modifies, so a project can grow without being rebuilt. Under `FitFromCorpus`, however, the vocabulary is determined by the first `index!`. A word that is absent from the text staged at that moment remains outside the vocabulary, independently of how many blocks are added later. Stage the corpus to be fitted before the first call to `index!`, or use a [`BaseProfile`](https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html#SimilaritySearchEngine.IndexEngine.BaseProfile).
+
+### Filtering Text Results
+
+`ftsearch` accepts `filter` and `candidates`, with the meaning they have in `search`. The search examines the best `candidates` results in order of score, and returns the first `k` that satisfy the predicate. `stats.candidates` reports how many results the index returned before the filter:
+
+```julia
+hb2 = open_project(workdir, "frankenstein_bm25")
+with_keywords(record, meta) = !isempty(record.keywords)
+stats = SearchStats()
+
+ftsearch(hb2, "monster creature fear", 5; filter=with_keywords, candidates=10, stats)
+# 3 results; stats.candidates == 10
+
+ftsearch(hb2, "monster creature fear", 5; filter=with_keywords, candidates=1000, stats)
+# 5 results; stats.candidates == 21
+```
+
+In the first call, `stats.candidates` is equal to the budget of 10. The budget stopped the search, so a larger budget can return more results. In the second call, it is 21, smaller than the budget: the query matches 21 of the 200 paragraphs, and a larger budget returns the same results. A caller that needs a full page can repeat the search with a larger budget while the page is short and `stats.candidates` equals the budget. A filter also applies inside a partition (see "Searching One Partition").
+
+### Searching a List of Tokens
+
+A query can be a list of tokens of the vocabulary instead of a string. The tokens are searched as they are, without tokenizing them again:
+
+```julia
+off = QueryPolicy(correction=:off, expansion=false)
+ftsearch(hb2, ["monster", "creature"], 3; policy=off)
+close_project!(hb2)
+```
+
+This is for a caller that builds a query from the tokens of a long text, for example from the tokens with the highest idf. `TextSearch.query_tokens(voc, text, pipeline)` gives the tokens of a text, and `text_profile(hb2).model.voc` is the vocabulary. Tokenizing a token again can change it: a tokenizer that replaces digits turns `A2` into `A0`, so the joined tokens would search for a different word. `policy` still applies correction and expansion to the tokens, and `QueryPolicy(correction=:off, expansion=false)` searches exactly the given tokens.
 
 ---
 

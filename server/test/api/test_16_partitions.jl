@@ -11,7 +11,7 @@ using JSON3
         repo_of(i) = i % 5 == 0 ? ["norte", "sur"] : i % 2 == 0 ? "norte" : i % 31 == 1 ? "isla" : "sur"
         docs = map(enumerate(readlines(data_path)[1:150])) do (i, line)
             d = JSON3.read(line, Dict{String,Any})
-            Dict{String,Any}("doc_id" => d["doc_id"], "text" => d["text"], "repo" => repo_of(i))
+            Dict{String,Any}("doc_id" => d["doc_id"], "text" => d["text"], "repo" => repo_of(i), "n" => i)
         end
         in_part(i, p) = (v = repo_of(i); v isa AbstractString ? v == p : p in v)
 
@@ -39,6 +39,21 @@ using JSON3
         end
 
         failed(f) = try f(); nothing catch e; e.response end
+
+        # A filter, alone and inside a partition, keeps the order of the global results. The
+        # server reads a bounded number of candidates, so the page can be shorter than `k`, and
+        # what it returns is a prefix of the filtered global results.
+        for p in (nothing, "sur")
+            req = Dict{String,Any}("text" => query, "k" => 4, "filter" => Dict("n" => Dict("gte" => 75)))
+            p === nothing || (req["partition"] = p)
+            got = [r.doc_id for r in JSON3.read(String(HTTP.post("$base_url/datasets/part_ds/ftsearch", [],
+                                                                  JSON3.write(req)).body)).results]
+            want = [r.doc_id for r in glob if doc_index[r.doc_id] >= 75 && (p === nothing || in_part(doc_index[r.doc_id], p))]
+            @test !isempty(got)
+            @test got == want[1:length(got)]
+        end
+        @test failed(() -> HTTP.post("$base_url/datasets/part_ds/ftsearch", [],
+                                     JSON3.write(Dict("text" => ["the", "monster"])))).status == 400
 
         # An unknown name is a 404 that names the closest ones, not an empty result.
         resp = failed(() -> HTTP.post("$base_url/datasets/part_ds/ftsearch", [],

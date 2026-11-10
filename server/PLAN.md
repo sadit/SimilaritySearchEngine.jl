@@ -237,6 +237,22 @@ of it exist.
     - `test_06_join_group_text_search.jl` was replaced by `test_06_field_datasets.jl`, which
       tests one dataset per field, the `400` for each removed field, the two removed routes,
       and an old descriptor.
+12. **A filter, a candidate budget and token queries in `ftsearch`** — done on 2026-11-10, for
+    the migration of ReposMx (its `docs/plan-motor.md`, phase 1).
+    - `ftsearch(h, q, k; filter, candidates)` has the semantics of `search`: it examines the best
+      `candidates` results in order of score and returns the first `k` that satisfy the
+      predicate. It works with `partition` too.
+    - `SearchStats.candidates` is the number of results the index returned before the filter.
+      When it equals the budget, a larger budget can return more results. ReposMx grows the
+      budget 4 times until the page is full or this number is smaller than the budget.
+    - A query can be a list of vocabulary tokens. They are searched without tokenizing them
+      again, because tokenizing a token again can change it (`A2` becomes `A0` under a
+      tokenizer that replaces digits). ReposMx searches the 16 tokens of highest idf of a long
+      text this way. Joining them into a string changed the bag of tokens of 2 texts out of 1,721.
+    - The decision of the ReposMx plan between widening the window and one pass bounded by
+      `candidates` is settled by the second, with the widening done by the caller. The server
+      route accepts `filter` with the budget of a filtered `search`. It does not accept a list
+      of tokens: `text` must be a string.
 
 The stemmer registry of §5.3 and §9's phase 5 is not on this list: it was discarded. Stemming
 was the way this specification proposed to make a query match a word it does not equal. That

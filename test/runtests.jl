@@ -4,7 +4,7 @@ using SimilaritySearchEngine: Schema, IndexEngine
 using SimilaritySearch: SearchGraph, Dist, MatrixDatabase, SearchGraphContext, InformativeLog
 using TextSearch: BM25InvertedFile, InvertedFile, TextInvertedFile, NormalizationConfig,
                   AppliedArtifacts, vocsize, gettrainsize, gettextconfig,
-                  lineage_summary, token2id
+                  lineage_summary, token2id, query_tokens, QueryPipeline
 using JSON
 using RocksDB
 using Random: Xoshiro
@@ -1690,6 +1690,62 @@ const ACCENT_ITEMS = vcat(
             @test isempty(declare_partition!(h3, "unused_field"))
             @test partition_field(h3) == "unused_field"
             close_project!(h3)
+        end
+    end
+
+    @testset "ftsearch with a filter, a candidate budget and a list of tokens" begin
+        for backend in (BM25InvertedFile, TextInvertedFile)
+            mktempworkdir() do workdir
+                rows = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:160]]
+                items = partitioned_items(rows)
+                for (i, it) in enumerate(items)
+                    it.meta["n"] = i
+                end
+                h = create_project(workdir, "filt_ds"; engine=FullTextEngine, backend,
+                                   textmodel=FitFromCorpus(), partition_by="repo")
+                append_items!(h, items)
+                index!(h)
+                third(rec, meta) = meta["n"] % 3 == 0
+                for q in (rows[7]["text"], rows[90]["text"], "the monster and the creature")
+                    # With a budget that covers every item, the filtered search is the global
+                    # search restricted to the items that satisfy the predicate.
+                    all_hits = ftsearch(h, q, 160)
+                    want = first([r for r in all_hits if r._id % 3 == 0], 5)
+                    stats = SearchStats()
+                    got = ftsearch(h, q, 5; filter=third, candidates=160, stats)
+                    @test [r._id for r in got] == [r._id for r in want]
+                    @test [r.distance for r in got] ≈ [r.distance for r in want]
+                    @test stats.candidates == length(all_hits)
+
+                    # A budget smaller than the matches stops the search early, and the stats
+                    # say so: the index returned exactly the candidates that were asked for.
+                    if length(all_hits) > 8
+                        short = ftsearch(h, q, 5; filter=third, candidates=8, stats)
+                        @test stats.candidates == 8
+                        @test [r._id for r in short] == first([r._id for r in all_hits[1:8] if r._id % 3 == 0], 5)
+                    end
+
+                    # A filter inside a partition.
+                    in_a = [r for r in all_hits if _in_partition(r._id, "a") && r._id % 3 == 0]
+                    got_a = ftsearch(h, q, 4; partition="a", filter=third, candidates=160)
+                    @test [r._id for r in got_a] == [r._id for r in first(in_a, 4)]
+                end
+
+                # A list of tokens is searched as given. The tokens of a query, as the query
+                # pipeline resolves it, give the same results as the query itself.
+                off = QueryPolicy(correction=:off, expansion=false)
+                voc = text_profile(h).model.voc
+                q = rows[12]["text"]
+                tokens = [t.token for t in query_tokens(voc, q, QueryPipeline(); policy=off).terms]
+                @test !isempty(tokens)
+                before = vocabulary_report(h)["queries"]
+                @test [r._id for r in ftsearch(h, tokens, 5; policy=off)] == [r._id for r in ftsearch(h, q, 5; policy=off)]
+                @test vocabulary_report(h)["queries"] == before + 2
+                # A token the vocabulary does not hold matches nothing, and is not tokenized
+                # into one it holds.
+                @test isempty(ftsearch(h, ["NOT A TOKEN"], 5; policy=off))
+                close_project!(h)
+            end
         end
     end
 

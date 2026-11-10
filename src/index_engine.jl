@@ -2195,6 +2195,31 @@ function _with_adj(index::TextInvertedFile, adj)
     TextInvertedFile(index.model, InvertedFile(inner.dist, adj, inner.sizes, inner.db, inner.len), index.query)
 end
 
+"""
+    _encode_tokens(index, tokens::AbstractVector{<:AbstractString}, policy) -> query
+
+The query that `search(index, ctx, query, res)` takes, built from `tokens` without tokenizing
+them again. The tokens still go through the correction and expansion that `policy` asks for,
+as a text query does. `TextSearch` tokenizes a string, and also each element of a
+`TokenizedText`, so a token such as `A2` would be searched as `A0` if it were passed as text.
+A list of `String`s is the form `query_tokens` uses as it is.
+"""
+_encode_tokens(index::BM25InvertedFile, tokens::AbstractVector{<:AbstractString}, policy::QueryPolicy) =
+    querybow(index.voc, query_tokens(index.voc, tokens, index.query; policy))
+
+# The choice between a bag and a weighted vector is the one `TextInvertedFile`'s own text method
+# makes, read from the same internal predicate so that the two paths cannot disagree.
+function _encode_tokens(index::TextInvertedFile, tokens::AbstractVector{<:AbstractString}, policy::QueryPolicy)
+    rq = query_tokens(index.model.voc, tokens, index.query; policy)
+    TextSearch.FullText.is_set_distance(SimilaritySearch.distance(index)) ? querybow(index.model.voc, rq) :
+                                                                            queryvector(index.model, rq)
+end
+
+_run_text_search!(index, ctx, query::AbstractString, res, policy::QueryPolicy) =
+    search(index, ctx, query, res; policy)
+_run_text_search!(index, ctx, tokens::AbstractVector{<:AbstractString}, res, policy::QueryPolicy) =
+    search(index, ctx, _encode_tokens(index, tokens, policy), res)
+
 function _search_text_live(engine::FullTextEngine, query, k::Int, policy::QueryPolicy,
                            partition_adj::Union{Nothing,Function})
     read_lock(engine.lock) do
@@ -2217,7 +2242,7 @@ function _search_text_live(engine::FullTextEngine, query, k::Int, policy::QueryP
             # itself, and keep a second variant map, only to be able to vary the policy.
             live = engine.backend.index
             index = partition_adj === nothing ? live : _with_adj(live, partition_adj(length(live.adj)))
-            search(index, ctx, query, res; policy)
+            _run_text_search!(index, ctx, query, res, policy)
             evals = SimilaritySearch.distance_evaluations(ctx, snap)
             out = _collect_live(engine, res, evals)
             # The query is resolved: nothing is still walking a posting list this call read, so

@@ -47,14 +47,21 @@ not recoverable from outside afterwards -- the pool hands the same context to th
 concurrent search, and `ctx.costdists` is a running total, never reset. A caller that
 snapshots a context around a search attributes another thread's work to its own request.
 
+`stats.candidates` is the number of results the index returned for that call, before a
+`filter` was applied. With a filter, a value equal to the `candidates` that was asked for
+means the budget may have stopped the search early: asking again with a larger budget can
+return more results. A smaller value means the index had no more candidates, and a larger
+budget returns the same results.
+
 Reused across calls if you want a running total of your own; each search *overwrites*
-the field rather than accumulating, so add it up yourself if that is what you want.
+the fields rather than accumulating, so add them up yourself if that is what you want.
 """
 mutable struct SearchStats
     distance_evaluations::Int
+    candidates::Int
 end
 
-SearchStats() = SearchStats(0)
+SearchStats() = SearchStats(0, 0)
 
 """
     ExistsResult
@@ -983,7 +990,17 @@ selective predicate turn one query into a full scan without anybody asking for i
 """
 function _search_with_filter(engine::IndexEngine.AbstractSearchEngine, project::Project.ProjectManager, query, k::Int, predicate; minrecall, candidates::Int)
     raw = IndexEngine.search_live(engine, query, max(candidates, k); bs_override=nothing, minrecall, policy=nothing)
+    return _filter_hits(project, raw, k, predicate)
+end
 
+"""
+    _filter_hits(project, raw, k, predicate) -> (id=..., dist=..., deleted=..., distance_evaluations=..., candidates=...)
+
+The first `k` hits of `raw`, in the order of `raw`, whose record and `meta` satisfy
+`predicate`. A deleted hit never satisfies it. `candidates` is the length of `raw`. Shared by
+[`search`](@ref) and [`ftsearch`](@ref).
+"""
+function _filter_hits(project::Project.ProjectManager, raw, k::Int, predicate)
     ids = Int32[]
     dists = Float32[]
     for (_id, dist, deleted) in zip(raw.id, raw.dist, raw.deleted)
@@ -998,7 +1015,21 @@ function _search_with_filter(engine::IndexEngine.AbstractSearchEngine, project::
         push!(dists, dist)
         length(ids) == k && break
     end
-    return (id=ids, dist=dists, deleted=falses(length(ids)), distance_evaluations=raw.distance_evaluations)
+    return (id=ids, dist=dists, deleted=falses(length(ids)), distance_evaluations=raw.distance_evaluations,
+            candidates=length(raw.id))
+end
+
+"""
+    _record_stats!(stats, res_knn) -> Nothing
+
+Writes the cost of one search into `stats` (see [`SearchStats`](@ref)), if a `SearchStats` was
+given. Without a filter, the number of candidates is the number of results.
+"""
+function _record_stats!(stats::Union{Nothing,SearchStats}, res_knn)
+    stats === nothing && return nothing
+    stats.distance_evaluations = res_knn.distance_evaluations
+    stats.candidates = hasproperty(res_knn, :candidates) ? res_knn.candidates : length(res_knn.id)
+    return nothing
 end
 
 function _hydrate_results(project::Project.ProjectManager, res_knn)
@@ -1129,7 +1160,7 @@ function search(handle::EmbeddedEngine, vector, k::Int=10; filter=nothing, minre
         IndexEngine.search_live(handle.engine, query, k; bs_override=nothing, minrecall, policy=nothing) :
         _search_with_filter(handle.engine, handle.project, query, k, filter; minrecall, candidates)
     needs_save && Persistence.save_field!(handle.store, :opt_beamsearch, handle.engine.backend.opt_beamsearch)
-    stats === nothing || (stats.distance_evaluations = res_knn.distance_evaluations)
+    _record_stats!(stats, res_knn)
     return _hydrate_results(handle.project, res_knn)
 end
 
@@ -1234,7 +1265,9 @@ function search(handle::EmbeddedEngine, queries::AbstractVector{<:AbstractVector
 end
 
 """
-    ftsearch(handle::EmbeddedEngine, text, k::Int=10; policy=QueryPolicy(), partition=nothing) -> Vector{SearchResult}
+    ftsearch(handle::EmbeddedEngine, text, k::Int=10; policy=QueryPolicy(), partition=nothing,
+             filter=nothing, candidates=2k, stats=nothing) -> Vector{SearchResult}
+    ftsearch(handle::EmbeddedEngine, tokens::AbstractVector{<:AbstractString}, k::Int=10; ...)
 
 Text search against a bm25/weighted-inverted-file project (mirrors `Server.handle_ftsearch`).
 Same soft-delete marker behavior as [`search`](@ref); `minrecall` is accepted only for
@@ -1259,14 +1292,34 @@ evaluated, and each gets the score the global search gives it. A name the projec
 table does not hold raises [`UnknownPartition`](@ref), whose message lists the closest names. A
 partition that exists but has no indexed item yet returns no results. `partition` on a project
 without a partition field raises `InvalidOption`.
+
+`filter` and `candidates` work as in [`search`](@ref): `filter` is a `(record, meta) -> Bool`
+predicate, and the search examines the best `candidates` results in order of score and returns
+the first `k` that satisfy it. It returns fewer than `k` results when fewer than `k` of those
+candidates satisfy it. `stats.candidates` then tells whether a larger budget can find more (see
+[`SearchStats`](@ref)). With `partition`, the candidates are those of the partition. The
+predicate reads the record and the `meta` of each candidate it examines, two RocksDB reads per
+candidate. Without `filter`, `candidates` is unused.
+
+A query given as a list of tokens is searched with those tokens, without tokenizing them again.
+Each token is a token of the project's vocabulary, as `TextSearch.query_tokens` or
+`text_profile(handle).model.voc` gives them. `policy` still applies correction and expansion to
+them; pass `QueryPolicy(correction=:off, expansion=false)` to search exactly those tokens. A
+caller that selects the tokens of a long text, for example the ones with the highest idf, can
+search exactly its selection this way. Tokenizing a token again can change it: a tokenizer that
+replaces digits turns `A2` into `A0`.
 """
-function ftsearch(handle::EmbeddedEngine, text::AbstractString, k::Int=10; minrecall=nothing, policy::QueryPolicy=QueryPolicy(),
-                  stats::Union{Nothing,SearchStats}=nothing, partition::Union{Nothing,AbstractString}=nothing)
-    res_knn = partition === nothing ?
-        IndexEngine.search_live(handle.engine, text, k; bs_override=nothing, minrecall, policy) :
-        IndexEngine.search_partition_live(handle.engine, _partition_adj(handle, partition), text, k; policy)
-    _count_oov!(handle, text)
-    stats === nothing || (stats.distance_evaluations = res_knn.distance_evaluations)
+function ftsearch(handle::EmbeddedEngine, query::Union{AbstractString,AbstractVector{<:AbstractString}}, k::Int=10;
+                  minrecall=nothing, policy::QueryPolicy=QueryPolicy(),
+                  stats::Union{Nothing,SearchStats}=nothing, partition::Union{Nothing,AbstractString}=nothing,
+                  filter=nothing, candidates::Int=2k)
+    n = filter === nothing ? k : max(candidates, k)
+    raw = partition === nothing ?
+        IndexEngine.search_live(handle.engine, query, n; bs_override=nothing, minrecall, policy) :
+        IndexEngine.search_partition_live(handle.engine, _partition_adj(handle, partition), query, n; policy)
+    res_knn = filter === nothing ? raw : _filter_hits(handle.project, raw, k, filter)
+    _count_oov!(handle, query)
+    _record_stats!(stats, res_knn)
     return _hydrate_results(handle.project, res_knn)
 end
 
@@ -1546,10 +1599,11 @@ generic function whose methods cover an engine and a handle alike (the same reas
 IndexEngine.text_profile(handle::EmbeddedEngine) = IndexEngine.text_profile(handle.engine)
 
 """
-    _count_oov!(handle::EmbeddedEngine, text::AbstractString)
+    _count_oov!(handle::EmbeddedEngine, text)
 
 Adds one query to [`OOVCounters`](@ref): its tokens, and how many of them the vocabulary
-does not contain as typed.
+does not contain as typed. `text` is a query string or a list of tokens; a list is counted
+without tokenizing it.
 
 The query is tokenized once more here, with the vocabulary's own `TextConfig`, rather than
 read out of the search that just ran: the library resolves and encodes a query inside
@@ -1561,14 +1615,15 @@ module to assemble the query pipeline itself again, which is the arrangement
 Counts nothing for a project whose vocabulary has not been fitted, and never raises: a
 failure to measure must not fail the search that was measured.
 """
-function _count_oov!(handle::EmbeddedEngine, text::AbstractString)
+function _count_oov!(handle::EmbeddedEngine, text::Union{AbstractString,AbstractVector{<:AbstractString}})
     voc = IndexEngine.text_vocabulary(handle.engine)
     voc === nothing && return nothing
     counters = handle.oov
     try
         tokens = 0
         oov = 0
-        for tok in TextSearch.tokenize(voc.textconfig, text)
+        # A list of tokens is counted as it is, the way `ftsearch` searches it.
+        for tok in (text isa AbstractString ? TextSearch.tokenize(voc.textconfig, text) : text)
             tokens += 1
             TextSearch.token2id(voc, tok) == 0 && (oov += 1)
         end

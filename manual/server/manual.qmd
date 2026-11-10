@@ -201,8 +201,10 @@ The command line has `similarity-search build --partition-by <field>` and
   `doc_id`, `keywords` and `refs`, and any other field, become the metadata of the item.
 - `POST /api/v1/datasets/{id}/search` — dense and sparse search, with optional `filter`,
   `page_size` and `beamsearch_overrides`.
-- `POST /api/v1/datasets/{id}/ftsearch` — text search. Accepts `text`, `k`, and `partition`
-  for a dataset with a partition field. A partition name the dataset does not hold answers
+- `POST /api/v1/datasets/{id}/ftsearch` — text search. Accepts `text`, `k`, an optional
+  `filter` in the format of `search`, and `partition` for a dataset with a partition field.
+  `text` must be a string. A filtered text search reads the same bounded number of candidates
+  as a filtered `search`. A partition name the dataset does not hold answers
   `404` with the kind `UnknownPartition`, and the message lists the closest names. `partition`
   on a dataset without a partition field answers `400`.
 - `POST /api/v1/datasets/{id}/fetch` and `GET /api/v1/datasets/{id}/exists?ids=` — records by
