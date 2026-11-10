@@ -332,7 +332,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section id="server-functionality" class="level2">
 <h2 class="anchored" data-anchor-id="server-functionality">Server functionality</h2>
 <ul>
-<li><strong>REST API</strong>: dataset lifecycle, insertion, dense, sparse and text search with metadata filters, logical deletion, recall calibration, and queries over more than one dataset (<code>hybrid</code>, <code>ftsearch_group</code>).</li>
+<li><strong>REST API</strong>: dataset lifecycle, insertion, dense, sparse and text search with metadata filters, logical deletion, recall calibration, and queries over more than one dataset (<code>hybrid</code>).</li>
 <li><strong>Asynchronous jobs</strong>: <code>allknn</code>, <code>fft</code>, <code>neardup</code>, <code>hsp</code>, <code>searchbatch</code>, <code>closestpair</code>, <code>build</code>, <code>dump</code> and <code>load</code> are enqueued and executed as separate Julia subprocesses. Each one opens its dataset in read-only mode, so the server continues to answer queries while they run.</li>
 <li><strong>Two command lines</strong>: <code>similarity-search</code> operates on a working directory, and <code>similarity-search-ctl</code> operates on a running server over HTTP. Both can be installed as applications with <code>Pkg.Apps</code>.</li>
 <li><strong>Operational interfaces</strong>: access tokens, an operation log per dataset (whose distance-computation counts are obtained from the engine’s <code>SearchStats</code>), cursors for paginated results, health and metrics endpoints, and unload and reload of a single dataset without restarting the server.</li>

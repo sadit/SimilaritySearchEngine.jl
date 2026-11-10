@@ -173,9 +173,9 @@ of it exist.
       Indexes"): 0.42 ms on average in a partition, 12.0 ms for the global search, and 373 ms
       for the global search followed by a filter. `declare_partition!` took 12.0 s. The
       results of the 1,140 partition searches equal those of the filtered global search.
-11. **Removing `key`, `join_group` and `holds_metadata`** — decided on 2026-11-09, not done
-    yet. Today these three fields are used by one route, `POST /api/v1/search/group`. That
-    route sends a text query to the members of a join group: one member chosen by `key`, or
+11. **Removing `key`, `join_group` and `holds_metadata`** — decided on 2026-11-09, done on
+    2026-11-10. Until then these three fields were used by one route, `POST /api/v1/search/group`. That
+    route sent a text query to the members of a join group: one member chosen by `key`, or
     every text member with `key: "*"`. It returns the results grouped by `key`, and it reads
     each result's `doc_id` from the member marked `holds_metadata`. `hybrid` does not use them:
     it receives the ids of its two datasets.
@@ -224,6 +224,19 @@ of it exist.
     three arguments of `create_dataset` in the Python client, and their text in
     `manual/server/manual.qmd`. A dump written before the removal must still load: `load` will ignore
     the three fields.
+
+    What was done on 2026-11-10, beyond that list:
+    - `POST /api/v1/datasets` refuses a request with any of the three fields with `400`, and
+      the message says what replaces them. Ignoring them would create a dataset without what
+      the caller asked for.
+    - `dataset_descriptor` removes the three fields from a `descriptor.json` written before the
+      removal, so `GET /api/v1/datasets/{id}` does not report them.
+    - The Python helper is in `similarity_search/fields.py`, in two forms:
+      `ftsearch_fields(client, fields, text, k, partition)` sends the requests one after the
+      other, and `ftsearch_fields_async` sends them at the same time.
+    - `test_06_join_group_text_search.jl` was replaced by `test_06_field_datasets.jl`, which
+      tests one dataset per field, the `400` for each removed field, the two removed routes,
+      and an old descriptor.
 
 The stemmer registry of §5.3 and §9's phase 5 is not on this list: it was discarded. Stemming
 was the way this specification proposed to make a query match a word it does not equal. That
@@ -383,7 +396,7 @@ Both `similarity-search` and `similarity-search-serve` must offer an **interacti
   !!! note "Use case: multi-representation search (e.g. hybrid) via a join dataset, not multiple indices per dataset"
       The scenario that used to motivate "multiple indices over one dataset" — e.g. dense semantic search *and* BM25 lexical search over the *same* logical documents — is instead handled with **multiple single-index datasets sharing a common `doc_id` space, plus one designated dataset holding the full metadata for random-access-by-id batch retrieval.** Concretely: create one dataset per representation (a `searchgraph` dataset over dense embeddings, a `bm25_invfile` dataset over the raw text), each storing only the minimum it needs to build/search its own index (vectors, or tokenized text) plus the shared `doc_id`. Exactly one of these datasets — or a dedicated metadata-only dataset with no index at all — carries the *complete* metadata record per `doc_id` and answers `GET /api/v1/simsearch/{index}/fetch?ids=...`-style batch exact-id lookups; the others carry only the minimal join key (`doc_id`) needed to look up that metadata by id after a search. Fusion (§6) and rerank (see the updated `build` warning below) both reduce to: search the smaller per-representation index(es), then batch-`fetch` the join dataset by the resulting ids to hydrate metadata/original vectors before merging/reranking. This pattern should be documented explicitly as the recommended way to model hybrid or multi-representation search, since it is the direct consequence of the strict one-index-per-dataset rule above.
 
-      **Superseded on 2026-11-09 (§0, item 11):** the next paragraph describes `key` and join groups, which are being removed. A field stays a dataset of its own, and the caller keeps the map from field to dataset.
+      **Superseded on 2026-11-09 (§0, item 11):** the next paragraph describes `key` and join groups, which were removed on 2026-11-10. A field stays a dataset of its own, and the caller keeps the map from field to dataset.
 
       This same pattern generalizes beyond "one dense + one lexical" to **N per-field text indices**: a join group can hold any number of lexical-index members, each tagged with a `key` (e.g. `"title"`, `"body"`, `"tags"`) identifying which text field it indexes, alongside zero or one dense member and the metadata-holding member. See §5.3 for how `ftindex`/`ftsearch` address a specific `key` (or fan out to all of them).
 
@@ -524,7 +537,7 @@ Data is isolated using distinct Column Families in RocksDB, one per index/datase
     - **The index itself is restored via a straight file copy of the JLD2 snapshot**, not "Avro-import the dataset/metadata + rebuild the index" — this restores the exact original graph topology/posting lists byte-for-byte (confirmed: a restored `SearchGraph`'s sampled nearest-neighbor distance stats are bit-for-bit identical to the original's), rather than a plausible-but-different reconstruction `add_item!`-ing rows back in original order would produce for an incrementally-built structure like `SearchGraph`.
     - **No WAL-replay/watermark step**: `*_log` column families and a periodic/on-shutdown snapshot cadence aren't implemented anywhere in this codebase yet (a separate, larger gap — see §4.2's own note), so `dump` exports whatever the *current* JLD2 snapshot already reflects (which handle_append/handle_delete_item already keep current on every mutation, see the PLAN.md §5.7 chunk-7/8 notes) rather than a snapshot-plus-trailing-WAL. Revisit once/if the WAL layer exists.
     - **Bundle is a plain directory** (`dataset.avro` + `index.snapshot.jld2` + `manifest.json`), not a single archive file — avoids adding a packing dependency (e.g. `Tar.jl`) for a first version; each of the three files is independently a standard, documented format regardless of how they're packaged, so a non-Julia consumer loses nothing by them not being bundled into one file.
-    - **`manifest.json`** carries `index_kind`/`distance`/`meta_schema`/`join_group`/`holds_metadata`/`key`/`edit_correction`/`record_count`/`dumped_at` — read from the source's `descriptor.json` when one exists (HTTP-created datasets), or best-effort derived from the live engine object when it doesn't (CLI-built datasets, which never write a `descriptor.json` at all — the same two-layout gap the CLI's `describe`/`rebuild` already work around). `load` always targets the HTTP layout (`<workdir>/datasets/{id}/`) and always writes a fresh `descriptor.json` from the manifest, so a loaded dataset is immediately visible to `Server.reload_datasets!`/`GET /api/v1/datasets` with no extra step, regardless of which layout the original dump came from.
+    - **`manifest.json`** carries `index_kind`/`distance`/`meta_schema`/`edit_correction`/`record_count`/`dumped_at` — read from the source's `descriptor.json` when one exists (HTTP-created datasets), or best-effort derived from the live engine object when it doesn't (CLI-built datasets, which never write a `descriptor.json` at all — the same two-layout gap the CLI's `describe`/`rebuild` already work around). `load` always targets the HTTP layout (`<workdir>/datasets/{id}/`) and always writes a fresh `descriptor.json` from the manifest, so a loaded dataset is immediately visible to `Server.reload_datasets!`/`GET /api/v1/datasets` with no extra step, regardless of which layout the original dump came from.
     - **Resolved: wired as a Job/HTTP surface** — `POST /api/v1/jobs/dump` (`{"dataset": "<source-id>"}`) and `POST /api/v1/jobs/load` (`{"bundle": "<bundle-dir>", "dataset": "<new-target-id>"}`) join `HEAVY_JOB_KINDS` alongside `allknn`/`fft`/`neardup`/`hsp`, dispatching to the exact same `execute_dump`/`execute_load` CLI functions above via `Executors.submit` — no new CLI code, just the friendly-params-body translation `build_heavy_job_command` already does for the other four kinds. `dump`'s result is a bundle *directory*, not a single file like every other `HEAVY_JOB_KINDS` result — `GET /api/v1/jobs/{id}/result` special-cases a directory `result_ref` and returns `{"bundle_dir": ..., "manifest": {...}}` (the parsed `manifest.json`) instead of streaming raw bytes; `load`'s `result_ref` points at the new dataset's `descriptor.json`, which *is* a plain file and streams normally. Composes with the existing `POST /api/v1/admin/datasets/{id}/reload` (§5.7) to bring a job-loaded dataset live with no `serve` restart — the same flow `test/api/test_12_dump_load_via_admin.jl` already exercises for the CLI-subprocess version of `load`.
 
 ### 4.5. Metadata Schema Design (suggestion — answers the open "free-form via Avro" question)
@@ -628,7 +641,7 @@ Exposes the advanced/administrative capabilities of the underlying index — as 
   !!! note "Resolved: the separate, independently-existing `invfile`/`weighted_invfile` bug (raw BOW scored under NormCosine) is fixed"
       Unlike BM25 above, `WeightedInvertedFile` (`= InvertedFile(vocsize, Dist.NormCosine())`) was broken by *this application*, not by a library incompatibility: `TextSearch.jl`'s `191103c` (2026-08-04) dropped the `Dict`-based `dot`/`norm`/`evaluate` overloads a raw bag-of-words needs, so pushing/searching a `BOW` directly into a `NormCosine`-distance `InvertedFile` threw. Fixed in `IndexEngine` by building a `TextSearch.VectorModel(IdfWeighting(), TfWeighting(), voc)` once the vocabulary is trained (`ensure_trained!`) and calling `vectorize(model, text)` — which returns a real `SparseVector{Float32,Int32}` — instead of `bagofwords` for this index kind specifically (`BM25Kind` is unaffected and still uses `bagofwords`/`BOW`, which is what `BM25InvertedFile` actually wants). Verified via direct CLI reproduction: `build --index-kind invfile` → `searchbatch` now returns each document as its own top hit (near-zero self-distance) instead of throwing, and `rebuild`/`dump`/`load` round-trip correctly.
 
-  !!! warning "Superseded on 2026-11-09 by §0, item 11: `key`, `join_group` and `holds_metadata` are being removed. The note below describes the current route, not the plan."
+  !!! warning "Superseded on 2026-11-09 by §0, item 11: `key`, `join_group` and `holds_metadata` were removed on 2026-11-10. The note below describes the removed route."
 
   !!! note "Resolved: multi-field documents are modeled as N `key`-tagged join-group members, per the §1 update"
       A document is rarely one blob of text — it typically has several distinct text fields (`title`, `body`, `tags`, ...) that are worth scoring separately rather than concatenated into one bag of words. Given the strict one-index-per-dataset rule, this is modeled as: **each field gets its own dataset+index, tagged with a `key` string, all members of the same `join_group`** (§1, §7) as whatever dense/metadata datasets exist for that logical document collection.
@@ -749,6 +762,7 @@ Heavy/offline operations (`search` when denied by the §3 policy, `allknn`, `nea
 * `GET /api/v1/datasets`: Lists datasets in the current workdir (HTTP mirror of the CLI `list` command), paginated.
 * `GET /api/v1/datasets/{uuid}`: Dataset details — index kind, size, tombstone ratio, telemetry summary, `join_group` (if any).
 * `DELETE /api/v1/datasets/{uuid}`: Deletes a dataset and its index (destructive — should require an explicit confirmation flag in the request body, mirroring the caution already implied by soft-deletes for individual documents; deleting the `holds_metadata` member of a `join_group` should warn/require extra confirmation since other members' `fetch` calls depend on it).
+* Removed on 2026-11-10 (§0, item 11): `join_group` and `holds_metadata` at creation, and the route below.
 * `GET /api/v1/datasets/{uuid}/join_group`: Returns the full `JoinGroup` (§7) this dataset belongs to, i.e. its sibling datasets and which one `holds_metadata`. Empty/`null` if the dataset isn't part of a join group.
 
 !!! note "Resolved: `serve` now reopens every existing dataset on startup"
@@ -896,7 +910,8 @@ global list of each of its tokens, and once more for each partition of the recor
 - `ftsearch` accepts a `partition` field in the request body (`FtSearchRequest`, §7).
 - `GET /api/v1/datasets/{id}/partitions` returns what `partitions(handle)` returns.
 - Creating a dataset accepts `partition_by`. The CLI search command accepts `--partition`.
-- `POST /api/v1/search/group` accepts `partition`. That route sends one text query to the
+- Not built, because the route was removed on 2026-11-10 (§0, item 11):
+  `POST /api/v1/search/group` accepts `partition`. That route sends one text query to the
   members of a join group: datasets that hold different text fields of the same records, each
   with a `key` such as `title` or `body`. With `key: "*"` it searches every member and returns
   the results grouped by key. With `partition`, every member searched must declare a
@@ -959,7 +974,7 @@ Strictly one index per dataset (§1) — `index_kind` is singular, not a list:
 
 ### JoinGroup (new — backs the §1 join-dataset use case and §6 hybrid search)
 
-Superseded on 2026-11-09: see §0, item 11. This type is being removed.
+Superseded on 2026-11-09: see §0, item 11. This type was removed on 2026-11-10.
 
 Datasets that share a `doc_id` space (e.g. one `searchgraph` dataset over dense embeddings + one `bm25_invfile` dataset over the same documents' text, plus an optional metadata-only dataset) are tagged with a common `join_group` id. Exactly one member is flagged `holds_metadata: true` and answers batch `fetch`; the rest carry only `doc_id` plus whatever their own index needs. A text/lexical member may additionally carry a `key` (§5.3) — `null` for non-text members (dense, metadata-only) and for a text member indexing a single undifferentiated field; a join group may hold any number of distinct-`key` text members, one per indexed field:
 

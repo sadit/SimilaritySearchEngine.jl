@@ -47,7 +47,7 @@ const FULL = "full" in ARGS || lowercase(get(ENV, "SSE_TEST_LEVEL", "light")) ==
             include("api/test_03_hybrid_and_meta.jl")
             include("api/test_04_jobs_and_access.jl")
             include("api/test_05_dataset_admin_and_health.jl")
-            include("api/test_06_join_group_text_search.jl")
+            include("api/test_06_field_datasets.jl")
             include("api/test_07_cursors_and_pagination.jl")
             include("api/test_08_calibration_and_safety.jl")
             include("api/test_09_rebuild_and_describe.jl")

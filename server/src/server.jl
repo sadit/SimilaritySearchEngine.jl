@@ -41,21 +41,11 @@ json_response(status::Int, body; extra_headers=[]) = HTTP.Response(status, vcat(
 
 """
 `id` values are interpolated directly into filesystem paths (dataset directories,
-descriptor sidecar files) — PLAN.md §4.6 flags exactly this class of risk for the
-similar `key` field. Whitelist before it ever touches a path.
+descriptor sidecar files) — PLAN.md §4.6 flags exactly this class of risk. Whitelist
+before it ever touches a path.
 """
 const DATASET_ID_PATTERN = r"^[A-Za-z0-9_-]{1,128}$"
 valid_project_id(id::AbstractString) = occursin(DATASET_ID_PATTERN, id)
-
-"""
-A text/lexical join-group member's `key` (PLAN.md §1/§5.3) is user-supplied and gets
-echoed back into API responses and compared against elsewhere -- whitelist it the same
-way as dataset `id`, and separately reject the literal `"*"`, which is reserved for
-`ftsearch`'s fan-out wildcard and must never be a real member's key (PLAN.md §5.3's
-validation note).
-"""
-const KEY_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"
-valid_key(key::AbstractString) = key != "*" && occursin(KEY_PATTERN, key)
 
 """
     BEAMSEARCH_SAFETY_MULTIPLIER
@@ -459,29 +449,11 @@ Path of a dataset's small persistent sidecar (`index_kind`/`distance`/`created_a
 descriptor_path(app::AppState, id::String) = joinpath(app.workdir, "datasets", id, "descriptor.json")
 
 """
-    join_group_members(app, join_group) -> Vector{Dict{String,Any}}
-
-Scans every dataset descriptor under `<workdir>/datasets/` for ones tagged with the given
-`join_group` (PLAN.md §1/§7's JoinGroup) -- there's no separate join-group table, the
-group is purely an emergent grouping of datasets that happen to share the same tag in
-their own descriptor. Reads the raw persistent descriptor directly (not
-`dataset_descriptor`'s live-stats merge) since callers here only need the small set of
-identifying fields (`id`/`index_kind`/`key`/`holds_metadata`), not per-request doc counts.
+The dataset fields of the join groups, removed on 2026-11-10 (PLAN.md §0, item 11).
+`handle_create_dataset` refuses a request that sends one of them. `dataset_descriptor` drops
+them from a descriptor written before the removal, and `load` ignores them in a dump.
 """
-function join_group_members(app::AppState, join_group::AbstractString)
-    base = joinpath(app.workdir, "datasets")
-    isdir(base) || return Dict{String, Any}[]
-
-    members = Dict{String, Any}[]
-    for id in readdir(base)
-        isdir(joinpath(base, id)) || continue
-        dpath = descriptor_path(app, id)
-        isfile(dpath) || continue
-        desc = JSON3.read(read(dpath), Dict{String, Any})
-        get(desc, "join_group", nothing) == join_group && push!(members, desc)
-    end
-    return members
-end
+const REMOVED_DATASET_FIELDS = ("join_group", "holds_metadata", "key")
 
 function handle_create_dataset(req::HTTP.Request, app::AppState)
     body = String(req.body)
@@ -490,25 +462,14 @@ function handle_create_dataset(req::HTTP.Request, app::AppState)
     id = get(data, "id", Project.generate_id())
     valid_project_id(id) || return json_response(400, Dict("error" => "invalid dataset id"))
 
-    join_group = get(data, "join_group", nothing)
-    join_group !== nothing && (join_group = string(join_group))
-    holds_metadata = get(data, "holds_metadata", false) === true
-
-    key = get(data, "key", nothing)
-    if key !== nothing
-        key = string(key)
-        valid_key(key) || return json_response(400, Dict(
-            "error" => key == "*" ? "key '*' is reserved for ftsearch's fan-out wildcard and can't be assigned to a dataset" : "invalid key"
-        ))
-    end
-
-    if holds_metadata && join_group !== nothing
-        for m in join_group_members(app, join_group)
-            if get(m, "holds_metadata", false) == true
-                return json_response(400, Dict("error" => "join_group '$join_group' already has a holds_metadata member ('$(m["id"])')"))
-            end
-        end
-    end
+    # Removed on 2026-11-10 (PLAN.md §0, item 11). A request that still sends them is refused
+    # instead of creating a dataset that silently lacks what the caller asked for.
+    removed = filter(f -> haskey(data, f), REMOVED_DATASET_FIELDS)
+    isempty(removed) || return json_response(400, Dict("error" => """
+        $(join(map(f -> "'$f'", removed), ", ")): join groups were removed. Keep each field in its \
+        own dataset, append each record with the same doc_id to every field dataset, and keep \
+        the map from field name to dataset id in the client (the Python client's \
+        ftsearch_fields searches several field datasets at once)."""))
 
     index_type = get(data, "index_type", get(data, "index_kind", "searchgraph"))
     distance = get(data, "distance", "L2")
@@ -553,7 +514,6 @@ function handle_create_dataset(req::HTTP.Request, app::AppState)
 
     descriptor = Dict(
         "id" => id, "index_kind" => index_type, "distance" => distance, "created_at" => string(now(UTC)),
-        "join_group" => join_group, "holds_metadata" => holds_metadata, "key" => key,
         "edit_correction" => edit_correction
     )
     write(descriptor_path(app, id), JSON3.write(descriptor))
@@ -729,15 +689,13 @@ end
 """
     dataset_descriptor(app, id) -> Union{Dict, Nothing}
 
-Merges the persistent sidecar (`index_kind`/`distance`/`created_at`/`join_group`/
-`holds_metadata`/`key`) with live stats from `app.handles` when the dataset happens to be
+Merges the persistent sidecar (`index_kind`/`distance`/`created_at`/`edit_correction`) with live stats from `app.handles` when the dataset happens to be
 currently loaded (`doc_count`, `tombstone_count`/`_ratio`) — `reload_datasets!` populates
 `app.handles` for every on-disk dataset right at server startup, so in the normal case the
 two sources agree; `loaded == false` still shows up for the brief window before that
 startup reload runs, or if a dataset was explicitly unloaded some other way. Returns
-`nothing` if `id` isn't a real dataset directory. `get!`s in the join-group fields with
-their pre-join-group defaults so a descriptor written before that feature existed still
-round-trips.
+`nothing` if `id` isn't a real dataset directory. A descriptor written before the join
+groups were removed loses their three fields here (`REMOVED_DATASET_FIELDS`).
 """
 function dataset_descriptor(app::AppState, id::String)
     path = joinpath(app.workdir, "datasets", id)
@@ -747,9 +705,7 @@ function dataset_descriptor(app::AppState, id::String)
     base = isfile(dpath) ? JSON3.read(read(dpath), Dict{String, Any}) :
         Dict{String, Any}("id" => id, "index_kind" => "unknown", "distance" => "unknown", "created_at" => nothing)
 
-    get!(base, "join_group", nothing)
-    get!(base, "holds_metadata", false)
-    get!(base, "key", nothing)
+    foreach(f -> delete!(base, f), REMOVED_DATASET_FIELDS)
     get!(base, "beamsearch_baseline", nothing)
     get!(base, "calibration", nothing)
     get!(base, "edit_correction", false)
@@ -807,39 +763,14 @@ end
 """
     handle_get_dataset(req, app, id) -> HTTP.Response
 
-`GET /api/v1/datasets/{id}` (PLAN.md §5.7): single-dataset detail, including its
-`join_group`/`holds_metadata`/`key` (`null`/`false`/`null` for a dataset never tagged
-into a join group — see `dataset_descriptor`).
+`GET /api/v1/datasets/{id}` (PLAN.md §5.7): single-dataset detail (see
+`dataset_descriptor`).
 """
 function handle_get_dataset(req::HTTP.Request, app::AppState, id::String)
     valid_project_id(id) || return json_response(400, Dict("error" => "invalid dataset id"))
     desc = dataset_descriptor(app, id)
     desc === nothing && return json_response(404, Dict("error" => "dataset_not_found"))
     return json_response(200, desc)
-end
-
-"""
-    handle_get_join_group(req, app, id) -> HTTP.Response
-
-`GET /api/v1/datasets/{id}/join_group` (PLAN.md §5.7/§7): the full JoinGroup `id` belongs
-to — its sibling members and which one `holds_metadata`. `members` is empty (not a 404)
-if the dataset exists but was never tagged with a `join_group`, since that's a normal,
-valid state (most datasets in this pass aren't part of one), not an error.
-"""
-function handle_get_join_group(req::HTTP.Request, app::AppState, id::String)
-    valid_project_id(id) || return json_response(400, Dict("error" => "invalid dataset id"))
-    desc = dataset_descriptor(app, id)
-    desc === nothing && return json_response(404, Dict("error" => "dataset_not_found"))
-
-    join_group = get(desc, "join_group", nothing)
-    join_group === nothing && return json_response(200, Dict("join_group" => nothing, "members" => []))
-
-    members = [
-        Dict("index_uuid" => m["id"], "index_kind" => get(m, "index_kind", "unknown"),
-             "holds_metadata" => get(m, "holds_metadata", false), "key" => get(m, "key", nothing))
-        for m in join_group_members(app, join_group)
-    ]
-    return json_response(200, Dict("join_group" => join_group, "members" => members))
 end
 
 """
@@ -1209,9 +1140,9 @@ end
 Shared search call site for `handle_search` (dense, optionally post-filtered) and
 `handle_ftsearch` (single-index text): runs the search and logs exactly one `op_log`
 "search" record around it (PLAN.md §4.3), so cost accounting lives in one place instead of
-at every search-shaped handler. Not used by `handle_hybrid_search`/`handle_ftsearch_group`,
-which span more than one dataset's `op_log` -- attributing one combined operation across
-several projects needs its own decision.
+at every search-shaped handler. Not used by `handle_hybrid_search`, which spans two
+datasets' `op_log` -- attributing one combined operation across several projects needs its
+own decision.
 
 Everything goes through the engine's public `search`/`ftsearch` **except a per-request
 beam-search override**, which the public surface does not expose (it takes `minrecall`, a
@@ -1543,86 +1474,6 @@ function handle_hybrid_search(req::HTTP.Request, app::AppState)
     end
 
     return json_response(200, Dict("status" => "searched", "results" => results))
-end
-
-"""
-    _hydrate_join_id(app, ordered_members, doc_id) -> String
-
-Resolves `doc_id`'s original/external id by checking each of `ordered_members` in turn
-until one has metadata for it — the same "hydrate once, from whichever member actually
-has it" idea `handle_hybrid_search` already applies ad hoc between exactly two datasets,
-generalized to however many members a join group has. Callers sort `ordered_members` so
-the group's `holds_metadata` member (if any) is tried first.
-"""
-function _hydrate_join_id(app::AppState, ordered_members::Vector, doc_id)
-    for m in ordered_members
-        haskey(app.handles, m["id"]) || continue
-        record = Project.get_metadata(app.handles[m["id"]].project, doc_id)
-        record !== nothing && return something(record.doc_id, string(doc_id))
-    end
-    return string(doc_id)
-end
-
-"""
-    handle_ftsearch_group(req, app)
-
-`POST /api/v1/search/group` (PLAN.md §5.3/§7): join-group-aware full-text search,
-distinct from the simpler per-index `POST /api/v1/datasets/{id}/ftsearch` (still
-supported unchanged, e.g. by `test_02_full_text_search.jl`). Takes a `join_group` and a
-`key`: either one specific key string (routes to the one text-kind member tagged with
-that key) or the reserved wildcard `"*"` (fans out to every text-kind member of the
-group). Responses for `key: "*"` are grouped by key, not fused into one ranked list —
-PLAN.md is explicit that per-field lexical fusion is a different, harder scoring problem
-out of scope here; a caller wanting a single list across fields does that client-side.
-Metadata is hydrated once at the end via `_hydrate_join_id`, preferring the group's
-`holds_metadata` member when one is tagged.
-"""
-function handle_ftsearch_group(req::HTTP.Request, app::AppState)
-    data = JSON3.read(codeunits(String(req.body)), Dict{String, Any})
-    join_group = get(data, "join_group", nothing)
-    key = get(data, "key", nothing)
-    (join_group === nothing || key === nothing) &&
-        return json_response(400, Dict("error" => "ftsearch requires 'join_group' and 'key' ('*' to fan out to every text member)"))
-    haskey(data, "text") || return json_response(400, Dict("error" => "ftsearch requires a 'text' field"))
-    join_group = string(join_group)
-    key = string(key)
-    k = get(data, "k", 10)
-
-    members = join_group_members(app, join_group)
-    isempty(members) && return json_response(404, Dict("error" => "join_group '$join_group' not found or has no members"))
-
-    text_members = filter(members) do m
-        haskey(app.handles, m["id"]) && SSE.payload_kind(app.handles[m["id"]].engine) === :text
-    end
-    key != "*" && (text_members = filter(m -> get(m, "key", nothing) == key, text_members))
-    isempty(text_members) && return json_response(404, Dict(
-        "error" => key == "*" ? "join_group '$join_group' has no text members" : "no text member of join_group '$join_group' is tagged with key '$key'"
-    ))
-
-    # Try the holds_metadata member first, regardless of which member's search a given
-    # doc_id actually came from.
-    ordered_members = sort(members; by = m -> get(m, "holds_metadata", false) === true ? 0 : 1)
-
-    grouped = Dict{String, Any}()
-    for m in text_members
-        hits = try
-            _with_query_slot(app) do
-                SSE.ftsearch(app.handles[m["id"]], data["text"], k)
-            end
-        catch e
-            e isa SSE.EngineError || rethrow()
-            return engine_error_response(e)
-        end
-        entries = Any[]
-        for hit in hits
-            hit.deleted && continue
-            push!(entries, Dict("doc_id" => _hydrate_join_id(app, ordered_members, hit._id),
-                                "_id" => hit._id, "score" => hit.distance))
-        end
-        grouped[something(get(m, "key", nothing), m["id"])] = entries
-    end
-
-    return json_response(200, Dict("status" => "searched", "join_group" => join_group, "results" => grouped))
 end
 
 # ==========================================
@@ -2045,7 +1896,6 @@ function run_server(host::String, port::Int, app::AppState; async::Bool=false)
     # know about tokens. `"*"` is a route that is not about one dataset.
     @post "/api/v1/datasets" req -> _guard(() -> handle_create_dataset(req, app), req, app, :admin, "*")
     @get "/api/v1/datasets" req -> _guard(() -> handle_list_datasets(req, app), req, app, :read, "*")
-    @get "/api/v1/datasets/{id}/join_group" (req, id) -> _guard(() -> handle_get_join_group(req, app, id), req, app, :read, id)
     # The operation log records the token presented by each request, so reading it is an
     # administrative operation even though it is a GET.
     @get "/api/v1/datasets/{id}/log" (req, id) -> _guard(() -> handle_get_op_log(req, app, id), req, app, :admin, id)
@@ -2055,9 +1905,6 @@ function run_server(host::String, port::Int, app::AppState; async::Bool=false)
     @delete "/api/v1/datasets/{id}" (req, id) -> _guard(() -> handle_delete_dataset(req, app, id), req, app, :admin, id)
 
     @post "/api/v1/search/hybrid" req -> _guard(() -> handle_hybrid_search(req, app), req, app, :read, _body_dataset(req, "dense_index", "lexical_index"))
-    # A query over a join group reaches every dataset of that group, and the group is a tag
-    # datasets carry, not a fixed list, so this requires read over every dataset.
-    @post "/api/v1/search/group" req -> _guard(() -> handle_ftsearch_group(req, app), req, app, :read, "*")
     @post "/api/v1/datasets/{id}/append" (req, id) -> _guard(() -> handle_append(req, app, id), req, app, :write, id)
     @post "/api/v1/datasets/{id}/search" (req, id) -> _guard(() -> handle_search(req, app, id), req, app, :read, id)
     @post "/api/v1/datasets/{id}/calibrate" (req, id) -> _guard(() -> handle_calibrate(req, app, id), req, app, :write, id)

@@ -8,6 +8,7 @@ from .client import SimilaritySearchClient
 from .async_client import AsyncSimilaritySearchClient
 from .jobs import run_job, run_job_async
 from .cursors import iter_cursor
+from .fields import ftsearch_fields, ftsearch_fields_async
 
 __version__ = "0.2.0"
 
@@ -17,4 +18,6 @@ __all__ = [
     "run_job",
     "run_job_async",
     "iter_cursor",
+    "ftsearch_fields",
+    "ftsearch_fields_async",
 ]

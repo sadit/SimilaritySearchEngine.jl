@@ -106,7 +106,7 @@ developed by path.
 
 - **REST API**: dataset lifecycle, insertion, dense, sparse and text search with metadata
   filters, logical deletion, recall calibration, and queries over more than one dataset
-  (`hybrid`, `ftsearch_group`).
+  (`hybrid`).
 - **Asynchronous jobs**: `allknn`, `fft`, `neardup`, `hsp`, `searchbatch`, `closestpair`,
   `build`, `dump` and `load` are enqueued and executed as separate Julia subprocesses. Each
   one opens its dataset in read-only mode, so the server continues to answer queries while

@@ -99,9 +99,10 @@ is read through `GET /api/v1/datasets/{id}/log`.
 ### Datasets
 
 - `POST /api/v1/datasets` — creates one. Accepts `id`, `index_kind` (see section 3),
-  `distance`, `dimension`, the join-group fields `join_group`, `holds_metadata`, `key`, an
-  optional `meta_schema`, and `edit_correction` and `partition_by` for a text dataset.
-  Answers `201`.
+  `distance`, `dimension`, an optional `meta_schema`, and `edit_correction` and
+  `partition_by` for a text dataset. Answers `201`. The fields `join_group`,
+  `holds_metadata` and `key` were removed on 2026-11-10, and a request that contains one of
+  them answers `400` (see "Searching Several Text Fields").
 - `GET /api/v1/datasets?offset=&limit=` — every dataset on disk, loaded or not.
 - `GET /api/v1/datasets/{id}` — one of them.
 - `DELETE /api/v1/datasets/{id}` — destroys it.
@@ -121,7 +122,7 @@ GET /api/v1/datasets/{id}
 {"id":"ds", "index_kind":"searchgraph", "distance":"L2",
  "created_at":"2026-09-14T19:41:57.059", "loaded":true,
  "doc_count":5, "tombstone_count":0, "tombstone_ratio":0,
- "join_group":null, "holds_metadata":false, "key":null, "edit_correction":false,
+ "edit_correction":false,
  "meta_schema":[{"name":"year","type":"int64"}], "partition_by":null,
  "beamsearch_baseline":{"bsize":4,"delta":1,"maxvisits":1000000}}
 ```
@@ -193,13 +194,6 @@ does not hold text is refused with `400`.
 The command line has `similarity-search build --partition-by <field>` and
 `similarity-search searchbatch --partition <name>`.
 
-- `GET /api/v1/datasets/{id}/join_group` — the datasets tagged with the same `join_group`.
-
-```json
-{"join_group":"g",
- "members":[{"index_uuid":"txt","index_kind":"bm25_invfile","key":"body","holds_metadata":true}]}
-```
-
 ### Search and indexing
 
 - `POST /api/v1/datasets/{id}/append` — inserts items. A dense item contains `vector`, a text
@@ -220,8 +214,7 @@ The command line has `similarity-search build --partition-by <field>` and
   `tradeoff` and `transition` (see the `calibrate!` section of the getting-started tutorial).
   The response reports the configuration as `baseline` and the recall it reaches as
   `calibration`, measured on queries that took no part in the tuning, with a 95% interval.
-- `POST /api/v1/search/hybrid` and `POST /api/v1/search/group` — reciprocal rank fusion over
-  two datasets, and a text query sent to every dataset of a join group.
+- `POST /api/v1/search/hybrid` — reciprocal rank fusion over two datasets.
 
 ```json
 POST .../append     {"status":"appended","id":"ds","inserted":5}
@@ -249,10 +242,6 @@ GET .../exists?ids=d1,nope
 
 POST /api/v1/search/hybrid
 {"status":"searched","results":[{"doc_id":"d1","_id":1,"score":0.0327}]}
-
-POST /api/v1/search/group
-{"status":"searched","join_group":"g",
- "results":{"body":[{"doc_id":"t1","_id":1,"score":-0.267}]}}
 ```
 
 A `fetch` result merges the item's metadata into the record, which is why `year` sits beside
@@ -266,6 +255,34 @@ An operation on one dataset is addressed under that dataset. The two queries tha
 than one are under `/api/v1/search/`, which is the only place where a route is not about a
 single dataset. The earlier prefix `/api/v1/simsearch/` was removed on 2026-09-13: it marked a
 distinction that the API stopped making.
+
+### Searching Several Text Fields
+
+A record can have several text fields, for example a title and an abstract. Each field is a text dataset of its own. Each dataset has its own vocabulary, document frequencies and BM25 length statistics, so a short title is compared with the length of other titles.
+
+- Append each record to every field dataset with the same `doc_id`. Each search result carries that `doc_id`.
+- The client keeps the map from field name to dataset id. The server does not keep it.
+- The other metadata of the record can be stored in one of the datasets. A `fetch` to that dataset with the `doc_id`s of the results returns it.
+
+The Python client sends one `ftsearch` per field and returns the results by field name:
+
+```python
+from similarity_search import SimilaritySearchClient, AsyncSimilaritySearchClient
+from similarity_search import ftsearch_fields, ftsearch_fields_async
+
+fields = {"title": "papers_title", "abstract": "papers_abstract"}
+client = SimilaritySearchClient("http://127.0.0.1:8080")
+hits = ftsearch_fields(client, fields, "redes neuronales", k=5)
+# {"title": [{"doc_id": ..., "_id": ..., "distance": ...}, ...], "abstract": [...]}
+meta = client.fetch("papers_title", [r["doc_id"] for r in hits["abstract"]])
+
+async with AsyncSimilaritySearchClient("http://127.0.0.1:8080") as aclient:
+    hits = await ftsearch_fields_async(aclient, fields, "redes neuronales", k=5)
+```
+
+`ftsearch_fields` sends the requests one after the other. `ftsearch_fields_async` sends them at the same time, so it takes the time of the slowest request.
+
+Until 2026-11-10 the server grouped field datasets with the fields `join_group`, `key` and `holds_metadata`, and searched the group with `POST /api/v1/search/group`. That route and `GET /api/v1/datasets/{id}/join_group` were removed. A descriptor written before the removal loses the three fields when it is read, and `load` ignores them in a bundle.
 
 ### Vocabulary
 
@@ -391,7 +408,7 @@ A permission is `operation:dataset`:
 | `admin` | dataset creation and deletion, the token endpoints, job control, the operation log | `write` and `read` |
 
 `dataset` is a dataset id or `*`. A route that is not about one dataset — listing datasets,
-the job endpoints, the token endpoints, `/api/v1/search/group` — requires the operation over
+the job endpoints, the token endpoints — requires the operation over
 `*`, so a token restricted to one dataset uses that dataset and cannot enumerate the rest.
 `admin:*` grants everything. A request without a valid token is answered `401`; a valid token
 without the permission is answered `403`, and the body names the permission that was required.

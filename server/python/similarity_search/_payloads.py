@@ -49,12 +49,11 @@ def metrics():
 
 # --- datasets -------------------------------------------------------------------------
 
-def create_dataset(id=None, index_type="searchgraph", distance="L2", join_group=None,
-                    holds_metadata=False, key=None, meta_schema=None, partition_by=None):
+def create_dataset(id=None, index_type="searchgraph", distance="L2", meta_schema=None,
+                    partition_by=None):
     body = _compact({
         "id": id, "index_type": index_type, "distance": distance,
-        "join_group": join_group, "holds_metadata": holds_metadata or None,
-        "key": key, "meta_schema": meta_schema, "partition_by": partition_by,
+        "meta_schema": meta_schema, "partition_by": partition_by,
     })
     return "POST", "/api/v1/datasets", body, None
 
@@ -70,10 +69,6 @@ def get_dataset(id):
 
 def delete_dataset(id):
     return "DELETE", f"/api/v1/datasets/{id}", None, None
-
-
-def get_join_group(id):
-    return "GET", f"/api/v1/datasets/{id}/join_group", None, None
 
 
 def get_log(id, offset=0, limit=None):
@@ -101,11 +96,6 @@ def ftsearch(index, text, k=10, partition=None):
 
 def get_partitions(id):
     return "GET", f"/api/v1/datasets/{id}/partitions", None, None
-
-
-def ftsearch_group(join_group, key, text, k=10):
-    body = {"join_group": join_group, "key": key, "text": text, "k": k}
-    return "POST", "/api/v1/search/group", body, None
 
 
 def hybrid_search(dense_index, lexical_index, vector=None, text=None, k=10, alpha=None, filter=None):

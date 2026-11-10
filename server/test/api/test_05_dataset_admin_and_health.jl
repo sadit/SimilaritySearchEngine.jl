@@ -54,7 +54,7 @@ using JSON3
         detail = JSON3.read(String(resp.body))
         @test detail.doc_count == 5
         @test detail.tombstone_ratio ≈ 0.2
-        @test detail.join_group === nothing
+        @test !haskey(detail, :join_group)
 
         # 5. Unknown dataset -> 404; path-unsafe id -> 400 (PLAN.md §4.6's path-safety warning).
         resp = try

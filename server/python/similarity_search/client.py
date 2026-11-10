@@ -59,10 +59,9 @@ class SimilaritySearchClient:
 
     # --- datasets ---------------------------------------------------------------------
 
-    def create_dataset(self, id=None, index_type="searchgraph", distance="L2", join_group=None,
-                        holds_metadata=False, key=None, meta_schema=None, partition_by=None):
-        return self._call(*p.create_dataset(id, index_type, distance, join_group, holds_metadata, key, meta_schema,
-                                                 partition_by))
+    def create_dataset(self, id=None, index_type="searchgraph", distance="L2", meta_schema=None,
+                        partition_by=None):
+        return self._call(*p.create_dataset(id, index_type, distance, meta_schema, partition_by))
 
     def list_datasets(self, offset=0, limit=None):
         return self._call(*p.list_datasets(offset, limit))
@@ -72,9 +71,6 @@ class SimilaritySearchClient:
 
     def delete_dataset(self, id):
         return self._call(*p.delete_dataset(id))
-
-    def get_join_group(self, id):
-        return self._call(*p.get_join_group(id))
 
     def get_log(self, id, offset=0, limit=None):
         return self._call(*p.get_log(id, offset, limit))
@@ -92,9 +88,6 @@ class SimilaritySearchClient:
 
     def get_partitions(self, id):
         return self._call(*p.get_partitions(id))
-
-    def ftsearch_group(self, join_group, key, text, k=10):
-        return self._call(*p.ftsearch_group(join_group, key, text, k))
 
     def hybrid_search(self, dense_index, lexical_index, vector=None, text=None, k=10, alpha=None, filter=None):
         return self._call(*p.hybrid_search(dense_index, lexical_index, vector, text, k, alpha, filter))

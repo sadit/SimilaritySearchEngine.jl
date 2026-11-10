@@ -50,10 +50,9 @@ class AsyncSimilaritySearchClient:
 
     # --- datasets ---------------------------------------------------------------------
 
-    async def create_dataset(self, id=None, index_type="searchgraph", distance="L2", join_group=None,
-                              holds_metadata=False, key=None, meta_schema=None, partition_by=None):
-        return await self._call(*p.create_dataset(id, index_type, distance, join_group, holds_metadata, key, meta_schema,
-                                                 partition_by))
+    async def create_dataset(self, id=None, index_type="searchgraph", distance="L2", meta_schema=None,
+                              partition_by=None):
+        return await self._call(*p.create_dataset(id, index_type, distance, meta_schema, partition_by))
 
     async def list_datasets(self, offset=0, limit=None):
         return await self._call(*p.list_datasets(offset, limit))
@@ -63,9 +62,6 @@ class AsyncSimilaritySearchClient:
 
     async def delete_dataset(self, id):
         return await self._call(*p.delete_dataset(id))
-
-    async def get_join_group(self, id):
-        return await self._call(*p.get_join_group(id))
 
     async def get_log(self, id, offset=0, limit=None):
         return await self._call(*p.get_log(id, offset, limit))
@@ -83,9 +79,6 @@ class AsyncSimilaritySearchClient:
 
     async def get_partitions(self, id):
         return await self._call(*p.get_partitions(id))
-
-    async def ftsearch_group(self, join_group, key, text, k=10):
-        return await self._call(*p.ftsearch_group(join_group, key, text, k))
 
     async def hybrid_search(self, dense_index, lexical_index, vector=None, text=None, k=10, alpha=None, filter=None):
         return await self._call(*p.hybrid_search(dense_index, lexical_index, vector, text, k, alpha, filter))

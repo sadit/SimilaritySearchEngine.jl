@@ -580,10 +580,9 @@ _dense_index_kind_name(::SimilaritySearch.ParallelExhaustiveSearch) = "parallel_
 `project/` (a copy of the project directory, which is the index: `load` restores it as it
 is and never rebuilds it from the Avro rows, so the bundle comes back with the same graph
 topology and posting lists it had when it was written), and `manifest.json` (index_kind/distance/
-meta_schema/join_group/holds_metadata/key -- everything `load` needs to recreate a
-descriptor.json at the target, on top of the dataset it opens read-only so it can run
-concurrently with a live server serving the same dataset (see `describe`'s identical
-`read_only=true` reasoning).
+edit_correction -- everything `load` needs to recreate a descriptor.json at the target).
+It opens the dataset read-only so it can run concurrently with a live server serving the
+same dataset (see `describe`'s identical `read_only=true` reasoning).
 """
 function execute_dump(cmd_args::Dict)
     project_id = cmd_args["dataset"]
@@ -649,9 +648,6 @@ function execute_dump(cmd_args::Dict)
         "project_id" => project_id,
         "index_kind" => index_kind,
         "distance" => distance,
-        "join_group" => descriptor === nothing ? nothing : get(descriptor, "join_group", nothing),
-        "holds_metadata" => descriptor === nothing ? false : get(descriptor, "holds_metadata", false),
-        "key" => descriptor === nothing ? nothing : get(descriptor, "key", nothing),
         "edit_correction" => descriptor === nothing ? false : get(descriptor, "edit_correction", false),
         "record_count" => length(records),
         "dumped_at" => string(now(UTC)),
@@ -769,9 +765,6 @@ function execute_load(cmd_args::Dict)
         "index_kind" => get(manifest, "index_kind", "unknown"),
         "distance" => get(manifest, "distance", nothing),
         "created_at" => string(now(UTC)),
-        "join_group" => get(manifest, "join_group", nothing),
-        "holds_metadata" => get(manifest, "holds_metadata", false),
-        "key" => get(manifest, "key", nothing),
         "edit_correction" => get(manifest, "edit_correction", false),
     )
     write(joinpath(target_path, "descriptor.json"), JSON3.write(descriptor))
