@@ -1455,6 +1455,7 @@ docstring) rather than getting it from `snapshot_state`.
 snapshot_state(engine::DenseEngine{GraphBackend}) =
     (kind=:dense, backend=:graph, distance=engine.backend.index.dist,
      minrecall=engine.backend.minrecall, opt_beamsearch=engine.backend.opt_beamsearch,
+     beamsearch=engine.backend.index.algo[], hints=collect(UInt32, engine.backend.index.hints),
      deleted_ids=engine.deleted_ids)
 snapshot_state(engine::DenseEngine{<:ExactBackend}) =
     (kind=:dense, backend=backend_tag(engine.backend), index=engine.backend.index,
@@ -1498,7 +1499,11 @@ own `build_*` function needs instead:
   `graph_len` (`Persistence.load_field(store, :graph_len, 0)` -- may be `< length` of the
   restored `.db` if some staged vectors were never caught up by an explicit
   [`index!`](@ref index!(::DenseEngine{GraphBackend})) call before the project last closed) -- see
-  [`build_searchgraph`](@ref).
+  [`build_searchgraph`](@ref). An optional `beamsearch` is set as the graph's `BeamSearch`
+  (`index.algo[]`): the one that `index!` tuned, or the last level `calibrate!` tuned. Without
+  it, the graph has the default `BeamSearch()` of SimilaritySearch. An optional `hints` holds
+  the starting points of the search (`index.hints`). Without it, each search starts from
+  random points.
 - `FullTextEngine`: `profile`, `fitspec`, `prebuilt_index` (the index assembled from what was
   persisted, or `nothing` when the project has none yet), `adj_factory` (what a *new* index's
   posting lists are built around, since a project trained by its first
@@ -1522,6 +1527,13 @@ restore_engine(state; on_change::Union{Nothing,Function}, log_io::Union{Nothing,
 function restore_engine(::Val{:dense}, state; on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, maxbatches::Union{Nothing,Integer})
     if state.backend === :graph
         index = build_searchgraph(state.distance, state.vector_blocks, state.load_neighbors, state.graph_len)
+        # The beam that `index!` tuned and the hints it picked (PLAN.md §0, item 13). A project
+        # saved before these fields existed has neither: it keeps the library's default beam
+        # and starts each search from random points, until `index!` or `calibrate!`.
+        beamsearch = get(state, :beamsearch, nothing)
+        beamsearch === nothing || (index.algo[] = beamsearch)
+        hints = get(state, :hints, nothing)
+        hints === nothing || append!(index.hints, hints)
         backend = GraphBackend(index, _searchgraph_context(state.minrecall, _engine_logging(on_change, log_io), maxbatches),
                                state.minrecall, state.opt_beamsearch)
         return DenseEngine(backend, ContextPool(_search_context(SearchGraphContext)), state.deleted_ids, ReadWriteLock())

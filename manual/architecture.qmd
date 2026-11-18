@@ -389,7 +389,9 @@ Bulk writes leave a write-ahead log, and the next open must replay it. Compactio
 ### Storage Subsystems
 
 1. **`EngineStore` (Engine Field State)**:
-   - Stores engine-level configuration as individual key-value entries (`:minrecall`, `:opt_beamsearch`, `:deleted_ids`, `:profile`).
+   - Stores engine-level configuration as individual key-value entries (`:minrecall`, `:opt_beamsearch`, `:beamsearch`, `:deleted_ids`, `:profile`).
+   - `:beamsearch` is the `BeamSearch` of a graph: the parameters of the beam search that a query without `minrecall` uses. `index!` tunes it while the graph grows, and `calibrate!` leaves the last level it tuned. Both calls save it.
+   - `:hints` are the starting points of a search in the graph. `index!` picks them and saves them.
    - Mutations (e.g., updating deleted IDs or storing calibration results) rewrite only their specific keys.
 2. **Dense Vector Storage (`dense_vectors.mmapdb`)**:
    - Dense vectors are stored in a dedicated memory-mapped binary file managed by `MMapMatrixDatabase`.
@@ -418,10 +420,14 @@ sequenceDiagram
     Caller->>IE: build_searchgraph(distance, vectors, neighbors, graph_len)
     IE->>IE: Restore forward graph adjacencies
     IE->>IE: connect_reverse_links! over 1:graph_len
+    Caller->>ES: load_field(:beamsearch), load_field(:hints)
+    IE->>IE: Set the saved BeamSearch and hints on the graph
     IE-->>Caller: Reconstructed DenseEngine{GraphBackend}
 ```
 
-When a project is reopened, the stored forward edges are read again and the reverse links are regenerated, which restores the index to the state it had before the project was closed.
+When a project is reopened, the stored forward edges are read again and the reverse links are regenerated. Then the saved `BeamSearch` and hints are set on the graph. This restores the index to the state it had before the project was closed. On 4,000 random vectors of 16 dimensions, 20 queries took the same distance evaluations and returned the same results before and after a reopen (measured 2026-11-18).
+
+Before 2026-11-18, neither was saved. A reopened graph searched with the default `BeamSearch` of SimilaritySearch, from random starting points. On 20,000 random vectors of 64 dimensions, a query took 2,534 distance evaluations before the project was closed and 350 after it was reopened, with a lower recall. A project saved before that date has neither field. It keeps the default until its next `index!` that indexes new items, or its next `calibrate!`.
 
 ---
 

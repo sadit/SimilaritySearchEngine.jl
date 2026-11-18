@@ -1,7 +1,7 @@
 using Test
 using SimilaritySearchEngine
 using SimilaritySearchEngine: Schema, IndexEngine
-using SimilaritySearch: SearchGraph, Dist, MatrixDatabase, SearchGraphContext, InformativeLog
+using SimilaritySearch: SearchGraph, Dist, MatrixDatabase, SearchGraphContext, InformativeLog, BeamSearch
 using TextSearch: BM25InvertedFile, InvertedFile, TextInvertedFile, NormalizationConfig,
                   AppliedArtifacts, vocsize, gettrainsize, gettextconfig,
                   lineage_summary, token2id, query_tokens, QueryPipeline
@@ -616,6 +616,46 @@ const ACCENT_ITEMS = vcat(
             @test e[1].exists && e[1].deleted
 
             close_project!(h2)
+        end
+    end
+
+    @testset "the beam search of a graph survives a reopen" begin
+        # PLAN.md §0, item 13: the graph used to be rebuilt with `BeamSearch()` and no hints, so
+        # a search without `minrecall` took 350 distance evaluations instead of 2,534 after a
+        # reopen, and started from random points. With both saved, a search after the reopen
+        # repeats the one before it: the same evaluations and the same results.
+        mktempworkdir() do workdir
+            rng = Xoshiro(13)
+            X = [randn(rng, Float32, 16) for _ in 1:4000]
+            beam(h) = IndexEngine.current_beamsearch(h.engine)
+            fields(bs) = (bs.bsize, bs.Δ, bs.maxvisits)
+            evals(h) = [(st = SearchStats(); search(h, X[i], 10; stats=st); st.distance_evaluations) for i in 1:20]
+            results(h) = [[r._id for r in search(h, X[i], 10)] for i in 1:20]
+            hints(h) = copy(h.engine.backend.index.hints)
+
+            h = create_project(workdir, "beam_ds"; engine=DenseEngine, backend=SearchGraph)
+            append_items!(h, [DenseItem(x) for x in X])
+            index!(h)
+            tuned = beam(h)
+            # The test is only meaningful if `index!` moved the beam away from the default.
+            @test fields(tuned) != fields(BeamSearch())
+            @test !isempty(hints(h))
+            before = (evals(h), results(h), hints(h))
+            close_project!(h)
+
+            h = open_project(workdir, "beam_ds")
+            @test fields(beam(h)) == fields(tuned)
+            @test hints(h) == before[3]
+            @test evals(h) == before[1]
+            @test results(h) == before[2]
+            # `calibrate!` leaves the last level it tuned in the graph, and that is kept too.
+            calibrate!(h; levels=0.95, numqueries=16, nboot=10, rng=Xoshiro(1))
+            calibrated = beam(h)
+            close_project!(h)
+
+            h = open_project(workdir, "beam_ds"; read_only=true)
+            @test fields(beam(h)) == fields(calibrated)
+            close_project!(h)
         end
     end
 

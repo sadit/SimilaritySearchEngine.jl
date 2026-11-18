@@ -253,6 +253,30 @@ of it exist.
       `candidates` is settled by the second, with the widening done by the caller. The server
       route accepts `filter` with the budget of a filtered `search`. It does not accept a list
       of tokens: `text` must be a string.
+13. **The beam search of a graph after a reopen** — found and fixed on 2026-11-18. While
+    `index!` builds a `SearchGraph`, the context tunes the graph's `BeamSearch`
+    (`index.algo[]`) and picks its hints, the starting points of a search (`index.hints`).
+    Neither was saved. `open_project` rebuilt the graph with `BeamSearch()`, the default of
+    SimilaritySearch, and no hints, so a search without `minrecall` started from random
+    points.
+    - Measured on 2026-11-18 over 20,000 random vectors of 64 dimensions: after `index!` the
+      beam was `BeamSearch(bsize=11, Δ=1.21, maxvisits=9452)`, and a query took 2,534 distance
+      evaluations. After a reopen it was `BeamSearch(bsize=4, Δ=1.0, maxvisits=1000000)`, and
+      the same query took 350. The recall falls with the number of evaluations.
+    - A search with `minrecall` is not affected: it uses `opt_beamsearch`, which is saved.
+    - The fix saves both as the engine fields `:beamsearch` and `:hints` after `index!` and
+      after `calibrate!`, and `restore_engine` sets them on the rebuilt graph. On 4,000 random
+      vectors of 16 dimensions, 20 queries then took the same distance evaluations and returned
+      the same results before and after a reopen. A project saved before the fix has neither
+      field until its next `index!` with new items or its next `calibrate!`.
+    - The near-duplicate members of a graph (`index.members`, SimilaritySearch 1.6) are not
+      saved either. The engine does not set `neardup`, so its graphs have no members.
+    - The partition graphs of §5.10 need the same two fields, one value per partition. This
+      was phase 0 of §5.10.
+14. **Partitioned dense indexes (§5.10)** — designed on 2026-11-18, not implemented. A dense
+    project declares a partition field as a text project does. A small partition is searched
+    with an exact scan of its members. A partition with at least `partition_graph_min`
+    members has its own `SearchGraph` over the same vectors.
 
 The stemmer registry of §5.3 and §9's phase 5 is not on this list: it was discarded. Stemming
 was the way this specification proposed to make a query match a word it does not equal. That
@@ -942,7 +966,8 @@ global list of each of its tokens, and once more for each partition of the recor
   every open. Their partition lists would be built in memory at the same time, from
   `partition_members`. The scoring argument above applies to them unchanged.
 - **Dense projects.** A `SearchGraph` has no posting lists. Two options exist: an exact scan
-  over the members of a small partition, and a graph per partition. Neither is designed here.
+  over the members of a small partition, and a graph per partition. §5.10 combines both
+  (designed on 2026-11-18).
 - More than one partition field, or a search over the intersection of two partitions.
 
 #### Tests
@@ -961,6 +986,186 @@ global list of each of its tokens, and once more for each partition of the recor
 ReposMx moves to the engine following `docs/plan-motor.md` of ReposMx. With this feature, its
 `repo_postings` column family, `RepoPostingsAdjList` and `split-index` are replaced by
 `partition_by="repo"` on its documents project and on its authors project.
+
+### 5.10. Partitioned Dense Indexes (design, 2026-11-18)
+
+Status: designed on 2026-11-18, not implemented. The decisions in this section were made with
+the author on that date.
+
+#### The use case
+
+The use case is the one of §5.9: a search inside a group of records known before the query,
+and a search over all of them, in one project. This section covers dense projects, with both
+backends: `SearchGraph` and the exact ones (`ExhaustiveSearch`, `ParallelExhaustiveSearch`).
+
+#### What the engine offers today
+
+A dense project restricts a search with `search(...; filter, candidates)`: it searches the
+global graph and keeps the candidates that satisfy the predicate. The cost depends on the size
+of the project, not on the size of the group. For a small group, the page is not filled.
+
+Measured on 2026-11-18 with 16 threads: 200,000 synthetic vectors of 128 dimensions in 200
+clusters, 200 queries, k=10. Each partition is a random subset. The "exact" and "graph"
+columns are the mean time of one query, run one after another.
+
+| members | exact scan | own graph | recall of the own graph | global graph and filter, 10,000 candidates |
+|---|---|---|---|---|
+| 200 | 0.010 ms | 0.015 ms | 0.95 | recall 0.18 |
+| 2,000 | 0.12 ms | 0.016 ms | 0.89 | recall 0.84 |
+| 20,000 | 3.7 ms | 0.039 ms | 0.96 | recall 0.99 |
+| 60,000 | 10.5 ms | 0.096 ms | 0.96 | recall 0.99 |
+
+The own graph was tuned with `optimize_index!(MinRecall(0.9))`. The global graph was not
+tuned, so the last column also includes its own recall. Building the own graph took 0.15 s
+for 200 members and 0.91 s for 60,000. The script is not in the repository. A measurement
+on real embeddings is part of phase 3.
+
+#### Design
+
+A partition shares the vectors with the global index. Only the structure that selects the
+candidates belongs to the partition. This is the principle of §5.9, where a partition shares
+the vocabulary and the document vectors and has its own posting lists.
+
+- The members of a partition are a `SubDatabase` of the project's vectors: `parent` is the
+  database of the global index, and `map` holds the `_id`s of the members in ascending order.
+  No vector is copied.
+- The distance from a member to a query is the same in the partition and in the global index.
+- **A partition with fewer than `partition_graph_min` members** is searched with an
+  `ExhaustiveSearch` over its `SubDatabase`. Its recall is 1, and it has nothing to calibrate.
+- **A partition with at least `partition_graph_min` members** has its own `SearchGraph` over
+  its `SubDatabase`, with its own adjacency, hints and `BeamSearch`.
+- On a project with an exact backend, every partition is searched with an exact scan, and
+  `partition_graph_min` does not apply.
+- A result of a partition search has a local id. `map[local id]` is the `_id`, and the
+  deleted set and the metadata are read with the `_id`.
+
+On 2026-11-18 a `SearchGraph` over a `SubDatabase` was checked to grow: ids are appended to
+`map`, and `SimilaritySearch.index!` indexes the new ones.
+
+#### Declaration
+
+- `create_project(...; partition_by)` and `declare_partition!` accept a dense project. The
+  rules of §5.9 apply unchanged: one field, a string or a list of strings, the field optional
+  in a record, `:string` if declared in the `MetaSchema`, and `UnknownPartition` for a name
+  not in the table.
+- `create_project(...; partition_graph_min=4096)` sets the threshold. The value is saved
+  with the project and cannot be changed. The default is a public default (`test/policy.jl`),
+  to be set again with the measurement of phase 3. It is an error on a text or sparse project.
+- `declare_partition!` on a dense project reads the `meta` of every item, writes
+  `partition_members`, and builds the graph of each partition that reaches the threshold. This
+  inserts each member again, so it costs about as much as indexing the members once.
+
+#### Storage
+
+- `partition_table` and `partition_members` (§5.9) are used unchanged.
+- A new column family, `partition_graph`: key `[partition number][local id]`, both big-endian
+  (`Schema.be_key`), value the direct neighbors of that local id, encoded as in the adjacency
+  column family of the global graph. The reverse links are not saved, as for the global graph.
+- New engine fields: `partition_graph_min`; `partition_graph_len`, a map from partition
+  number to the number of members its graph has indexed; and `partition_beamsearch`, a map
+  from partition number to the graph's `BeamSearch` and hints (see §0, item 13).
+- `partition_opt_beamsearch`: a map from partition number to the calibrated levels of that
+  partition, written only by `calibrate!` with a partition.
+- The `map` of each partition is not stored. `open_project` builds it by reading
+  `partition_members` in `_id` order, so the local ids are the same at every open.
+
+#### Writing
+
+- `append_items!` writes `partition_members`, as for a text project.
+- On a `SearchGraph` project, a partition holds only indexed items, as the global graph. After
+  the global graph indexes a block, `index!` appends the block's ids to the `map` of each of
+  their partitions.
+- Then, for each partition with a graph, `index!` indexes the new members. Each range is saved
+  as for the global graph: the direct neighbors of each local id, then `partition_graph_len`.
+- A partition that reaches `partition_graph_min` gets a graph built from all its members, in
+  the same `index!` call.
+- A crash leaves a partition graph with fewer indexed members than its `map`. The next
+  `index!` indexes the rest, as for the global graph.
+- On an exact project, the `map` of a partition grows in `append_items!`, because those
+  backends index on append.
+- An item is inserted in the global graph and once more in each of its partitions that has a
+  graph. For a project with one partition per item, building takes about twice as long.
+
+#### Reading
+
+- `search(handle, vector, k; partition, filter, candidates, minrecall, stats)` searches one
+  partition. `filter` and `candidates` apply to the results of the partition, as in
+  `ftsearch`.
+- A search in a partition without a graph scans its members. `minrecall` is accepted and has
+  no effect, because the recall is 1.
+- A search in a partition with a graph uses that graph's `BeamSearch`, the value tuned while
+  it was built.
+- `minrecall` on a partition with a graph uses its calibrated levels. If the partition was
+  never calibrated, the search raises `NotTrained` (HTTP 409), and the message names
+  `calibrate!(handle; partition)`. Unlike the global graph, a partition is not calibrated by a
+  search. A calibration takes seconds, and it is worth it only for a large partition that
+  receives many queries. The author of the project decides which ones.
+- `calibrate!(handle; partition)` calibrates one partition with a graph. On a partition
+  without a graph it raises `InvalidOption`, because an exact scan has nothing to calibrate.
+- `partitions(handle)` adds `graph::Bool` to each entry of a dense project.
+- `searchbatch`, `allknn`, `closestpairs` and the other operations over the whole collection
+  do not take a partition in this version.
+
+#### Opening
+
+- `open_project` rebuilds every partition graph after the global graph: it reads the direct
+  neighbors from `partition_graph`, reconnects the reverse links, and sets the saved
+  `BeamSearch` and hints. The graphs are available from the first query.
+- The global graph of 200,000 items reopened in about 2.4 s (measured 2026-09-09). With one
+  partition per item, the partition graphs hold about as many members, so a reopen takes about
+  twice as long. Loading each partition graph at its first query is a later option, if the
+  measurement shows that the open time matters.
+- Memory: the adjacency of each partition graph, 4 bytes per neighbor of each member, and 4
+  bytes per member for the `map`. No vector is duplicated. In the measurement above, the
+  median number of direct neighbors was 10; the reverse links add more in memory.
+
+#### Server and clients
+
+- The `search` route accepts `partition`.
+- Creating a dense dataset accepts `partition_by` and `partition_graph_min`.
+- The calibration route and job accept `partition`.
+- `similarity-search search --partition` accepts a dense dataset.
+- The Python client: `search(..., partition)` and `calibrate(..., partition)`.
+
+#### Phases
+
+0. §0, item 13: save and restore `index.algo[]` and `index.hints` of the global graph, with a
+   test that compares the beam, the hints and the searches before and after a reopen. Done on
+   2026-11-18.
+1. The engine: declaration, storage, writing, reading, opening and `calibrate!` with a
+   partition, for both dense backends.
+2. The server, the CLI and the Python client.
+3. The documentation (`manual/architecture.qmd`, the server manual, this section) and the
+   measurement on real embeddings that sets `partition_graph_min`. There is no such
+   collection yet.
+
+#### Tests
+
+- On an exact project, a partition search returns the same ids, order and distances as the
+  global search filtered by partition with an unlimited budget.
+- On a `SearchGraph` project, the graph of a partition reaches the target recall against the
+  exact scan of the partition.
+- A partition below the threshold returns the exact result.
+- A partition that reaches the threshold in an `index!` gets a graph, and its results stay
+  valid.
+- A record with several partitions is in each of them.
+- The partition graphs, their `BeamSearch`, their hints and their calibrated levels survive a
+  reopen.
+- `declare_partition!` on an existing project gives the same partitions as declaring the field
+  at creation.
+- `minrecall` on an uncalibrated partition with a graph raises `NotTrained`; `calibrate!` on a
+  partition without a graph raises `InvalidOption`.
+- A deleted item is reported as in the global search.
+- An index interrupted between the global graph and a partition graph is completed by the next
+  `index!`.
+
+#### Not in this version
+
+- Sparse projects. They follow §5.9: posting lists per partition.
+- Loading a partition graph at its first query.
+- A filter evaluated inside the beam search of the global graph. SimilaritySearch has no such
+  search, and its recall falls for small partitions, which is the case that matters here.
+- More than one partition field, and the intersection of two partitions.
 
 ## 6. Hybrid Search Readiness (Suggestions & Specifications)
 

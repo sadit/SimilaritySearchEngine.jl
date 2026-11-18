@@ -646,6 +646,8 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
             graph_len=Persistence.load_field(store, :graph_len, 0),
             minrecall=Persistence.load_field(store, :minrecall, nothing),
             opt_beamsearch=Persistence.load_field(store, :opt_beamsearch, nothing),
+            beamsearch=Persistence.load_field(store, :beamsearch, nothing),
+            hints=Persistence.load_field(store, :hints, nothing),
             deleted_ids=Persistence.load_field(store, :deleted_ids, nothing),
         )
         IndexEngine.restore_engine(state; on_change=_searchgraph_on_change(store, adj_store), log_io=nothing, maxbatches)
@@ -773,6 +775,27 @@ function compact_project!(handle::EmbeddedEngine; force::Bool=false)
 end
 
 """
+    _save_search_state!(handle::EmbeddedEngine) -> Nothing
+
+Saves what a search of a graph project starts from, so that [`open_project`](@ref) sets it on
+the rebuilt graph (PLAN.md §0, item 13): the `BeamSearch` (`index.algo[]`) as the engine field
+`:beamsearch`, and the starting points of the search (`index.hints`) as `:hints`. Two calls
+change them: [`index!`](@ref index!(::EmbeddedEngine)), whose context tunes the beam and picks
+the hints while the graph grows, and [`calibrate!`](@ref), which leaves the last level it tuned.
+Does nothing for any other project.
+"""
+function _save_search_state!(handle::EmbeddedEngine)
+    engine = handle.engine
+    engine isa IndexEngine.DenseEngine{IndexEngine.GraphBackend} || return nothing
+    state = IndexEngine.read_lock(engine.lock) do
+        index = engine.backend.index
+        (beamsearch=index.algo[], hints=collect(UInt32, index.hints))
+    end
+    Persistence.save_fields!(handle.store, state)
+    return nothing
+end
+
+"""
     index!(handle::EmbeddedEngine)
 
 Catches up encoding/indexing over whatever's been staged via [`append_items!`](@ref)
@@ -810,6 +833,7 @@ function index!(handle::EmbeddedEngine)
     engine = handle.engine
     if engine isa IndexEngine.DenseEngine{IndexEngine.GraphBackend}
         IndexEngine.index!(engine)
+        _save_search_state!(handle)
     elseif IndexEngine.payload_kind(engine) === :text
         # `:fitspec`/`:distance` were already written by create_project's full snapshot_state
         # save, and neither ever changes afterwards -- only `:profile` can go from nothing to a
@@ -1159,7 +1183,10 @@ function search(handle::EmbeddedEngine, vector, k::Int=10; filter=nothing, minre
     res_knn = filter === nothing ?
         IndexEngine.search_live(handle.engine, query, k; bs_override=nothing, minrecall, policy=nothing) :
         _search_with_filter(handle.engine, handle.project, query, k, filter; minrecall, candidates)
-    needs_save && Persistence.save_field!(handle.store, :opt_beamsearch, handle.engine.backend.opt_beamsearch)
+    if needs_save
+        Persistence.save_field!(handle.store, :opt_beamsearch, handle.engine.backend.opt_beamsearch)
+        _save_search_state!(handle)
+    end
     _record_stats!(stats, res_knn)
     return _hydrate_results(handle.project, res_knn)
 end
@@ -1858,6 +1885,7 @@ function calibrate!(handle::EmbeddedEngine; levels=IndexEngine.DEFAULT_MINRECALL
     report = IndexEngine.calibrate!(handle.engine; levels, numqueries, ksearch, queries, tradeoff,
                                     transition, nboot, confidence, rng)
     Persistence.save_field!(handle.store, :opt_beamsearch, handle.engine.backend.opt_beamsearch)
+    _save_search_state!(handle)
     return report
 end
 
