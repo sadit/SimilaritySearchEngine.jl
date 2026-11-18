@@ -367,7 +367,7 @@ end
 const _PROJECT_CFS = [Persistence.ENGINE_CF, Persistence.ADJACENCY_CF, Persistence.INVFILE_DB_CF,
                       Persistence.STAGED_TEXT_CF, Persistence.INVFILE_POSTINGS_CF, Persistence.INVFILE_DOCVECS_CF,
                       Persistence.PARTITION_TABLE_CF, Persistence.PARTITION_MEMBERS_CF,
-                      Persistence.PARTITION_POSTINGS_CF]
+                      Persistence.PARTITION_POSTINGS_CF, Persistence.PARTITION_GRAPH_CF]
 
 """
     create_project(workdir, dataset; engine=DenseEngine, backend=nothing, distance=nothing,
@@ -459,7 +459,16 @@ partitions. An item without the field belongs to no partition. If the field is d
 `meta_schema`, it must be declared `:string`, which also restricts it to one value per item. A
 project has at most one partition field, and it cannot be changed. See
 [`declare_partition!`](@ref) to partition a project that already exists, and
-[`partitions`](@ref) for the names and sizes. It is an error on a dense or sparse project.
+[`partitions`](@ref) for the names and sizes. It is an error on a sparse project.
+
+On a dense project, `partition_by` partitions the vectors (PLAN.md §5.10), and
+`search(h, v, k; partition="unicach")` searches only the items of that partition. A partition
+shares the vectors of the project and copies none. A partition with fewer than
+`partition_graph_min` indexed members (by default [`DEFAULT_PARTITION_GRAPH_MIN`](@ref)) is
+searched with an exact scan of its members. A larger one, on a `SearchGraph` project, has its
+own graph, which `index!` builds and extends. On an exact project every partition is scanned.
+`partition_graph_min` is saved with the project, and it is an error without `partition_by` or
+on a project that is not dense.
 
 `schema_version` is stamped onto every `Schema.MetadataRecord` [`append_items!`](@ref)
 writes for this project's lifetime (not persisted/restored itself -- like `minrecall`
@@ -488,7 +497,8 @@ function create_project(workdir::String, dataset::String;
                         index_type=nothing, schema_version::Int=1, meta_schema=nothing,
                         maxbatches::Union{Nothing,Integer}=nothing,
                         postings_cache_max::Int=4096, postings_cache_base::Int=2048,
-                        edit_correction::Bool=false, partition_by::Union{Nothing,AbstractString}=nothing)
+                        edit_correction::Bool=false, partition_by::Union{Nothing,AbstractString}=nothing,
+                        partition_graph_min::Union{Nothing,Integer}=nothing)
     index_type === nothing || invalid_option(:index_type, """
         `index_type` is gone: a project now names the kind of data it holds and, separately, the
         index that holds it.
@@ -517,11 +527,12 @@ function create_project(workdir::String, dataset::String;
               "indexes $kind vectors, and its queries have no tokens to correct")
     schema = _as_meta_schema(meta_schema)
     if partition_by !== nothing
-        kind === :text ||
-            invalid_option(:partition_by, "`partition_by` only applies to a text project; $(nameof(engine)) " *
-                  "indexes $kind vectors, and partitions are posting lists of a text index")
+        kind === :sparse &&
+            invalid_option(:partition_by, "`partition_by` applies to a text or a dense project; a sparse project " *
+                  "cannot be partitioned yet (PLAN.md §5.10)")
         _check_partition_field(schema, partition_by)
     end
+    graph_min = _check_partition_graph_min(kind, partition_by, partition_graph_min)
     if kind === :sparse
         dimension === nothing &&
             invalid_option(:dimension, "a sparse project needs `dimension`: an InvertedFile is a fixed array of " *
@@ -572,9 +583,107 @@ function create_project(workdir::String, dataset::String;
     Persistence.save_fields!(store, IndexEngine.snapshot_state(eng))
     isempty(schema) || Persistence.save_field!(store, :meta_schema, schema)
     partition_by === nothing || Persistence.save_field!(store, :partition_by, String(partition_by))
-    return EmbeddedEngine(workdir, dataset, dir, project, eng, store, pending_flush, schema_version,
-                          schema, OOVCounters(), dense_vectors, false, Ref(true), partitions_ref,
-                          (postings_cache_max, postings_cache_base))
+    handle = EmbeddedEngine(workdir, dataset, dir, project, eng, store, pending_flush, schema_version,
+                            schema, OOVCounters(), dense_vectors, false, Ref(true), partitions_ref,
+                            (postings_cache_max, postings_cache_base))
+    if kind === :dense && partition_by !== nothing
+        Persistence.save_field!(store, :partition_graph_min, graph_min)
+        _enable_dense_partitions!(handle, graph_min, Dict{UInt32,Int}())
+    end
+    return handle
+end
+
+"""
+    DEFAULT_PARTITION_GRAPH_MIN
+
+The number of indexed members from which a partition of a dense `SearchGraph` project has its
+own graph (PLAN.md §5.10). A smaller partition is searched with an exact scan of its members.
+
+Measured on 2026-11-18 over 200,000 synthetic vectors of 128 dimensions, 16 threads: an exact
+scan took 0.12 ms for 2,000 members and 3.7 ms for 20,000, and a graph search 0.016 ms and
+0.039 ms. The value is to be set again with a measurement on real embeddings.
+"""
+const DEFAULT_PARTITION_GRAPH_MIN = 4096
+
+# The threshold of a dense partitioned project, or `nothing` for any other. Raises
+# `InvalidOption` when `partition_graph_min` is given where it does not apply.
+function _check_partition_graph_min(kind::Symbol, partition_by, partition_graph_min)
+    if partition_graph_min !== nothing
+        kind === :dense ||
+            invalid_option(:partition_graph_min, "`partition_graph_min` only applies to a dense project; this one " *
+                  "indexes $kind items, whose partitions are posting lists")
+        partition_by === nothing &&
+            invalid_option(:partition_graph_min, "`partition_graph_min` needs `partition_by`: it is the size from " *
+                  "which a partition has its own graph")
+        partition_graph_min >= 1 ||
+            invalid_option(:partition_graph_min, "partition_graph_min must be at least 1; got $partition_graph_min")
+    end
+    (kind === :dense && partition_by !== nothing) || return nothing
+    return Int(something(partition_graph_min, DEFAULT_PARTITION_GRAPH_MIN))
+end
+
+"""
+    _enable_dense_partitions!(handle, graph_min, graph_len) -> IndexEngine.DensePartitions
+
+Gives the dense engine of `handle` its partitions, with the observer that saves each range of a
+partition graph: the direct neighbors of the range in `PARTITION_GRAPH_CF`, then the number of
+members the graph holds, in the engine field `:partition_graph_len`. `graph_len` is that field
+as last saved.
+"""
+function _enable_dense_partitions!(handle::EmbeddedEngine, graph_min::Integer, graph_len::Dict{UInt32,Int})
+    parts = handle.partitions[]
+    store = handle.store
+    on_change = number -> (index, sp, ep) -> begin
+        Persistence.save_partition_neighbors!(parts, number, sp, [IndexEngine.direct_neighbors(index, i) for i in sp:ep])
+        graph_len[number] = ep
+        Persistence.save_field!(store, :partition_graph_len, graph_len)
+    end
+    return IndexEngine.enable_partitions!(handle.engine, graph_min, on_change)
+end
+
+"""
+    _restore_dense_partitions!(handle) -> Nothing
+
+Rebuilds the partitions of a dense project when it is opened (PLAN.md §5.10). The members come
+from `PARTITION_MEMBERS_CF`, limited to the indexed items. Each partition graph is rebuilt from
+`PARTITION_GRAPH_CF` up to its saved length, with its saved `BeamSearch`, hints and calibrated
+levels.
+"""
+function _restore_dense_partitions!(handle::EmbeddedEngine)
+    parts = handle.partitions[]
+    store = handle.store
+    engine = handle.engine
+    graph_len = Persistence.load_field(store, :partition_graph_len, Dict{UInt32,Int}())
+    search_state = Persistence.load_field(store, :partition_search_state, Dict{UInt32,NamedTuple}())
+    opt = Persistence.load_field(store, :partition_opt_beamsearch, Dict{UInt32,IndexEngine.OptBeamSearch}())
+    _enable_dense_partitions!(handle, Persistence.load_field(store, :partition_graph_min, DEFAULT_PARTITION_GRAPH_MIN), graph_len)
+    membership = Persistence.load_partition_membership(parts, length(engine.backend.index))
+    for number in sort!(collect(keys(membership)))
+        st = get(search_state, number, nothing)
+        IndexEngine.restore_partition!(engine, number, membership[number];
+            load_neighbors=(i -> Persistence.load_partition_neighbors(parts, number, i)),
+            graph_len=get(graph_len, number, 0),
+            beamsearch=st === nothing ? nothing : st.beamsearch,
+            hints=st === nothing ? nothing : st.hints,
+            opt_beamsearch=get(opt, number, nothing))
+    end
+    return nothing
+end
+
+"""
+    _save_partition_state!(handle) -> Nothing
+
+Saves the `BeamSearch` and hints of each partition graph (`:partition_search_state`) and the
+calibrated levels of each partition (`:partition_opt_beamsearch`), as
+[`_save_search_state!`](@ref) does for the global graph. Does nothing for a project without
+dense partitions.
+"""
+function _save_partition_state!(handle::EmbeddedEngine)
+    engine = handle.engine
+    (engine isa IndexEngine.DenseEngine && engine.partitions !== nothing) || return nothing
+    Persistence.save_fields!(handle.store, (partition_search_state=IndexEngine.partition_search_state(engine),
+                                            partition_opt_beamsearch=IndexEngine.partition_opt_beamsearch(engine)))
+    return nothing
 end
 
 """
@@ -708,11 +817,13 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
             kinds were restructured stored a Julia type there instead of a symbol, and has to be \
             rebuilt rather than reopened.""")
     end
-    return EmbeddedEngine(workdir, dataset, dir, project, engine, store, pending_flush, schema_version,
-                          Persistence.load_field(store, :meta_schema, Schema.MetaSchema()),
-                          Persistence.load_field(store, :oov_counters, OOVCounters()),
-                          dense_vectors, read_only, Ref(false), partitions_ref,
-                          (postings_cache_max, postings_cache_base))
+    handle = EmbeddedEngine(workdir, dataset, dir, project, engine, store, pending_flush, schema_version,
+                            Persistence.load_field(store, :meta_schema, Schema.MetaSchema()),
+                            Persistence.load_field(store, :oov_counters, OOVCounters()),
+                            dense_vectors, read_only, Ref(false), partitions_ref,
+                            (postings_cache_max, postings_cache_base))
+    kind === :dense && partition_by !== nothing && _restore_dense_partitions!(handle)
+    return handle
 end
 
 """
@@ -832,7 +943,13 @@ function index!(handle::EmbeddedEngine)
     handle.wrote[] = true
     engine = handle.engine
     if engine isa IndexEngine.DenseEngine{IndexEngine.GraphBackend}
-        IndexEngine.index!(engine)
+        if engine.partitions === nothing
+            IndexEngine.index!(engine)
+        else
+            parts = handle.partitions[]
+            IndexEngine.index!(engine, ids -> Persistence._load_members(parts, ids))
+            _save_partition_state!(handle)
+        end
         _save_search_state!(handle)
     elseif IndexEngine.payload_kind(engine) === :text
         # `:fitspec`/`:distance` were already written by create_project's full snapshot_state
@@ -933,6 +1050,13 @@ function append_items!(handle::EmbeddedEngine, items::AbstractVector{<:Schema.Ab
     part_values = parts === nothing ? nothing :
         [_partition_values(parts.field, item.meta) for item in items]
 
+    # A dense project records the partitions of the batch before its items: an interrupted call
+    # then leaves entries for ids the next append overwrites, never items without partitions.
+    dense_sp = _current_size(engine) + 1
+    dense_members = parts !== nothing && IndexEngine.payload_kind(engine) === :dense ?
+        (foreach(item -> _check_item(engine, item), items); Persistence.assign_partitions!(parts, dense_sp, part_values)) :
+        nothing
+
     for item in items
         _check_item(engine, item)
         p = Schema.payload(item)
@@ -950,6 +1074,12 @@ function append_items!(handle::EmbeddedEngine, items::AbstractVector{<:Schema.Ab
         # is a write that never had to happen.
         meta = isempty(item.meta) ? nothing : Schema.coerce_meta(handle.meta_schema, item.meta)
         put_metadata!(project, Schema.metadata_record(item, _id, handle.schema_version), meta)
+    end
+
+    # An exact project indexes on append, so its partitions grow here. A graph project adds the
+    # members of a partition when `index!` indexes them.
+    if dense_members !== nothing && !is_dense_graph
+        IndexEngine.add_partition_members!(engine, dense_sp, dense_members)
     end
 
     if is_dense_graph && !isempty(staged_vectors)
@@ -1175,10 +1305,19 @@ tuple this replaced.
 `stats`, if given a [`SearchStats`](@ref), receives this call's distance-evaluation count --
 the only way to get it, since the context that counted them goes back to the engine's pool
 when the call returns.
+
+`partition`, on a partitioned dense project, searches only the items of that partition
+(PLAN.md §5.10). A partition without its own graph is scanned, and the result is exact. A
+partition with a graph is searched with the `BeamSearch` its construction tuned. With
+`minrecall`, it uses the levels of [`calibrate!`](@ref)`(handle; partition)`, and it raises
+`NotTrained` if the partition was never calibrated: a search does not calibrate a partition.
+`filter` and `candidates` apply to the results of the partition. A name the project does not
+hold raises `UnknownPartition`.
 """
 function search(handle::EmbeddedEngine, vector, k::Int=10; filter=nothing, minrecall=nothing, candidates::Int=2k,
-                stats::Union{Nothing,SearchStats}=nothing)
+                stats::Union{Nothing,SearchStats}=nothing, partition::Union{Nothing,AbstractString}=nothing)
     query = _search_query(handle.engine, vector)
+    partition === nothing || return _search_partition(handle, query, k, partition; filter, minrecall, candidates, stats)
     needs_save = minrecall !== nothing && handle.engine isa IndexEngine.DenseEngine{IndexEngine.GraphBackend} && isempty(handle.engine.backend.opt_beamsearch)
     res_knn = filter === nothing ?
         IndexEngine.search_live(handle.engine, query, k; bs_override=nothing, minrecall, policy=nothing) :
@@ -1187,6 +1326,26 @@ function search(handle::EmbeddedEngine, vector, k::Int=10; filter=nothing, minre
         Persistence.save_field!(handle.store, :opt_beamsearch, handle.engine.backend.opt_beamsearch)
         _save_search_state!(handle)
     end
+    _record_stats!(stats, res_knn)
+    return _hydrate_results(handle.project, res_knn)
+end
+
+"""
+    _search_partition(handle, query, k, partition; filter, minrecall, candidates, stats) -> Vector{SearchResult}
+
+[`search`](@ref) in one partition of a dense project (PLAN.md §5.10). `filter` and
+`candidates` apply to the results of the partition.
+"""
+function _search_partition(handle::EmbeddedEngine, query, k::Int, partition::AbstractString; filter, minrecall,
+                           candidates::Int, stats::Union{Nothing,SearchStats})
+    engine = handle.engine
+    engine isa IndexEngine.DenseEngine ||
+        invalid_option(:partition, "search with a partition needs a dense project; this one holds " *
+              "$(IndexEngine.payload_kind(engine)) items")
+    number = _partition_number(handle, partition)
+    n = filter === nothing ? k : max(candidates, k)
+    raw = IndexEngine.search_partition_live(engine, number, query, n, minrecall)
+    res_knn = filter === nothing ? raw : _filter_hits(handle.project, raw, k, filter)
     _record_stats!(stats, res_knn)
     return _hydrate_results(handle.project, res_knn)
 end
@@ -1362,51 +1521,70 @@ function partition_field(handle::EmbeddedEngine)
 end
 
 """
-    partitions(handle::EmbeddedEngine) -> Vector{@NamedTuple{name::String, items::Int}}
+    partitions(handle::EmbeddedEngine) -> Vector{@NamedTuple{name::String, items::Int, graph::Bool}}
 
 The partitions of this project, sorted by name, each with the number of items appended to it.
 That number counts items that are not indexed yet and items deleted since, because both are
 still members of the partition. An item in several partitions is counted in each. Raises
 `InvalidOption` on a project without a partition field.
+
+`graph` says whether the partition has its own graph (PLAN.md §5.10). It is `true` only for a
+partition of a dense `SearchGraph` project with at least `partition_graph_min` indexed members.
+A text partition has posting lists, and `graph` is `false`.
 """
 function partitions(handle::EmbeddedEngine)
     parts = _partition_store(handle, :partitions)
     names = Persistence.partition_names(parts)
     counts = Persistence.partition_counts(parts)
-    sort!([(name=n, items=c) for (n, c) in zip(names, counts)]; by=p -> p.name)
+    engine = handle.engine
+    graphs = engine isa IndexEngine.DenseEngine ? IndexEngine.partition_graphs(engine) : Dict{UInt32,Bool}()
+    sort!([(name=n, items=c, graph=get(graphs, UInt32(i), false)) for (i, (n, c)) in enumerate(zip(names, counts))];
+          by=p -> p.name)
 end
 
 """
-    declare_partition!(handle::EmbeddedEngine, field::AbstractString) -> Vector{@NamedTuple{name::String, items::Int}}
+    declare_partition!(handle::EmbeddedEngine, field::AbstractString; partition_graph_min=nothing)
+        -> Vector{@NamedTuple{name::String, items::Int, graph::Bool}}
 
-Partitions an existing text project by the `meta` field `field`, as `create_project`'s
-`partition_by` does for a new one (PLAN.md §5.9), and returns [`partitions`](@ref).
+Partitions an existing text or dense project by the `meta` field `field`, as `create_project`'s
+`partition_by` does for a new one (PLAN.md §5.9 and §5.10), and returns [`partitions`](@ref).
 
-Reads the `meta` of every item once, and builds the partition lists by splitting the global
-lists already on disk. It does not read or tokenize any text. Items appended but not indexed
-yet get their partition lists from the next [`index!`](@ref index!(::EmbeddedEngine)) call. It
-holds the engine's write lock while it runs, so searches wait for it.
+On a text project, it reads the `meta` of every item once, and builds the partition lists by
+splitting the global lists already on disk. It does not read or tokenize any text. Items
+appended but not indexed yet get their partition lists from the next
+[`index!`](@ref index!(::EmbeddedEngine)) call. It holds the engine's write lock while it runs,
+so searches wait for it.
+
+On a dense project, it reads the `meta` of every item once, and builds the graph of each
+partition with at least `partition_graph_min` indexed members (by default
+[`DEFAULT_PARTITION_GRAPH_MIN`](@ref)). Building a graph inserts its members again, so this
+costs about as much as indexing those members once. Items appended but not indexed yet join
+their partitions in the next `index!`.
 
 Every value of the field is checked as [`append_items!`](@ref) checks it, and the first bad one
 raises `PayloadMismatch` before the declaration is recorded. The declaration is recorded last,
 so an interrupted call leaves the project unpartitioned, and calling it again starts over.
 
-Raises `InvalidOption` on a project that is not a text project or that already has a partition
-field, and `UnsupportedOperation` on a read-only handle.
+Raises `InvalidOption` on a sparse project, on a project that already has a partition field,
+and for a `partition_graph_min` on a project that is not dense. Raises `UnsupportedOperation` on
+a read-only handle.
 """
-function declare_partition!(handle::EmbeddedEngine, field::AbstractString)
+function declare_partition!(handle::EmbeddedEngine, field::AbstractString; partition_graph_min::Union{Nothing,Integer}=nothing)
     handle.read_only && unsupported_operation(:declare_partition!, "this project is open read-only")
     engine = handle.engine
-    IndexEngine.payload_kind(engine) === :text ||
-        invalid_option(:partition_by, "only a text project can be partitioned; this one indexes " *
-              "$(IndexEngine.payload_kind(engine)) vectors")
+    kind = IndexEngine.payload_kind(engine)
+    kind === :sparse &&
+        invalid_option(:partition_by, "a text or a dense project can be partitioned; a sparse project cannot " *
+              "be partitioned yet (PLAN.md §5.10)")
     current = partition_field(handle)
     current === nothing ||
         invalid_option(:partition_by, "this project is already partitioned by $(repr(current)); a project has " *
               "one partition field, and it cannot be changed")
     _check_partition_field(handle.meta_schema, field)
+    graph_min = _check_partition_graph_min(kind, field, partition_graph_min)
     handle.wrote[] = true
     parts = Persistence.open_partition_store(handle.project.db, String(field), handle.postings_cache...)
+    kind === :dense && return _declare_dense_partition!(handle, parts, String(field), graph_min)
     IndexEngine.write_lock(engine.lock) do
         n = length(engine.staged)
         values = Vector{Vector{String}}(undef, n)
@@ -1435,6 +1613,39 @@ it. Bounds the memory of the batch; the value only changes how many writes the s
 const DECLARE_PARTITION_FLUSH_IDS = 4_000_000
 
 """
+    _declare_dense_partition!(handle, parts, field, graph_min) -> Vector{NamedTuple}
+
+The dense branch of [`declare_partition!`](@ref): records the partitions of every item, adds
+the indexed ones to their partitions, and builds the graphs of the partitions that reach
+`graph_min`. The field is recorded last, so an interrupted call leaves the project
+unpartitioned on the next open.
+"""
+function _declare_dense_partition!(handle::EmbeddedEngine, parts::Persistence.PartitionStore, field::String, graph_min::Int)
+    engine = handle.engine
+    n = _current_size(engine)
+    values = Vector{Vector{String}}(undef, n)
+    for _id in 1:n
+        meta = get_meta(handle.project, _id; lazy=false)
+        values[_id] = meta === nothing ? String[] : _partition_values(field, meta)
+    end
+    Persistence.clear_partitions!(parts)
+    Persistence.save_fields!(handle.store, (partition_graph_len=Dict{UInt32,Int}(),
+                                            partition_search_state=Dict{UInt32,NamedTuple}(),
+                                            partition_opt_beamsearch=Dict{UInt32,IndexEngine.OptBeamSearch}(),
+                                            partition_graph_min=graph_min))
+    members = Persistence.assign_partitions!(parts, 1, values)
+    handle.partitions[] = parts
+    _enable_dense_partitions!(handle, graph_min, Dict{UInt32,Int}())
+    IndexEngine.add_partition_members!(engine, 1, members[1:length(engine.backend.index)])
+    if engine isa IndexEngine.DenseEngine{IndexEngine.GraphBackend}
+        IndexEngine.index_partition_graphs!(engine)
+        _save_partition_state!(handle)
+    end
+    Persistence.save_field!(handle.store, :partition_by, field)
+    return partitions(handle)
+end
+
+"""
     _partition_store(handle, operation::Symbol) -> Persistence.PartitionStore
 
 The project's partitions, or `InvalidOption` naming `operation` when it declares no partition
@@ -1457,6 +1668,18 @@ partition's index around. Raises `UnknownPartition` for a name the table does no
 """
 function _partition_adj(handle::EmbeddedEngine, name::AbstractString)
     parts = _partition_store(handle, :partition)
+    number = _partition_number(handle, name)
+    return vocsize -> Persistence.PartitionPostings(parts, number, vocsize)
+end
+
+"""
+    _partition_number(handle, name) -> UInt32
+
+The number of partition `name`. Raises `UnknownPartition` for a name the table does not hold,
+with the closest names, and `InvalidOption` on a project without a partition field.
+"""
+function _partition_number(handle::EmbeddedEngine, name::AbstractString)
+    parts = _partition_store(handle, :partition)
     number = Persistence.partition_number(parts, name)
     if number === nothing
         names = Persistence.partition_names(parts)
@@ -1465,7 +1688,7 @@ function _partition_adj(handle::EmbeddedEngine, name::AbstractString)
               "$(repr(parts.field)) ($(length(names)) partitions)" *
               (isempty(nearest) ? "" : "; the closest names are $(join(repr.(nearest), ", "))"))
     end
-    return vocsize -> Persistence.PartitionPostings(parts, number, vocsize)
+    return number
 end
 
 """
@@ -1852,7 +2075,7 @@ end
 """
     calibrate!(handle::EmbeddedEngine; levels=IndexEngine.DEFAULT_MINRECALL_LEVELS, numqueries=64,
                ksearch=10, queries=nothing, tradeoff=1.5, transition=(-1, 1), nboot=1000,
-               confidence=0.95, rng=Random.default_rng()) -> Vector{CalibrationLevel}
+               confidence=0.95, rng=Random.default_rng(), partition=nothing) -> Vector{CalibrationLevel}
 
 Tunes the project's `BeamSearch` for each recall level in `levels`, and measures the recall
 each chosen configuration reaches, with an interval (see `IndexEngine.calibrate!` for the goal,
@@ -1877,11 +2100,26 @@ recall from 0.951 to 0.993. None of the 7 builds ended below its target.
 The table of configurations, one per level, is persisted at once, so that `search`'s
 `minrecall` keyword finds it after a `close_project!` and `open_project`. The measurements are
 returned and not persisted.
+
+`partition="name"` calibrates the graph of one partition of a dense project (PLAN.md §5.10),
+and keeps its levels apart from the global ones. A partition is calibrated only by this call:
+a search with `minrecall` on an uncalibrated partition raises `NotTrained`. A partition without
+its own graph raises `InvalidOption`, because an exact scan has nothing to calibrate.
 """
 function calibrate!(handle::EmbeddedEngine; levels=IndexEngine.DEFAULT_MINRECALL_LEVELS, numqueries::Int=64,
                     ksearch::Int=10, queries=nothing, tradeoff::Real=1.5, transition=(-1, 1),
-                    nboot::Int=1000, confidence::Real=0.95, rng::AbstractRNG=Random.default_rng())
+                    nboot::Int=1000, confidence::Real=0.95, rng::AbstractRNG=Random.default_rng(),
+                    partition::Union{Nothing,AbstractString}=nothing)
     handle.wrote[] = true
+    if partition !== nothing
+        handle.engine isa IndexEngine.DenseEngine{IndexEngine.GraphBackend} ||
+            invalid_option(:partition, "calibrate! with a partition needs a dense project on a SearchGraph backend")
+        number = _partition_number(handle, partition)
+        report = IndexEngine.calibrate!(handle.engine; levels, numqueries, ksearch, queries, tradeoff,
+                                        transition, nboot, confidence, rng, partition=number)
+        _save_partition_state!(handle)
+        return report
+    end
     report = IndexEngine.calibrate!(handle.engine; levels, numqueries, ksearch, queries, tradeoff,
                                     transition, nboot, confidence, rng)
     Persistence.save_field!(handle.store, :opt_beamsearch, handle.engine.backend.opt_beamsearch)

@@ -18,6 +18,7 @@ export InvertedIndexStore, INVFILE_POSTINGS_CF, INVFILE_DOCVECS_CF, open_inverte
        write_invfile_block!, load_invfile_docvecs, docvec_nnz, DocVec, WeightedDocVec, BagDocVec
 export LazyPostings, trim_postings_cache!, invalidate_postings!
 export PartitionStore, PartitionPostings, PARTITION_TABLE_CF, PARTITION_MEMBERS_CF, PARTITION_POSTINGS_CF,
+       PARTITION_GRAPH_CF, save_partition_neighbors!, load_partition_neighbors, load_partition_membership,
        open_partition_store, assign_partitions!, partition_number, partition_names, partition_counts,
        clear_partitions!, split_partition_postings!, trim_partition_cache!
 export DumpRecord, write_dump_records, read_dump_records
@@ -808,6 +809,16 @@ const PARTITION_MEMBERS_CF = "partition_members"
 const PARTITION_POSTINGS_CF = "partition_postings"
 
 """
+    PARTITION_GRAPH_CF
+
+The direct neighbors of the graphs of the partitions of a dense project (PLAN.md §5.10). The
+key is `[partition number][local id]`, both big-endian, and the value is the ids of the direct
+neighbors, local to the partition, encoded as in [`PARTITION_POSTINGS_CF`](@ref). The reverse
+links are not stored, as for the global graph ([`ADJACENCY_CF`](@ref)).
+"""
+const PARTITION_GRAPH_CF = "partition_graph"
+
+"""
     PartitionStore
 
 The partitions of one text project: its three column families, the partition table held in
@@ -827,6 +838,8 @@ mutable struct PartitionStore
     table::RocksDB.ColumnFamily
     members::RocksDB.ColumnFamily
     postings::RocksDB.ColumnFamily
+    # `nothing` on a project opened read-only that was written before this column family existed.
+    graph::Union{Nothing,RocksDB.ColumnFamily}
     field::String
     numbers::Dict{String,UInt32}
     names::Vector{String}
@@ -871,7 +884,7 @@ function open_partition_store(db::RocksDB.DB, field::String, maxlists::Integer, 
         corrupted_storage("the partition numbers in $(PARTITION_TABLE_CF) are not 1 to $(length(rows))")
     names = String[r[2] for r in rows]
     PartitionStore(db, table, db.column_families[PARTITION_MEMBERS_CF], db.column_families[PARTITION_POSTINGS_CF],
-                   field, Dict{String,UInt32}(n => UInt32(i) for (i, n) in enumerate(names)), names,
+                   get(db.column_families, PARTITION_GRAPH_CF, nothing), field, Dict{String,UInt32}(n => UInt32(i) for (i, n) in enumerate(names)), names,
                    Int[r[3] for r in rows], Dict{UInt64,Vector{UInt32}}(), Dict{UInt64,Int}(),
                    Threads.ReentrantLock(), Int(maxlists), Int(baselists))
 end
@@ -950,6 +963,60 @@ function _load_members(store::PartitionStore, ids::AbstractUnitRange)
         raw = RocksDB.get(store.db, _be_key(id); cf=store.members)
         raw === nothing ? UInt32[] : _decode_ids(raw)
     end
+end
+
+"""
+    load_partition_membership(store::PartitionStore, maxid::Integer) -> Dict{UInt32,Vector{UInt32}}
+
+The members of each partition among the items `1:maxid`, by partition number, each list
+ascending. Reads [`PARTITION_MEMBERS_CF`](@ref) once, in key order, which is `_id` order because
+the keys are big-endian. Used to rebuild the partitions of a dense project when it is opened.
+"""
+function load_partition_membership(store::PartitionStore, maxid::Integer)
+    out = Dict{UInt32,Vector{UInt32}}()
+    for (k, v) in RocksDB.DBIterator(store.db; cf=store.members)
+        id = _decode_be_key(k)
+        id > maxid && break
+        for num in _decode_ids(copy(v))
+            push!(get!(Vector{UInt32}, out, num), UInt32(id))
+        end
+    end
+    return out
+end
+
+_partition_graph_key(number::Integer, i::Integer) = vcat(_be_key(number), _be_key(i))
+
+function _graph_cf(store::PartitionStore)
+    store.graph === nothing &&
+        unsupported_operation(:partition_graph, "this project was written before partition graphs existed and is open " *
+              "read-only, so it has no $(PARTITION_GRAPH_CF) column family")
+    store.graph
+end
+
+"""
+    save_partition_neighbors!(store::PartitionStore, number::Integer, sp::Integer, neighbors::AbstractVector) -> Nothing
+
+Writes the direct neighbors of the local ids `sp`, `sp + 1`, ... of the graph of partition
+`number` (`neighbors[i]` for local id `sp + i - 1`) in one `WriteBatch`.
+"""
+function save_partition_neighbors!(store::PartitionStore, number::Integer, sp::Integer, neighbors::AbstractVector)
+    cf = _graph_cf(store)
+    b = RocksDB.WriteBatch()
+    for (i, nn) in enumerate(neighbors)
+        RocksDB.put!(b, _partition_graph_key(number, sp + i - 1), _encode_ids(nn); cf)
+    end
+    RocksDB.write!(store.db, b)
+    return nothing
+end
+
+"""
+    load_partition_neighbors(store::PartitionStore, number::Integer, i::Integer) -> Vector{UInt32}
+
+The direct neighbors of local id `i` of the graph of partition `number`, or an empty vector.
+"""
+function load_partition_neighbors(store::PartitionStore, number::Integer, i::Integer)
+    raw = RocksDB.get(store.db, _partition_graph_key(number, i); cf=_graph_cf(store))
+    raw === nothing ? UInt32[] : _decode_ids(raw)
 end
 
 """
@@ -1035,7 +1102,8 @@ before declaring a partition field, so that what an interrupted declaration left
 mixed with the new one.
 """
 function clear_partitions!(store::PartitionStore)
-    for cf in (store.table, store.members, store.postings)
+    for cf in (store.table, store.members, store.postings, store.graph)
+        cf === nothing && continue
         b = RocksDB.WriteBatch()
         n = 0
         for (k, _) in RocksDB.DBIterator(store.db; cf)

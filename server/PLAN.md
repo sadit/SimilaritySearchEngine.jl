@@ -266,17 +266,36 @@ of it exist.
     - A search with `minrecall` is not affected: it uses `opt_beamsearch`, which is saved.
     - The fix saves both as the engine fields `:beamsearch` and `:hints` after `index!` and
       after `calibrate!`, and `restore_engine` sets them on the rebuilt graph. On 4,000 random
-      vectors of 16 dimensions, 20 queries then took the same distance evaluations and returned
-      the same results before and after a reopen. A project saved before the fix has neither
+      vectors of 16 dimensions, 20 queries then returned the same results before and after a
+      reopen, and 19 of them took the same distance evaluations. The other took 394 instead of
+      384: the reverse links are rebuilt in one pass on open, so the order of a vertex's
+      neighbors can differ from the graph that `index!` built in batches. A project saved before the fix has neither
       field until its next `index!` with new items or its next `calibrate!`.
     - The near-duplicate members of a graph (`index.members`, SimilaritySearch 1.6) are not
       saved either. The engine does not set `neardup`, so its graphs have no members.
     - The partition graphs of §5.10 need the same two fields, one value per partition. This
       was phase 0 of §5.10.
-14. **Partitioned dense indexes (§5.10)** — designed on 2026-11-18, not implemented. A dense
-    project declares a partition field as a text project does. A small partition is searched
-    with an exact scan of its members. A partition with at least `partition_graph_min`
-    members has its own `SearchGraph` over the same vectors.
+14. **Partitioned dense indexes (§5.10)** — designed on 2026-11-18; phase 1 (the engine)
+    implemented on 2026-11-18. A dense project declares a partition field as a text project
+    does. A small partition is searched with an exact scan of its members. A partition with at
+    least `partition_graph_min` members has its own `SearchGraph` over the same vectors.
+
+    What differs from §5.10, or was decided while implementing phase 1:
+    - `partitions(handle)` returns `graph` for every project. It is `false` for a text
+      partition, so the entries have one type.
+    - The context of a partition graph has no status reporter. A project with many partitions
+      would print one line per range of each graph.
+    - A partition whose graph holds fewer members than its view, after a process stopped
+      between the global graph and the partition graphs, is searched over the members its
+      graph holds until the next `index!`. A partition that has no graph yet is scanned.
+    - The exact scan builds an `ExhaustiveSearch` over the view for each query. It is a struct
+      with two fields, and building it reads nothing.
+    - A partition graph is not equal, query by query, before and after a reopen, and neither
+      is the global graph (item 13). The tests compare the results of 80% of the queries.
+    - Not done yet: phases 2 (server, CLI, Python client) and 3 (documentation of the
+      server and the measurement on real embeddings). Until phase 2, `POST /api/v1/datasets`
+      creates a dense dataset with `partition_by`, and no route searches one of its
+      partitions.
 
 The stemmer registry of §5.3 and §9's phase 5 is not on this list: it was discarded. Stemming
 was the way this specification proposed to make a query match a word it does not equal. That
@@ -989,7 +1008,8 @@ ReposMx moves to the engine following `docs/plan-motor.md` of ReposMx. With this
 
 ### 5.10. Partitioned Dense Indexes (design, 2026-11-18)
 
-Status: designed on 2026-11-18, not implemented. The decisions in this section were made with
+Status: designed on 2026-11-18. Phase 1 (the engine) implemented on 2026-11-18; item 14 of §0
+lists what differs from this design. The decisions in this section were made with
 the author on that date.
 
 #### The use case

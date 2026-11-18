@@ -85,9 +85,13 @@ using JSON3
         @test JSON3.read(String(resp.body)).kind == "InvalidOption"
         @test failed(() -> HTTP.get("$base_url/datasets/plain_ds/partitions")).status == 400
 
-        # `partition_by` on a dense dataset is refused at creation.
+        # A dense dataset accepts `partition_by` since PLAN.md §5.10. A sparse one is refused
+        # at creation.
+        @test HTTP.post("$base_url/datasets", [], JSON3.write(Dict(
+            "id" => "dense_part", "index_type" => "searchgraph", "partition_by" => "repo"))).status == 201
+        @test JSON3.read(String(HTTP.get("$base_url/datasets/dense_part").body)).partition_by == "repo"
         resp = failed(() -> HTTP.post("$base_url/datasets", [], JSON3.write(Dict(
-            "id" => "dense_part", "index_type" => "searchgraph", "partition_by" => "repo"))))
+            "id" => "sparse_part", "index_type" => "sparse_invfile", "dimension" => 8, "partition_by" => "repo"))))
         @test resp.status == 400
     end
 end

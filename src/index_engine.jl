@@ -653,6 +653,51 @@ returns -- never during one.
 maybe_trim_cache!(adj) = nothing
 
 """
+    DensePartition
+
+One partition of a dense project (PLAN.md §5.10): the `_id`s of its members, and the graph that
+searches them once there are enough of them.
+
+- `ids`: the `_id`s of the members, ascending. It is the `map` of the `SubDatabase` that the
+  graph and the exact scan read, so appending to it adds members to both. On a `SearchGraph`
+  project it holds only indexed items.
+- `graph`: a `SearchGraph` over that `SubDatabase`, or `nothing` while the partition has fewer
+  members than the threshold. Its ids are positions in `ids`.
+- `ctx`: the context that inserts into `graph`, with the observer that saves its ranges.
+- `opt_beamsearch`: the levels [`calibrate!`](@ref) tuned for this graph. A search never fills
+  it.
+"""
+mutable struct DensePartition
+    ids::Vector{UInt32}
+    graph::Union{Nothing,SearchGraph}
+    ctx::Union{Nothing,SearchGraphContext}
+    opt_beamsearch::OptBeamSearch
+end
+
+"""
+    DensePartitions
+
+The partitions of a dense project (PLAN.md §5.10), by partition number.
+
+- `graph_min`: the number of members from which a partition has its own graph. `typemax(Int)`
+  on an exact project, which never builds one.
+- `on_change`: `number -> (index, sp, ep) -> nothing`, the observer that saves a range of the
+  graph of partition `number`, or `nothing`.
+- `minrecall`: the target the context of each graph tunes its `BeamSearch` toward while it
+  grows, the one of the global graph.
+- `maxbatches`: the batch cap of the context of each graph, the one of the global graph.
+- `scan_pool`: the contexts of the exact scans of the partitions without a graph.
+"""
+mutable struct DensePartitions
+    graph_min::Int
+    parts::Dict{UInt32,DensePartition}
+    on_change::Union{Nothing,Function}
+    minrecall::Union{Nothing,Float32}
+    maxbatches::Union{Nothing,Int}
+    scan_pool::ContextPool
+end
+
+"""
     DenseEngine{B}
 
 A project of dense vectors: it takes `DenseItem`s, and `B` says which
@@ -675,13 +720,21 @@ being defined-but-inert on the other.
 - `deleted_ids::Set{UInt32}`: logically deleted document ids -- `UInt32` across every engine
   kind, matching the id type search results come back as.
 - `lock::ReadWriteLock`: see its docstring for why a reader/writer lock and not a mutex.
+- `partitions::Union{Nothing,DensePartitions}`: the partitions of the project (PLAN.md §5.10),
+  or `nothing` when it declares no partition field.
 """
 mutable struct DenseEngine{B} <: AbstractSearchEngine
     backend::B
     search_ctx_pool::ContextPool
     deleted_ids::Set{UInt32}
     lock::ReadWriteLock
+    # The partitions of the project (PLAN.md §5.10), or `nothing` when it declares no partition
+    # field. Set by `enable_partitions!`.
+    partitions::Union{Nothing,DensePartitions}
 end
+
+DenseEngine(backend::B, search_ctx_pool::ContextPool, deleted_ids::Set{UInt32}, lock::ReadWriteLock) where {B} =
+    DenseEngine{B}(backend, search_ctx_pool, deleted_ids, lock, nothing)
 
 """
     SparseEngine
@@ -850,6 +903,18 @@ function build_searchgraph(distance, vector_blocks, load_neighbors::Function, gr
     for block in vector_blocks
         apply_searchgraph_vectors!(index, block)
     end
+    return restore_adjacency!(index, load_neighbors, graph_len)
+end
+
+"""
+    restore_adjacency!(index::SearchGraph, load_neighbors::Function, graph_len::Integer) -> SearchGraph
+
+Restores the graph structure of `index`, whose database already holds its objects: the saved
+direct neighbors of objects `1:graph_len` (`load_neighbors(i)`), then the reverse links, once.
+Sets `index.len[]` to `graph_len`. Used by [`build_searchgraph`](@ref) for the global graph and
+by [`restore_partition!`](@ref) for the graph of a partition.
+"""
+function restore_adjacency!(index::SearchGraph, load_neighbors::Function, graph_len::Integer)
     if graph_len > 0
         resize!(index.adj, graph_len)
         @BATCHES getminbatch(Int(graph_len)) for i in 1:graph_len
@@ -1770,10 +1835,14 @@ the interval then describes the tuning queries, and it is optimistic for other q
 - `nboot`: the number of resamples behind each interval; at least 2.
 - `confidence`: the level of each interval, strictly between 0 and 1.
 - `rng`: draws the query samples and the resamples, so that a run can be repeated.
+- `partition`: the number of a partition with a graph (PLAN.md §5.10). Calibrates that graph
+  and stores the levels in its own table instead of the global one. Raises `InvalidOption`
+  for a partition without a graph.
 """
 function calibrate!(engine::DenseEngine{GraphBackend}; levels=DEFAULT_MINRECALL_LEVELS, numqueries::Int=64,
                     ksearch::Int=10, queries=nothing, tradeoff::Real=1.5, transition=(-1, 1),
-                    nboot::Int=1000, confidence::Real=0.95, rng::AbstractRNG=default_rng())
+                    nboot::Int=1000, confidence::Real=0.95, rng::AbstractRNG=default_rng(),
+                    partition::Union{Nothing,Integer}=nothing)
     tradeoff > 1 && isfinite(tradeoff) ||
         invalid_option(:tradeoff, "tradeoff must be a finite number above 1; got $tradeoff")
     length(transition) == 2 && all(isfinite, transition) && transition[1] <= transition[2] ||
@@ -1784,7 +1853,9 @@ function calibrate!(engine::DenseEngine{GraphBackend}; levels=DEFAULT_MINRECALL_
     target_levels = levels isa Real ? Float32[levels] : Float32.(levels)
 
     write_lock(engine.lock) do
-        index, ctx = engine.backend.index, engine.backend.ctx
+        index, ctx, table = partition === nothing ?
+            (engine.backend.index, engine.backend.ctx, engine.backend.opt_beamsearch) :
+            _partition_graph_parts(engine, UInt32(partition))
         tuning, measuring, heldout = _calibration_queries(index, queries, numqueries, rng)
         gold = _calibration_gold(index, ctx, measuring, ksearch)
         map(target_levels) do r
@@ -1796,7 +1867,7 @@ function calibrate!(engine::DenseEngine{GraphBackend}; levels=DEFAULT_MINRECALL_
                             queries_identifiers=tuning.internal ? tuning.ids : nothing,
                             numqueries=length(tuning.db), ksearch)
             bs = index.algo[]
-            engine.backend.opt_beamsearch[r] = bs
+            table[r] = bs
             perquery, evals = _calibration_recalls(index, ctx, bs, measuring, gold, ksearch)
             b = bootstrapscore(perquery; nboot, level=confidence, rng)
             CalibrationLevel(r, bs, b.mean, b.std, b.lo, b.hi, b.level, length(perquery), evals, heldout)
@@ -1905,12 +1976,17 @@ sits below all of them.
 """
 function _nearest_beamsearch(engine::DenseEngine{GraphBackend}, minrecall::Real)
     isempty(engine.backend.opt_beamsearch) && calibrate!(engine)
+    return _nearest_level(engine.backend.opt_beamsearch, minrecall)
+end
+
+"The level of `table` for `minrecall`, chosen as [`_nearest_beamsearch`](@ref) describes. `table` is not empty."
+function _nearest_level(table::OptBeamSearch, minrecall::Real)
     target = Float32(minrecall)
-    haskey(engine.backend.opt_beamsearch, target) && return engine.backend.opt_beamsearch[target]
-    levels = keys(engine.backend.opt_beamsearch)
+    haskey(table, target) && return table[target]
+    levels = keys(table)
     below = Iterators.filter(<=(target), levels)
     key = isempty(below) ? minimum(levels) : maximum(below)
-    return engine.backend.opt_beamsearch[key]
+    return table[key]
 end
 
 """
@@ -1973,6 +2049,32 @@ function index!(engine::DenseEngine{GraphBackend})
         SimilaritySearch.index!(engine.backend.index, engine.backend.ctx)
     end
     return engine
+end
+
+"""
+    index!(engine::DenseEngine{GraphBackend}, partition_members::Function) -> Vector{UInt32}
+
+[`index!`](@ref index!(::DenseEngine{GraphBackend})) for a partitioned project (PLAN.md §5.10).
+After the global graph indexes its backlog, `partition_members(ids)` returns the partition
+numbers of each newly indexed id, and the ids join their partitions. Then every partition graph
+indexes its new members, and every partition that reached the threshold gets its graph. All of
+it runs under one write lock, so no search sees a partition between the two steps.
+
+Returns the numbers of the partitions whose graph changed.
+"""
+function index!(engine::DenseEngine{GraphBackend}, partition_members::Function)
+    write_lock(engine.lock) do
+        index = engine.backend.index
+        n = length(database(index))
+        n == 0 && nothing_staged("DenseEngine{GraphBackend} has nothing staged yet -- add_item!/append_items! at least one vector before calling index!")
+        before = length(index)
+        SimilaritySearch.index!(index, engine.backend.ctx)
+        after = length(index)
+        parts = engine.partitions
+        parts === nothing && return UInt32[]
+        after > before && _add_members!(parts, before + 1, partition_members(before+1:after))
+        return _index_partition_graphs!(engine)
+    end
 end
 
 index!(engine::DenseEngine{<:ExactBackend}) = engine
@@ -2413,5 +2515,7 @@ function searchbatch_live(engine::Union{DenseEngine,SparseEngine}, Q::Similarity
         SimilaritySearch.searchbatch(engine.backend.index, engine.backend.ctx, Q, k)
     end
 end
+
+include("dense_partitions.jl")
 
 end # module
