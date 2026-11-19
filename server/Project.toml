@@ -50,7 +50,13 @@ path = "src/apps/similarity-search-ctl.jl"
 path = "src/apps/similarity-search-server.jl"
 
 [extras]
+SimilaritySearchClient = "75d86282-de3d-4ee9-a9ff-97bf3abee96b"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
+# The Julia client (julia/) is tested against this server by this suite, so it is a test
+# dependency, taken from this repository. The client does not depend on the server.
+[sources]
+SimilaritySearchClient = {path = "julia"}
+
 [targets]
-test = ["Test"]
+test = ["Test", "SimilaritySearchClient"]

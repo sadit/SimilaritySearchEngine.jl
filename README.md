@@ -7,12 +7,13 @@
 
 `SimilaritySearchEngine.jl` is an embedded similarity search engine for Julia. It provides transactional, persistent storage and nearest-neighbor search for collections of dense vectors, sparse representations, and full-text documents. It integrates [SimilaritySearch.jl](https://github.com/sadit/SimilaritySearch.jl), [TextSearch.jl](https://github.com/sadit/TextSearch.jl), and [RocksDB.jl](https://github.com/sadit/RocksDB.jl) into a unified, in-process engine.
 
-This repository holds **two packages**:
+This repository holds **three packages**:
 
 | | what it is | where |
 |---|---|---|
 | `SimilaritySearchEngine` | the embedded engine: a library, no HTTP, no CLI, no daemon | repository root |
 | `SimilaritySearchServer` | REST API, CLIs, job queue, and three installable apps over that engine | [`server/`](server/) |
+| `SimilaritySearchClient` | a Julia client of the REST API, with the engine's function names; depends on HTTP.jl and JSON3 only | [`server/julia/`](server/julia/) |
 
 They are developed together and tested in one CI run, with separate dependency sets: loading the server's tree costs 1.32 s and 28 transitive packages, which a caller embedding the engine never pays. [`DEVELOPMENT_STRATEGY.md`](DEVELOPMENT_STRATEGY.md) explains why the line is drawn there and where the error boundary lives.
 
@@ -104,9 +105,11 @@ repository, and the engine and the service layer are two halves of one thing any
   - [Getting Started Tutorial](manual/tutorials/getting-started.qmd): Step-by-step walkthrough covering dense embeddings, sparse indexing, BM25 text retrieval, filtering, calibration, and whole-dataset operations.
   - [Multilingual Case Study](manual/tutorials/paragraph-search.qmd): Real-world evaluation over Project Gutenberg and Wikipedia paragraph corpora.
   - [Server Manual](manual/server/manual.qmd) and [Server Tutorial](manual/server/tutorial.qmd): the REST API, the job queue, the two command lines, and the error mapping.
+  - [Julia Client](manual/server/julia-client.qmd): the engine's functions over the REST API of a remote server.
 - **API Reference**, generated with Documenter.jl from the docstrings of both packages:
-  [Engine API](https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html) and
-  [Server API](https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html).
+  [Engine API](https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html),
+  [Server API](https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html) and
+  [Julia client API](https://sadit.github.io/SimilaritySearchEngine.jl/api/client.html).
 
 `publish-docs.sh` builds the reference and publishes it together with the pre-rendered manual.
 
@@ -122,7 +125,7 @@ Pkg.test()                          # light   -- engine 264 assertions, 46s
 Pkg.test(test_args=["full"])        # full    -- engine 310 assertions, 1m30
 ```
 
-The split follows the clock, not importance. The engine's full level adds the whole-dataset algorithms, the concurrency stress test, and the text testsets that fit a linguistic profile from a corpus -- everything they cover is covered in the light run too, at a size that runs in about a second each. The server's light level (50 assertions, 5 s) covers the boundary with the engine -- wire names to engine types, engine errors to status and exit codes, wire items to engine items -- without starting a server or spawning a subprocess; its full level (585 assertions, 19 min) adds the HTTP, job and CLI end-to-end suites. `SSE_TEST_LEVEL=full` selects the full level from CI.
+The split follows the clock, not importance. The engine's full level adds the whole-dataset algorithms, the concurrency stress test, and the text testsets that fit a linguistic profile from a corpus -- everything they cover is covered in the light run too, at a size that runs in about a second each. The server's light level (210 assertions, 16 s, measured on 2026-11-19) covers the boundary with the engine -- wire names to engine types, engine errors to status and exit codes, wire items to engine items -- without starting a server or spawning a subprocess; its full level (967 assertions, 32 min) adds the HTTP, job, CLI and Julia client end-to-end suites. `SSE_TEST_LEVEL=full` selects the full level from CI.
 
 A skipped testset is named at the end of a light run: a light run that looks identical to a full one is how a suite quietly stops testing something.
 

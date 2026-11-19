@@ -167,6 +167,10 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <a class="dropdown-item" href="../server/tutorial.html">
  <span class="dropdown-text">Tutorial</span></a>
   </li>  
+        <li>
+    <a class="dropdown-item" href="../server/julia-client.html">
+ <span class="dropdown-text">Julia client</span></a>
+  </li>  
     </ul>
   </li>
 </ul>
@@ -183,6 +187,10 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
         <li>
     <a class="dropdown-item" href="https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html">
  <span class="dropdown-text">Server API</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="https://sadit.github.io/SimilaritySearchEngine.jl/api/client.html">
+ <span class="dropdown-text">Julia client API</span></a>
   </li>  
     </ul>
   </li>
@@ -297,6 +305,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </tr>
 </tbody>
 </table>
+<p>Two clients of the HTTP API are in this directory and are separate packages: <code>python/</code>, for Python, and <code>julia/</code>, the <a href="../server/julia-client.html">Julia client</a>, whose functions have the names of the engine’s functions.</p>
 <p>The schema, the persistence layer, the index engine and project management are not part of this package. They are <code>SimilaritySearchEngine.Schema</code>, <code>.Persistence</code>, <code>.IndexEngine</code> and <code>.Project</code>.</p>
 </section>
 <section id="how-a-dataset-is-held" class="level2">
@@ -659,8 +668,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h2 class="anchored" data-anchor-id="tests">7. Tests</h2>
 <p>Two levels, selected with <code>test_args=["full"]</code> or <code>SSE_TEST_LEVEL=full</code>:</p>
 <ul>
-<li><strong>light</strong> (50 assertions, approximately 5 s): the interface with the engine. It verifies the mapping from the names used in requests to engine types, from engine errors to status codes and exit codes, and from the items of a request to engine items. No server is started and no subprocess is created. This level detects a change in the engine on the day it is made.</li>
-<li><strong>full</strong> (585 assertions, approximately 19 minutes): the end-to-end suites for the API, the jobs and the command lines. They start servers and execute subprocesses. Near the end, the run produces no output for about ten minutes, while the command-line suite waits for jobs to expire. The run has not stopped.</li>
+<li><strong>light</strong> (210 assertions, approximately 16 s, measured on 2026-11-19): the interface with the engine. It verifies the mapping from the names used in requests to engine types, from engine errors to status codes and exit codes, and from the items of a request to engine items. It also verifies that the Julia client has every error type of the engine. No server is started and no subprocess is created. This level detects a change in the engine on the day it is made.</li>
+<li><strong>full</strong> (967 assertions, approximately 32 minutes, measured on 2026-11-19): the end-to-end suites for the API, the jobs, the command lines and the Julia client. They start servers and execute subprocesses. Near the end, the run produces no output for about ten minutes, while the command-line suite waits for jobs to expire. The run has not stopped.</li>
 </ul>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb13"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">--project</span><span class="op">=</span>server <span class="at">-e</span> <span class="st">'using Pkg; Pkg.develop(path="."); Pkg.test()'</span></span>
 <span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">--project</span><span class="op">=</span>server <span class="at">-e</span> <span class="st">'using Pkg; Pkg.test(test_args=["full"])'</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -670,6 +679,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <ul>
 <li>The <a href="../server/tutorial.html">server tutorial</a>: the same interface in use, in eight steps. A dataset is created, indexed and queried, and a job is executed.</li>
 <li>The <a href="../architecture.html">architecture of the engine</a>: the storage layout, the engine hierarchy, the concurrency model, and the typed errors this package maps.</li>
+<li>The <a href="../server/julia-client.html">Julia client</a>: the engine’s functions over the HTTP API of a remote server.</li>
 <li>The reference, generated from the docstrings of both packages: <a href="https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html">Server API</a> and <a href="https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html">Engine API</a>.</li>
 </ul>
 

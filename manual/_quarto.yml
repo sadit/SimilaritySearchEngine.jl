@@ -33,6 +33,8 @@ website:
             text: "Manual"
           - href: server/tutorial.qmd
             text: "Tutorial"
+          - href: server/julia-client.qmd
+            text: "Julia client"
     # Absolute URLs rather than relative ones: this navbar is shared by pages at two different
     # depths, and `quarto preview` serves them off a local port where no relative path could
     # reach the generated reference anyway.
@@ -43,6 +45,8 @@ website:
             text: "Engine API"
           - href: https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html
             text: "Server API"
+          - href: https://sadit.github.io/SimilaritySearchEngine.jl/api/client.html
+            text: "Julia client API"
       - href: https://github.com/sadit/SimilaritySearchEngine.jl
         text: "GitHub"
 

@@ -18,14 +18,18 @@
   </url>
   <url>
     <loc>https://sadit.github.io/SimilaritySearchEngine.jl/server/manual.html</loc>
-    <lastmod>2026-11-18T22:34:01.749Z</lastmod>
+    <lastmod>2026-11-19T20:48:04.986Z</lastmod>
   </url>
   <url>
     <loc>https://sadit.github.io/SimilaritySearchEngine.jl/server/tutorial.html</loc>
-    <lastmod>2026-09-13T17:09:17.519Z</lastmod>
+    <lastmod>2026-09-14T21:12:20.382Z</lastmod>
   </url>
   <url>
     <loc>https://sadit.github.io/SimilaritySearchEngine.jl/tutorials/paragraph-search.html</loc>
     <lastmod>2026-11-07T17:30:44.693Z</lastmod>
+  </url>
+  <url>
+    <loc>https://sadit.github.io/SimilaritySearchEngine.jl/server/julia-client.html</loc>
+    <lastmod>2026-11-19T20:13:32.103Z</lastmod>
   </url>
 </urlset>

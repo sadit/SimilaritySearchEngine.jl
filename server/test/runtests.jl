@@ -58,6 +58,7 @@ const FULL = "full" in ARGS || lowercase(get(ENV, "SSE_TEST_LEVEL", "light")) ==
             include("api/test_14_auth.jl")
             include("api/test_15_meta_schema.jl")
             include("api/test_16_partitions.jl")
+            include("api/test_17_julia_client.jl")
         end
 
         @testset "CLI Commands" begin

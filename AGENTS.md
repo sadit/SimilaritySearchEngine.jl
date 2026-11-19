@@ -4,7 +4,7 @@ Guidance for coding agents working in this repository.
 
 ## What is here
 
-Two packages, one repository:
+Three packages, one repository:
 
 - **`SimilaritySearchEngine`** (repository root) -- an embedded similarity search engine:
   transactional, persistent storage and nearest-neighbour search over dense vectors, sparse
@@ -16,6 +16,11 @@ Two packages, one repository:
   (`server/src/cli_handlers.jl`, `server/src/ctl_handlers.jl`, ArgParse), the job model
   (`server/src/jobs.jl`), tokens, cursors, telemetry, and the three installable apps in
   `server/src/apps/`.
+- **`SimilaritySearchClient`** (`server/julia/`) -- the Julia client of the HTTP API. Its
+  functions have the names and the result types of the engine's functions, and it depends on
+  HTTP.jl and JSON3 only: it must never depend on the engine or the server. It declares its
+  own copy of the engine's error types, and the server's light suite checks that the two lists
+  are equal. Its tests against a running server are in the server's full suite.
 
 `server/PLAN.md` is the system specification the server implements (REST routes, job model,
 pagination, tokens). `DEVELOPMENT_STRATEGY.md` at the root says why the split is where it is,
@@ -34,9 +39,15 @@ julia --project=. -t auto -e 'using Pkg; Pkg.test()'
 # server (the engine comes from this repository, not the registry)
 julia --project=server -e 'using Pkg; Pkg.develop(path=".")'
 julia --project=server -t auto -e 'using Pkg; Pkg.test()'
+
+# Julia client (no server needed; the tests against a server are in the server's full suite)
+julia --project=server/julia -e 'using Pkg; Pkg.test()'
 ```
 
-Julia 1.12 or later, in both packages: it is what CI verifies, and the server's `[apps]`
+A new engine error type is not finished until the Julia client has a type of the same name, in
+the same category (`server/julia/src/errors.jl`).
+
+Julia 1.12 or later, in every package: it is what CI verifies, and the server's `[apps]`
 entries need `Pkg.Apps`, which does not exist before it.
 
 ## How the documentation is written

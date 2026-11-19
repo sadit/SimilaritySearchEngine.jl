@@ -1,4 +1,4 @@
-using Documenter, SimilaritySearchEngine, SimilaritySearchServer
+using Documenter, SimilaritySearchEngine, SimilaritySearchServer, SimilaritySearchClient
 using Documenter: Remotes
 using SimilaritySearchEngine: Errors, Schema, Project, IndexEngine, Persistence
 
@@ -16,7 +16,8 @@ makedocs(;
     modules=[SimilaritySearchEngine, Errors, Schema, Project, IndexEngine, Persistence,
              SimilaritySearchServer, SimilaritySearchServer.Server, SimilaritySearchServer.Jobs,
              SimilaritySearchServer.Executors, SimilaritySearchServer.Tokens,
-             SimilaritySearchServer.Telemetry, SimilaritySearchServer.Cursors],
+             SimilaritySearchServer.Telemetry, SimilaritySearchServer.Cursors,
+             SimilaritySearchClient],
     authors="Eric S. Tellez",
     # A `Remotes.Remote`, not the equivalent URL template. Both produce the same "Edit on
     # GitHub" links per docstring, but a bare string tells Documenter nothing about where the
@@ -35,6 +36,7 @@ makedocs(;
         "Home" => "index.md",
         "Engine API" => "engine.md",
         "Server API" => "server.md",
+        "Julia client API" => "client.md",
         # No entry for the manual: Documenter validates `pages` as file paths and rejects a
         # URL ("'https:/…/manual/' is not an existing page!"), so the links to it live in
         # index.md instead, which the sidebar always reaches as "Home".

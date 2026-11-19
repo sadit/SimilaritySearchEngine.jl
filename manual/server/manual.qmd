@@ -28,6 +28,10 @@ are described here.
 | `interactive.jl` | guided invocation through `REPL.TerminalMenus` |
 | `apps/` | the three installable app entry points |
 
+Two clients of the HTTP API are in this directory and are separate packages: `python/`, for
+Python, and `julia/`, the [Julia client](julia-client.qmd), whose functions have the names of the
+engine's functions.
+
 The schema, the persistence layer, the index engine and project management are not part of this
 package. They are `SimilaritySearchEngine.Schema`, `.Persistence`, `.IndexEngine` and
 `.Project`.
@@ -527,14 +531,16 @@ The number of threads the server itself has is the one given to Julia when it st
 
 Two levels, selected with `test_args=["full"]` or `SSE_TEST_LEVEL=full`:
 
-- **light** (50 assertions, approximately 5 s): the interface with the engine. It verifies the
-  mapping from the names used in requests to engine types, from engine errors to status codes
-  and exit codes, and from the items of a request to engine items. No server is started and no
-  subprocess is created. This level detects a change in the engine on the day it is made.
-- **full** (585 assertions, approximately 19 minutes): the end-to-end suites for the API, the
-  jobs and the command lines. They start servers and execute subprocesses. Near the end, the
-  run produces no output for about ten minutes, while the command-line suite waits for jobs to
-  expire. The run has not stopped.
+- **light** (210 assertions, approximately 16 s, measured on 2026-11-19): the interface with
+  the engine. It verifies the mapping from the names used in requests to engine types, from
+  engine errors to status codes and exit codes, and from the items of a request to engine
+  items. It also verifies that the Julia client has every error type of the engine. No server
+  is started and no subprocess is created. This level detects a change in the engine on the
+  day it is made.
+- **full** (967 assertions, approximately 32 minutes, measured on 2026-11-19): the end-to-end
+  suites for the API, the jobs, the command lines and the Julia client. They start servers and
+  execute subprocesses. Near the end, the run produces no output for about ten minutes, while
+  the command-line suite waits for jobs to expire. The run has not stopped.
 
 ```bash
 julia --project=server -e 'using Pkg; Pkg.develop(path="."); Pkg.test()'
@@ -547,6 +553,8 @@ julia --project=server -e 'using Pkg; Pkg.test(test_args=["full"])'
   created, indexed and queried, and a job is executed.
 - The [architecture of the engine](../architecture.qmd): the storage layout, the engine
   hierarchy, the concurrency model, and the typed errors this package maps.
+- The [Julia client](julia-client.qmd): the engine's functions over the HTTP API of a remote
+  server.
 - The reference, generated from the docstrings of both packages:
   [Server API](https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html) and
   [Engine API](https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html).

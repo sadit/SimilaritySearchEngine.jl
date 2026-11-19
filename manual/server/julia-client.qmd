@@ -1,0 +1,112 @@
+---
+title: "Julia Client"
+subtitle: "SimilaritySearchClient: the engine's functions over the HTTP API of a remote server"
+---
+
+`SimilaritySearchClient` is a Julia package in `server/julia/` of this repository. It sends requests to the HTTP API of a running `similarity-search-serve` process. It depends on HTTP.jl and JSON3 only. It does not load the engine, SimilaritySearch, TextSearch or RocksDB, so it installs on a computer that has none of them.
+
+The functions have the names, the arguments and the result types of the engine's functions. A script written for the engine runs against a remote server when it opens its project with a `Connection` instead of a directory. Section 3 lists the differences.
+
+## 1. Installation
+
+The package is not registered. Add it from a copy of this repository, or from the repository URL with its subdirectory:
+
+```julia
+using Pkg
+Pkg.develop(path="server/julia")
+# or
+Pkg.add(url="https://github.com/sadit/SimilaritySearchEngine.jl", subdir="server/julia")
+```
+
+## 2. Use
+
+```julia
+using SimilaritySearchClient
+
+conn = Connection("http://127.0.0.1:8080")             # token="..." if the server requires one
+h = create_project(conn, "papers"; index_type="searchgraph", partition_by="repo")
+append_items!(h, [DenseItem(v; doc_id="p$i", meta=Dict("repo" => r))
+                  for (i, (v, r)) in enumerate(zip(vectors, repos))])
+
+search(h, q, 10)                                       # Vector{SearchResult}
+search(h, q, 10; partition="repo-a")                   # one partition
+search(h, q, 10; filter=Dict("year" => Dict("gte" => 2020)))
+search(h, queries, 10)                                 # one inner vector per query
+fetch_items(h, ["p1", "p2"])                           # Vector{StoredItem}
+exists(h, ["p1", 3])                                   # Vector{ExistsResult}
+delete_item!(h, 3)
+calibrate!(h; levels=0.9)                              # Vector{CalibrationLevel}, one element
+partitions(h)                                          # (name, items, graph) per partition
+
+t = create_project(conn, "papers_text"; index_type="bm25_invfile")
+append_items!(t, [TextItem(s; doc_id="p$i") for (i, s) in enumerate(texts)])
+ftsearch(t, "redes neuronales", 5)
+hybrid_search(h, t; vector=q, text="redes neuronales", k=5)
+```
+
+`open_project(conn, "papers")` returns the handle of a dataset that already exists. `list_projects(conn)` returns the ids of the datasets of the server. `project_info(h)` returns the descriptor of a dataset. `delete_project!(h)` deletes a dataset.
+
+The index types are `searchgraph`, `exhaustive_search`, `parallel_exhaustive_search`, `bm25_invfile`, `invfile` and `sparse_invfile`. Section 3 of the [server manual](manual.qmd) describes them. A keyword of `create_project` that is `nothing` is not sent, and the server applies its own default.
+
+## 3. Differences with the Engine
+
+The client sends each call to the server. The server does not accept every argument of the engine, and it does not return every field. The differences are these:
+
+| function | in the engine | in the client |
+| :--- | :--- | :--- |
+| `append_items!` | appends; `index!` indexes | appends and indexes; `index!` does nothing |
+| `search`, `ftsearch` | `filter` is a `(record, meta) -> Bool` function | `filter` is a filter object of the server, such as `Dict("year" => Dict("gte" => 2020))` |
+| `search`, `ftsearch` | `minrecall`, `candidates`, `stats` | not accepted |
+| `search`, `ftsearch` | a deleted item is returned with `deleted=true` | the server does not return deleted items |
+| `search` with several queries | one parallel pass under the write lock | one request per query, at most `ntasks` at a time |
+| `search` | | `beamsearch_overrides`, for example `(bsize=64,)`, as in the HTTP API |
+| `ftsearch` | a string or a list of tokens | a string |
+| `fetch_items` | `payload` is the vector or the text | `payload` is `nothing` |
+| `calibrate!` | several `levels` in one call | one level per call |
+| `close_project!` | closes the RocksDB database | does nothing |
+
+A filtered search on the server reads `max(5k, k+20)` candidates before it applies the filter, so a result can have fewer than `k` items.
+
+## 4. Errors
+
+The client raises the error types of the engine, with the same names and the same four categories: `InvalidRequest`, `NotFound`, `ConflictingState` and `StorageFailure`. A script that catches `NotFound` works the same against an embedded project and against a remote one.
+
+```julia
+try
+    search(h, q, 10; partition="repo-x")
+catch e
+    e isa UnknownPartition || rethrow()
+    println(e.msg)                # the message lists the closest partition names
+end
+```
+
+The server sends the name of the engine's type in the `kind` field of its error responses, and the client raises the type with that name. Every type has two fields: `status`, the HTTP status, and `msg`, the message of the server. A response without a `kind` raises the generic type of its category:
+
+| status | type | category |
+| :--- | :--- | :--- |
+| 400 | `RequestRejected` | `InvalidRequest` |
+| 404 | `ResourceNotFound`, for example a dataset that does not exist | `NotFound` |
+| 409 | `StateConflict` | `ConflictingState` |
+| 401, 403 | `Unauthenticated`, `Forbidden` | `AccessDenied` |
+| 500 | `ServerFailure` | none |
+| other | `UnexpectedResponse` | none |
+
+All of them are subtypes of `RemoteError`. A connection that fails, for example because no server listens on the address, raises the exception of HTTP.jl.
+
+The server's test suite checks that the client has a type for every error type of the engine, in the same category. A new error type in the engine makes that test fail until the client has it.
+
+## 5. What the Client Does Not Cover Yet
+
+- The jobs: `allknn`, `fft`, `neardup`, `hsp`, `dump` and `load`. The engine's functions of the same names have no counterpart in the client yet.
+- The cursors of a paginated search (`page_size`). The client receives every result in one response.
+- The administration routes: tokens, unloading and reloading a dataset, and the operation log.
+
+The Python client in `server/python/` covers these routes.
+
+## 6. Tests
+
+The package's own tests need no server: they check the error mapping, the shape of the items sent, and the options checked before a request. The tests against a server are part of the full level of the server's suite (`server/test/api/test_17_julia_client.jl`), which starts one.
+
+```bash
+julia --project=server/julia -e 'using Pkg; Pkg.test()'
+```

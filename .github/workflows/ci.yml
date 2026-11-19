@@ -37,6 +37,7 @@ jobs:
         package:
           - engine
           - server
+          - client
     steps:
       - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@v2
@@ -50,6 +51,11 @@ jobs:
           # The suite exercises real concurrency (readers against a writer), so a
           # single-threaded runner would silently skip what those tests are for.
           JULIA_NUM_THREADS: auto
+      # The Julia client's own tests need no server. Its tests against a server run in the
+      # server's full suite below.
+      - name: Test the Julia client
+        if: matrix.package == 'client'
+        run: julia --project=server/julia -e 'using Pkg; Pkg.test()'
       - name: Test the server against this repository's engine
         if: matrix.package == 'server'
         run: |

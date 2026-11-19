@@ -441,3 +441,21 @@ end
     Tokens.close_token_manager(mgr)
     rm(workdir; recursive=true, force=true)
 end
+
+# The Julia client (julia/) raises a type of the same name for every `kind` the server sends.
+# It cannot import the engine's types, so it declares its own, and this test is what keeps the
+# two lists equal: a new engine error fails here until the client has it, in the same category.
+import SimilaritySearchClient as Client
+
+@testset "the Julia client has every engine error, in the same category" begin
+    exported = (getfield(SSE.Errors, n) for n in names(SSE.Errors))
+    engine_types = [T for T in exported if T isa DataType && T <: SSE.EngineError && !isabstracttype(T)]
+    @test length(engine_types) >= 13
+    for T in engine_types
+        name = string(nameof(T))
+        @test haskey(Client.ERROR_KINDS, name)
+        haskey(Client.ERROR_KINDS, name) || continue
+        engine_category = nameof(supertype(T))
+        @test nameof(supertype(Client.ERROR_KINDS[name])) == engine_category
+    end
+end

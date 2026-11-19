@@ -138,7 +138,10 @@ end
         code, out = _run_ctl(["--port", port, "jobs", "resume", "--job-id", blocked_id])
         @test code == 0
         @test JSON3.read(out).status == "queued"
-        @test first(Jobs.get_job(srv.app.job_mgr, blocked_id)) == Jobs.Queued
+        # The job is back in `queued/`, which the live dispatcher reads: by the time this line
+        # runs it may already be running or finished. On 2026-11-19 a full run found it
+        # `Running`. What `resume` guarantees is that the job left `blocked/`.
+        @test first(Jobs.get_job(srv.app.job_mgr, blocked_id)) in (Jobs.Queued, Jobs.Running, Jobs.Completed, Jobs.Failed)
 
         code, out = _run_ctl(["--port", port, "jobs", "resume", "--job-id", blocked_id]) # already queued, not blocked
         @test code == 1

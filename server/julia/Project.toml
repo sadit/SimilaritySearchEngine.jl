@@ -1,0 +1,23 @@
+name = "SimilaritySearchClient"
+uuid = "75d86282-de3d-4ee9-a9ff-97bf3abee96b"
+version = "0.1.0"
+authors = ["Eric S. Tellez <donsadit@gmail.com>"]
+
+# Only HTTP and JSON (PLAN.md §8.3): this package talks to a remote server and must not need
+# the engine, SimilaritySearch, TextSearch or RocksDB to be installed.
+[deps]
+HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+
+[compat]
+HTTP = "2.6"
+JSON3 = "1.14.3"
+SparseArrays = "1"
+julia = "1.12"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
