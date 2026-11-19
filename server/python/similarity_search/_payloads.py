@@ -50,10 +50,11 @@ def metrics():
 # --- datasets -------------------------------------------------------------------------
 
 def create_dataset(id=None, index_type="searchgraph", distance="L2", meta_schema=None,
-                    partition_by=None):
+                    partition_by=None, partition_graph_min=None):
     body = _compact({
         "id": id, "index_type": index_type, "distance": distance,
         "meta_schema": meta_schema, "partition_by": partition_by,
+        "partition_graph_min": partition_graph_min,
     })
     return "POST", "/api/v1/datasets", body, None
 
@@ -82,10 +83,11 @@ def append(index, items):
     return "POST", f"/api/v1/datasets/{index}/append", {"items": items}, None
 
 
-def search(index, vector, k=10, filter=None, beamsearch_overrides=None, page_size=None):
+def search(index, vector, k=10, filter=None, beamsearch_overrides=None, page_size=None, partition=None):
     body = _compact({
         "vector": _as_vector(vector), "k": k, "filter": filter,
         "beamsearch_overrides": beamsearch_overrides, "page_size": page_size,
+        "partition": partition,
     })
     return "POST", f"/api/v1/datasets/{index}/search", body, None
 
@@ -120,9 +122,10 @@ def exists(index, ids):
     return "GET", f"/api/v1/datasets/{index}/exists", None, params
 
 
-def calibrate(index, minrecall=None, numqueries=None, ksearch=None, queries=None):
+def calibrate(index, minrecall=None, numqueries=None, ksearch=None, queries=None, partition=None):
     body = _compact({
         "minrecall": minrecall, "numqueries": numqueries, "ksearch": ksearch, "queries": queries,
+        "partition": partition,
     })
     return "POST", f"/api/v1/datasets/{index}/calibrate", body, None
 

@@ -1521,6 +1521,18 @@ function partition_field(handle::EmbeddedEngine)
 end
 
 """
+    partition_graph_min(handle::EmbeddedEngine) -> Union{Nothing,Int}
+
+The number of indexed members from which a partition of this dense project has its own graph
+(PLAN.md §5.10), or `nothing` for a project that is not a partitioned dense project. See
+[`create_project`](@ref)'s `partition_graph_min`.
+"""
+function partition_graph_min(handle::EmbeddedEngine)
+    (handle.engine isa IndexEngine.DenseEngine && handle.partitions[] !== nothing) || return nothing
+    return Persistence.load_field(handle.store, :partition_graph_min, DEFAULT_PARTITION_GRAPH_MIN)
+end
+
+"""
     partitions(handle::EmbeddedEngine) -> Vector{@NamedTuple{name::String, items::Int, graph::Bool}}
 
 The partitions of this project, sorted by name, each with the number of items appended to it.

@@ -95,3 +95,69 @@ using JSON3
         @test resp.status == 400
     end
 end
+
+# Partitioned dense datasets over HTTP (PLAN.md §5.10). The engine's tests check the scan, the
+# graphs and the reopen; this file checks that the API carries the partition, the threshold,
+# the calibration of one partition and the errors through.
+@testset "16b. Partitioned dense datasets" begin
+    with_test_server() do base_url, workdir
+        data_path = joinpath(@__DIR__, "..", "..", "..", "test", "data", "frankenstein.jsonl")
+        rows = [JSON3.read(l, Dict{String,Any}) for l in readlines(data_path)[1:300]]
+        repo_of(i) = i % 3 == 0 ? "tres" : "otro"
+        docs = [Dict{String,Any}("doc_id" => d["doc_id"], "vector" => d["vector"], "repo" => repo_of(i))
+                for (i, d) in enumerate(rows)]
+        failed(f) = try f(); nothing catch e; e.response end
+        post(path, body) = JSON3.read(String(HTTP.post("$base_url/$path", [], JSON3.write(body)).body))
+
+        # "otro" (200 items) reaches the threshold and has a graph; "tres" (100) is scanned.
+        @test HTTP.post("$base_url/datasets", [], JSON3.write(Dict(
+            "id" => "dpart", "index_type" => "searchgraph", "partition_by" => "repo",
+            "partition_graph_min" => 150))).status == 201
+        @test HTTP.post("$base_url/datasets/dpart/append", [], JSON3.write(Dict("items" => docs))).status == 200
+        detail = JSON3.read(String(HTTP.get("$base_url/datasets/dpart").body))
+        @test detail.partition_by == "repo" && detail.partition_graph_min == 150
+        listing = JSON3.read(String(HTTP.get("$base_url/datasets/dpart/partitions").body))
+        @test listing.partition_graph_min == 150
+        @test Dict(p.name => (p.items, p.graph) for p in listing.partitions) == Dict("otro" => (200, true), "tres" => (100, false))
+
+        # The scanned partition returns the exact nearest members, in order of distance.
+        q = rows[7]["vector"]
+        dist(i) = sum(abs2, Float32.(rows[i]["vector"]) .- Float32.(q))
+        tres = [i for i in eachindex(rows) if repo_of(i) == "tres"]
+        want = [rows[i]["doc_id"] for i in tres[sortperm(dist.(tres))][1:5]]
+        got = post("datasets/dpart/search", Dict("vector" => q, "k" => 5, "partition" => "tres")).results
+        @test [r.doc_id for r in got] == want
+        otro = Set(rows[i]["doc_id"] for i in eachindex(rows) if repo_of(i) == "otro")
+        got = post("datasets/dpart/search", Dict("vector" => q, "k" => 5, "partition" => "otro")).results
+        @test length(got) == 5 && all(r -> r.doc_id in otro, got)
+        @test got[1].doc_id == rows[7]["doc_id"]
+
+        # Calibrating a partition leaves the global baseline of the descriptor alone.
+        baseline = detail.beamsearch_baseline
+        cal = post("datasets/dpart/calibrate", Dict("minrecall" => 0.9, "numqueries" => 16, "partition" => "otro"))
+        @test cal.status == "calibrated" && cal.partition == "otro"
+        @test JSON3.read(String(HTTP.get("$base_url/datasets/dpart").body)).beamsearch_baseline == baseline
+        resp = failed(() -> HTTP.post("$base_url/datasets/dpart/calibrate", [], JSON3.write(Dict("partition" => "tres"))))
+        @test resp.status == 400 && JSON3.read(String(resp.body)).kind == "InvalidOption"
+
+        # Errors: an unknown name, a name that is not a string, overrides with a partition.
+        resp = failed(() -> HTTP.post("$base_url/datasets/dpart/search", [], JSON3.write(Dict("vector" => q, "partition" => "tress"))))
+        @test resp.status == 404 && JSON3.read(String(resp.body)).kind == "UnknownPartition"
+        @test failed(() -> HTTP.post("$base_url/datasets/dpart/search", [], JSON3.write(Dict("vector" => q, "partition" => 3)))).status == 400
+        @test failed(() -> HTTP.post("$base_url/datasets/dpart/search", [], JSON3.write(Dict(
+            "vector" => q, "partition" => "otro", "beamsearch_overrides" => Dict("bsize" => 8))))).status == 400
+
+        # `partition_graph_min` needs a dense dataset with `partition_by`, and an integer.
+        @test failed(() -> HTTP.post("$base_url/datasets", [], JSON3.write(Dict(
+            "id" => "t_min", "index_type" => "bm25_invfile", "partition_by" => "repo", "partition_graph_min" => 10)))).status == 400
+        @test failed(() -> HTTP.post("$base_url/datasets", [], JSON3.write(Dict(
+            "id" => "d_min", "index_type" => "searchgraph", "partition_graph_min" => 10)))).status == 400
+        @test failed(() -> HTTP.post("$base_url/datasets", [], JSON3.write(Dict(
+            "id" => "d_min2", "index_type" => "searchgraph", "partition_by" => "repo", "partition_graph_min" => "10")))).status == 400
+
+        # A dense dataset without a partition field refuses `partition`.
+        @test HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "dplain", "index_type" => "searchgraph"))).status == 201
+        @test HTTP.post("$base_url/datasets/dplain/append", [], JSON3.write(Dict("items" => docs[1:20]))).status == 200
+        @test failed(() -> HTTP.post("$base_url/datasets/dplain/search", [], JSON3.write(Dict("vector" => q, "partition" => "otro")))).status == 400
+    end
+end

@@ -99,8 +99,9 @@ is read through `GET /api/v1/datasets/{id}/log`.
 ### Datasets
 
 - `POST /api/v1/datasets` — creates one. Accepts `id`, `index_kind` (see section 3),
-  `distance`, `dimension`, an optional `meta_schema`, and `edit_correction` and
-  `partition_by` for a text dataset. Answers `201`. The fields `join_group`,
+  `distance`, `dimension`, an optional `meta_schema`, `edit_correction` for a text dataset,
+  `partition_by` for a text or dense dataset, and `partition_graph_min` for a dense dataset
+  with `partition_by`. Answers `201`. The fields `join_group`,
   `holds_metadata` and `key` were removed on 2026-11-10, and a request that contains one of
   them answers `400` (see "Searching Several Text Fields").
 - `GET /api/v1/datasets?offset=&limit=` — every dataset on disk, loaded or not.
@@ -129,8 +130,8 @@ GET /api/v1/datasets/{id}
 
 `GET /api/v1/datasets` wraps a list of those objects: `{"status":"ok", "datasets":[...],
 "total":2, "offset":0, "limit":2}`. `doc_count`, `tombstone_count`, `tombstone_ratio`,
-`meta_schema`, `partition_by` and `beamsearch_baseline` are reported for a dataset that is
-open;
+`meta_schema`, `partition_by`, `partition_graph_min` and `beamsearch_baseline` are reported
+for a dataset that is open;
 `beamsearch_baseline` is `null` for one that is not backed by a graph, and `meta_schema` is
 `null` for one that declares nothing.
 
@@ -179,19 +180,36 @@ the items of that partition. Each result has the score that the search over the 
 gives it. The value of the field in an item is a non-empty string or a list of them. An item
 whose value is anything else is refused with `400` and the kind `PayloadMismatch`, and no item
 of that request is stored. The engine stores the field inside the project, so it is not in
-`descriptor.json`, and `dump`, `load` and `rebuild` keep it. `partition_by` on a dataset that
-does not hold text is refused with `400`.
+`descriptor.json`, and `dump`, `load` and `rebuild` keep it. `partition_by` on a sparse
+dataset is refused with `400`.
+
+On a dense dataset, a search can name one partition too (since 2026-11-18). A partition shares
+the vectors of the dataset and copies none.
+
+- A partition with fewer than `partition_graph_min` indexed members is searched with an exact
+  scan of its members. The default is 4,096.
+- A larger partition of a `searchgraph` dataset has its own graph, which each append builds or
+  extends. Its results are approximate, as those of the dataset's own graph.
+- Every partition of an exact dataset (`exhaustive_search`, `parallel_exhaustive_search`) is
+  scanned.
+
+`partition_graph_min` is stored inside the project. It is refused with `400` on a dataset that
+is not dense, without `partition_by`, or when it is not an integer.
 
 - `GET /api/v1/datasets/{id}/partitions` — the partition field and the partitions, sorted by
-  name, each with the number of items appended to it. Deleted items and items not indexed yet
-  are counted. A dataset without a partition field answers `400`.
+  name, each with the number of items appended to it and `graph`, whether it has its own
+  graph. Deleted items and items not indexed yet are counted. `graph` is `false` for every
+  partition of a text dataset, and `partition_graph_min` is `null` for one. A dataset without
+  a partition field answers `400`.
 
 ```json
-{"status":"ok","id":"ds","partition_by":"repo",
- "partitions":[{"name":"norte","items":105},{"name":"sur","items":75}]}
+{"status":"ok","id":"ds","partition_by":"repo","partition_graph_min":150,
+ "partitions":[{"name":"otro","items":200,"graph":true},
+               {"name":"tres","items":100,"graph":false}]}
 ```
 
-The command line has `similarity-search build --partition-by <field>` and
+The command line has `similarity-search build --partition-by <field>`,
+`similarity-search build --partition-graph-min <n>` for a dense dataset, and
 `similarity-search searchbatch --partition <name>`.
 
 ### Search and indexing
@@ -200,7 +218,11 @@ The command line has `similarity-search build --partition-by <field>` and
   item contains `text`, and a sparse item contains `indices` and `values`. The fields
   `doc_id`, `keywords` and `refs`, and any other field, become the metadata of the item.
 - `POST /api/v1/datasets/{id}/search` — dense and sparse search, with optional `filter`,
-  `page_size` and `beamsearch_overrides`.
+  `page_size`, `beamsearch_overrides`, and `partition` for a dense dataset with a partition
+  field. `filter` applies to the results of the partition. A partition name the dataset does
+  not hold answers `404` with the kind `UnknownPartition`. `partition` on a dataset without a
+  partition field, or together with `beamsearch_overrides`, answers `400`: the overrides
+  apply to the graph of the whole dataset.
 - `POST /api/v1/datasets/{id}/ftsearch` — text search. Accepts `text`, `k`, an optional
   `filter` in the format of `search`, and `partition` for a dataset with a partition field.
   `text` must be a string. A filtered text search reads the same bounded number of candidates
@@ -216,6 +238,10 @@ The command line has `similarity-search build --partition-by <field>` and
   `tradeoff` and `transition` (see the `calibrate!` section of the getting-started tutorial).
   The response reports the configuration as `baseline` and the recall it reaches as
   `calibration`, measured on queries that took no part in the tuning, with a 95% interval.
+  `partition` calibrates the graph of one partition of a dense dataset instead. Its levels are
+  stored apart, the response carries `partition`, and `beamsearch_baseline` of the dataset
+  does not change. A partition without its own graph answers `400` with the kind
+  `InvalidOption`, because an exact scan has nothing to calibrate.
 - `POST /api/v1/search/hybrid` — reciprocal rank fusion over two datasets.
 
 ```json

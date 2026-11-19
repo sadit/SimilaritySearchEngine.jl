@@ -482,6 +482,11 @@ function handle_create_dataset(req::HTTP.Request, app::AppState)
     partition_by = get(data, "partition_by", nothing)
     partition_by === nothing || partition_by isa AbstractString ||
         return json_response(400, Dict("error" => "'partition_by' must be the name of a meta field"))
+    # PLAN.md §5.10: the size from which a partition of a dense dataset has its own graph. The
+    # engine refuses it on a dataset that is not dense or has no `partition_by`.
+    partition_graph_min = get(data, "partition_graph_min", nothing)
+    partition_graph_min === nothing || partition_graph_min isa Integer ||
+        return json_response(400, Dict("error" => "'partition_graph_min' must be an integer"))
 
     engine_type, backend_type = try
         parse_index_kind(index_type)
@@ -505,7 +510,7 @@ function handle_create_dataset(req::HTTP.Request, app::AppState)
                 distance=parse_distance(distance),
                 dimension=dimension === nothing ? nothing : Int(dimension),
                 textmodel=default_textmodel(engine_type), meta_schema=declared, edit_correction,
-                partition_by)
+                partition_by, partition_graph_min)
         end
     catch e
         e isa SSE.EngineError || rethrow()
@@ -720,6 +725,7 @@ function dataset_descriptor(app::AppState, id::String)
         declared = SSE.meta_schema(handle)
         base["meta_schema"] = isempty(declared) ? nothing : serialize_meta_schema(declared)
         base["partition_by"] = SSE.partition_field(handle)
+        base["partition_graph_min"] = SSE.partition_graph_min(handle)
         engine = handle.engine
         doc_count = engine.backend.index === nothing ? 0 : length(engine.backend.index)
         tombstones = length(engine.deleted_ids)
@@ -813,10 +819,12 @@ end
 """
     handle_get_partitions(req, app, id) -> HTTP.Response
 
-`GET /api/v1/datasets/{id}/partitions` (PLAN.md §5.9): the partition field of a text dataset
-and its partitions, sorted by name, each with the number of items appended to it (deleted and
-not yet indexed items included). A dataset without a partition field answers 400, as the
-engine does.
+`GET /api/v1/datasets/{id}/partitions` (PLAN.md §5.9 and §5.10): the partition field of a
+text or dense dataset and its partitions, sorted by name, each with the number of items
+appended to it (deleted and not yet indexed items included) and `graph`, whether the partition
+has its own graph. `graph` is `true` only for a partition of a dense `searchgraph` dataset with
+at least `partition_graph_min` indexed members, which the response also carries (`null` for a
+text dataset). A dataset without a partition field answers 400, as the engine does.
 """
 function handle_get_partitions(req::HTTP.Request, app::AppState, id::String)
     valid_project_id(id) || return json_response(400, Dict("error" => "invalid dataset id"))
@@ -829,7 +837,9 @@ function handle_get_partitions(req::HTTP.Request, app::AppState, id::String)
         return engine_error_response(e)
     end
     return json_response(200, Dict("status" => "ok", "id" => id, "partition_by" => SSE.partition_field(handle),
-                                   "partitions" => [Dict("name" => p.name, "items" => p.items) for p in parts]))
+                                   "partition_graph_min" => SSE.partition_graph_min(handle),
+                                   "partitions" => [Dict("name" => p.name, "items" => p.items, "graph" => p.graph)
+                                                    for p in parts]))
 end
 
 """
@@ -1169,9 +1179,10 @@ function _run_search(handle, index::String, req::HTTP.Request, query, k::Int;
         filter = filter_spec === nothing ? nothing : _filter_predicate(filter_spec, SSE.meta_schema(handle))
         SSE.ftsearch(handle, query, k; stats, partition, filter, candidates=FILTER_CANDIDATES(k))
     elseif filter_spec === nothing
-        SSE.search(handle, query, k; stats)
+        SSE.search(handle, query, k; stats, partition)
     else
-        SSE.search(handle, query, k; filter=_filter_predicate(filter_spec, SSE.meta_schema(handle)), candidates=FILTER_CANDIDATES(k), stats)
+        SSE.search(handle, query, k; filter=_filter_predicate(filter_spec, SSE.meta_schema(handle)), candidates=FILTER_CANDIDATES(k),
+                   stats, partition)
     end
     Telemetry.log_request!(dataset, nothing, "search", index, t0, nothing;
         identity, distance_name=_engine_distance_name(engine),
@@ -1206,6 +1217,13 @@ function handle_search(req::HTTP.Request, app::AppState, index::String)
     k = get(data, "k", 10)
     query = convert(Vector{Float32}, data["vector"])
     filter_spec = get(data, "filter", nothing)
+    # PLAN.md §5.10: one partition of a dense dataset.
+    partition = get(data, "partition", nothing)
+    partition === nothing || partition isa AbstractString ||
+        return json_response(400, Dict("error" => "'partition' must be a partition name (a string)"))
+    partition !== nothing && haskey(data, "beamsearch_overrides") &&
+        return json_response(400, Dict("error" => "'beamsearch_overrides' applies to the global graph; it cannot " *
+                                                  "be combined with 'partition'"))
 
     bs_override = nothing
     extra_headers = []
@@ -1222,7 +1240,7 @@ function handle_search(req::HTTP.Request, app::AppState, index::String)
 
     hits = try
         _with_query_slot(app) do
-            _run_search(app.handles[index], index, req, query, k; filter_spec, bs_override,
+            _run_search(app.handles[index], index, req, query, k; filter_spec, bs_override, partition,
                         metrics=app.metrics, identity=_request_identity(app, req))
         end
     catch e
@@ -1272,6 +1290,12 @@ The response carries the configuration as `baseline` and its measured recall as 
 the mean over the validation queries, the interval `recall_lo`-`recall_hi` at `confidence`, the
 number of queries, the mean distance evaluations per query, and `heldout`, whether those queries
 took no part in the tuning. Both are written to the descriptor.
+
+`"partition": "name"` calibrates the graph of one partition of a dense dataset (PLAN.md
+§5.10). Its levels are kept in the project, apart from the global ones, and the descriptor is
+not changed: `beamsearch_baseline` describes the global graph. A partition without its own
+graph is the engine's `InvalidOption`, a `400`, and an unknown name its `UnknownPartition`, a
+`404`. The response then carries `partition`.
 """
 function handle_calibrate(req::HTTP.Request, app::AppState, index::String)
     haskey(app.handles, index) || return json_response(404, Dict("error" => "dataset_not_found"))
@@ -1294,9 +1318,13 @@ function handle_calibrate(req::HTTP.Request, app::AppState, index::String)
     transition isa AbstractVector && length(transition) == 2 && all(x -> x isa Real, transition) ||
         return json_response(400, Dict("error" => "'transition' must be a pair of numbers [lo, hi]"))
     transition = (Float64(transition[1]), Float64(transition[2]))
+    partition = get(data, "partition", nothing)
+    partition === nothing || partition isa AbstractString ||
+        return json_response(400, Dict("error" => "'partition' must be a partition name (a string)"))
 
     cal = try
-        only(SSE.calibrate!(app.handles[index]; levels=minrecall, numqueries, ksearch, queries, tradeoff, transition))
+        only(SSE.calibrate!(app.handles[index]; levels=minrecall, numqueries, ksearch, queries, tradeoff, transition,
+                            partition))
     catch e
         e isa SSE.EngineError || rethrow()
         return engine_error_response(e)
@@ -1307,6 +1335,10 @@ function handle_calibrate(req::HTTP.Request, app::AppState, index::String)
                        "recall_lo" => cal.recall_lo, "recall_hi" => cal.recall_hi,
                        "confidence" => cal.confidence, "numqueries" => cal.numqueries,
                        "distance_evaluations" => cal.distance_evaluations, "heldout" => cal.heldout)
+    if partition !== nothing
+        return json_response(200, Dict("status" => "calibrated", "id" => index, "partition" => partition,
+                                       "baseline" => baseline, "calibration" => calibration))
+    end
     _update_descriptor!(app, index, Dict("beamsearch_baseline" => baseline, "calibration" => calibration))
 
     return json_response(200, Dict("status" => "calibrated", "id" => index, "baseline" => baseline,

@@ -60,8 +60,9 @@ class SimilaritySearchClient:
     # --- datasets ---------------------------------------------------------------------
 
     def create_dataset(self, id=None, index_type="searchgraph", distance="L2", meta_schema=None,
-                        partition_by=None):
-        return self._call(*p.create_dataset(id, index_type, distance, meta_schema, partition_by))
+                        partition_by=None, partition_graph_min=None):
+        return self._call(*p.create_dataset(id, index_type, distance, meta_schema, partition_by,
+                                                partition_graph_min))
 
     def list_datasets(self, offset=0, limit=None):
         return self._call(*p.list_datasets(offset, limit))
@@ -80,8 +81,9 @@ class SimilaritySearchClient:
     def append(self, index, items):
         return self._call(*p.append(index, items))
 
-    def search(self, index, vector, k=10, filter=None, beamsearch_overrides=None, page_size=None):
-        return self._call(*p.search(index, vector, k, filter, beamsearch_overrides, page_size))
+    def search(self, index, vector, k=10, filter=None, beamsearch_overrides=None, page_size=None,
+               partition=None):
+        return self._call(*p.search(index, vector, k, filter, beamsearch_overrides, page_size, partition))
 
     def ftsearch(self, index, text, k=10, partition=None, filter=None):
         return self._call(*p.ftsearch(index, text, k, partition, filter))
@@ -101,8 +103,8 @@ class SimilaritySearchClient:
     def exists(self, index, ids):
         return self._call(*p.exists(index, ids))
 
-    def calibrate(self, index, minrecall=None, numqueries=None, ksearch=None, queries=None):
-        return self._call(*p.calibrate(index, minrecall, numqueries, ksearch, queries))
+    def calibrate(self, index, minrecall=None, numqueries=None, ksearch=None, queries=None, partition=None):
+        return self._call(*p.calibrate(index, minrecall, numqueries, ksearch, queries, partition))
 
     # --- jobs -------------------------------------------------------------------------
 

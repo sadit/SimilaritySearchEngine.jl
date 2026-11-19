@@ -275,8 +275,8 @@ of it exist.
       saved either. The engine does not set `neardup`, so its graphs have no members.
     - The partition graphs of §5.10 need the same two fields, one value per partition. This
       was phase 0 of §5.10.
-14. **Partitioned dense indexes (§5.10)** — designed on 2026-11-18; phase 1 (the engine)
-    implemented on 2026-11-18. A dense project declares a partition field as a text project
+14. **Partitioned dense indexes (§5.10)** — designed on 2026-11-18; phases 1 (the engine)
+    and 2 (the server, the CLI and the Python client) implemented on 2026-11-18. A dense project declares a partition field as a text project
     does. A small partition is searched with an exact scan of its members. A partition with at
     least `partition_graph_min` members has its own `SearchGraph` over the same vectors.
 
@@ -292,10 +292,20 @@ of it exist.
       with two fields, and building it reads nothing.
     - A partition graph is not equal, query by query, before and after a reopen, and neither
       is the global graph (item 13). The tests compare the results of 80% of the queries.
-    - Not done yet: phases 2 (server, CLI, Python client) and 3 (documentation of the
-      server and the measurement on real embeddings). Until phase 2, `POST /api/v1/datasets`
-      creates a dense dataset with `partition_by`, and no route searches one of its
-      partitions.
+    - Phase 2: `search`, `calibrate`, `POST /api/v1/datasets` and the partitions route carry
+      `partition`, `partition_graph_min` and `graph`. `similarity-search build` takes
+      `--partition-graph-min`, `searchbatch --partition` accepts a dense dataset, and
+      `rebuild` keeps both settings. The engine gained `partition_graph_min(handle)` for that.
+    - There is no calibration job, only the route; §5.10 named both.
+    - The `search` route takes no `minrecall`, for a partition or for the whole dataset, so
+      `NotTrained` is not reachable over HTTP. A calibrated partition is used through the
+      engine's `search(...; partition, minrecall)`.
+    - `partition` together with `beamsearch_overrides` answers `400`: the overrides are
+      checked against the baseline of the global graph.
+    - `calibrate` with `partition` does not write the descriptor. `beamsearch_baseline`
+      describes the global graph.
+    - Not done yet: phase 3, the measurement on real embeddings that sets
+      `DEFAULT_PARTITION_GRAPH_MIN`.
 
 The stemmer registry of §5.3 and §9's phase 5 is not on this list: it was discarded. Stemming
 was the way this specification proposed to make a query match a word it does not equal. That

@@ -95,7 +95,10 @@ function build_settings()
             help = "Working directory for the database"
             default = "data"
         "--partition-by"
-            help = "Text index only: the meta field that partitions the dataset; a search can then be restricted to one value of it (searchbatch --partition)"
+            help = "Text or dense index: the meta field that partitions the dataset; a search can then be restricted to one value of it (searchbatch --partition)"
+        "--partition-graph-min"
+            help = "Dense index with --partition-by only: the number of indexed members from which a partition has its own graph (default 4096); a smaller partition is searched with an exact scan"
+            arg_type = Int
     end
 
     @add_arg_table! s["searchbatch"] begin
@@ -119,7 +122,7 @@ function build_settings()
             help = "Text dataset only: replace a query token absent from the vocabulary with the only vocabulary token at edit distance 1"
             action = :store_true
         "--partition"
-            help = "Text dataset only: search one partition (a value of the dataset's partition field) instead of the whole dataset"
+            help = "Text or dense dataset: search one partition (a value of the dataset's partition field) instead of the whole dataset"
     end
 
     @add_arg_table! s["allknn"] begin

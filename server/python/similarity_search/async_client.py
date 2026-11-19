@@ -51,8 +51,9 @@ class AsyncSimilaritySearchClient:
     # --- datasets ---------------------------------------------------------------------
 
     async def create_dataset(self, id=None, index_type="searchgraph", distance="L2", meta_schema=None,
-                              partition_by=None):
-        return await self._call(*p.create_dataset(id, index_type, distance, meta_schema, partition_by))
+                              partition_by=None, partition_graph_min=None):
+        return await self._call(*p.create_dataset(id, index_type, distance, meta_schema, partition_by,
+                                                partition_graph_min))
 
     async def list_datasets(self, offset=0, limit=None):
         return await self._call(*p.list_datasets(offset, limit))
@@ -71,8 +72,9 @@ class AsyncSimilaritySearchClient:
     async def append(self, index, items):
         return await self._call(*p.append(index, items))
 
-    async def search(self, index, vector, k=10, filter=None, beamsearch_overrides=None, page_size=None):
-        return await self._call(*p.search(index, vector, k, filter, beamsearch_overrides, page_size))
+    async def search(self, index, vector, k=10, filter=None, beamsearch_overrides=None, page_size=None,
+                     partition=None):
+        return await self._call(*p.search(index, vector, k, filter, beamsearch_overrides, page_size, partition))
 
     async def ftsearch(self, index, text, k=10, partition=None, filter=None):
         return await self._call(*p.ftsearch(index, text, k, partition, filter))
@@ -92,8 +94,8 @@ class AsyncSimilaritySearchClient:
     async def exists(self, index, ids):
         return await self._call(*p.exists(index, ids))
 
-    async def calibrate(self, index, minrecall=None, numqueries=None, ksearch=None, queries=None):
-        return await self._call(*p.calibrate(index, minrecall, numqueries, ksearch, queries))
+    async def calibrate(self, index, minrecall=None, numqueries=None, ksearch=None, queries=None, partition=None):
+        return await self._call(*p.calibrate(index, minrecall, numqueries, ksearch, queries, partition))
 
     # --- jobs -------------------------------------------------------------------------
 

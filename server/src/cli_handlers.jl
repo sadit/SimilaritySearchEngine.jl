@@ -18,7 +18,8 @@ function execute_build(cmd_args::Dict)
         engine=engine_type, backend=backend_type,
         distance=Server.parse_distance(distance),
         textmodel=Server.default_textmodel(engine_type),
-        partition_by=get(cmd_args, "partition-by", nothing))
+        partition_by=get(cmd_args, "partition-by", nothing),
+        partition_graph_min=get(cmd_args, "partition-graph-min", nothing))
 
     kind = SSE.payload_kind(handle.engine)
     items = SSE.AbstractItem[]
@@ -298,7 +299,7 @@ function execute_searchbatch(cmd_args::Dict)
                 @cli_engine_call SSE.ftsearch(handle, item["text"], k; partition)
             else
                 haskey(item, "vector") || continue
-                @cli_engine_call SSE.search(handle, convert(Vector{Float32}, item["vector"]), k)
+                @cli_engine_call SSE.search(handle, convert(Vector{Float32}, item["vector"]), k; partition)
             end
             hits isa Cint && return hits
 
@@ -513,6 +514,7 @@ function execute_rebuild(cmd_args::Dict)
     # The fresh project is partitioned like the old one: the field lives in the project, and the
     # partition lists are rebuilt from the items' `meta` as they are appended again.
     partition_by = SSE.partition_field(handle)
+    partition_graph_min = SSE.partition_graph_min(handle)
     distance = kind === :text ? nothing : SimilaritySearch.distance(engine.backend.index)
 
     all_ids, live = _live_items(handle.project, engine)
@@ -542,7 +544,7 @@ function execute_rebuild(cmd_args::Dict)
     engine_type, backend_type = Server.parse_index_kind(index_kind)
     fresh = SSE.create_project(root, name;
         engine=engine_type, backend=backend_type, distance=distance,
-        textmodel=Server.default_textmodel(engine_type), partition_by)
+        textmodel=Server.default_textmodel(engine_type), partition_by, partition_graph_min)
     reindexed = isempty(items) ? 0 : SSE.append_items!(fresh, items)
     reindexed > 0 && SSE.index!(fresh)
     SSE.close_project!(fresh)
