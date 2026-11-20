@@ -13,7 +13,7 @@ jobs:
     steps:
       # The runner has no Julia installed. Without this step every run failed with
       # "julia: command not found".
-      - uses: julia-actions/setup-julia@v2
+      - uses: julia-actions/setup-julia@v3
         with:
           version: '1.12'
       - name: Pkg.add("CompatHelper")
