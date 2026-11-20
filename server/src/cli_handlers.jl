@@ -169,6 +169,8 @@ function execute_fft(cmd_args::Dict)
         "dists" => Float64.(R.assigndist),
         "covering" => Float64(R.covering),
         "separation" => Float64(R.separation),
+        "costdists" => Int(R.costdists),
+        "costblocks" => Int(R.costblocks),
     )
     SSE.close_project!(handle)
     open(out_file, "w") do io
@@ -198,6 +200,10 @@ function execute_neardup(cmd_args::Dict)
         "assign" => Int.(R.assign),
         "dists" => Float64.(R.assigndist),
         "duplicate_count" => length(R.assign) - length(R.centers),
+        "covering" => Float64(R.covering),
+        "epsilon" => Float64(R.epsilon),
+        "costdists" => Int(R.costdists),
+        "costblocks" => Int(R.costblocks),
     )
     SSE.close_project!(handle)
     open(out_file, "w") do io

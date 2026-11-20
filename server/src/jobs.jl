@@ -214,18 +214,21 @@ function update_job_content!(manager::JobManager, state::JobState, id::String, u
 end
 
 """
-    finish_job!(manager::JobManager, id::String, success::Bool; result=nothing, error=nothing)
+    finish_job!(manager::JobManager, id::String, success::Bool; result=nothing, error=nothing, exit_code=nothing)
 
 Moves a job out of `running/` into its terminal state (`completed/` on success, `failed/`
-otherwise), recording the result/error payload.
+otherwise), recording the result/error payload. `exit_code` is the exit status of the job's
+process, recorded when it is known. A client reads the category of an engine error from it
+(see `cli_exit_code`).
 """
-function finish_job!(manager::JobManager, id::String, success::Bool; result=nothing, error=nothing)
+function finish_job!(manager::JobManager, id::String, success::Bool; result=nothing, error=nothing, exit_code=nothing)
     updates = Dict{String, Any}(
         "finished_at" => string(now(UTC)),
         "progress" => 1.0,
     )
     result !== nothing && (updates["result"] = result)
     error !== nothing && (updates["error"] = error)
+    exit_code !== nothing && (updates["exit_code"] = exit_code)
     update_job_content!(manager, Running, id, updates)
     update_job_state!(manager, id, Running, success ? Completed : Failed)
 end

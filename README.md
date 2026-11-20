@@ -123,9 +123,12 @@ Two levels, in both packages: light on every change, full before a release.
 using Pkg
 Pkg.test()                          # light   -- engine 264 assertions, 46s
 Pkg.test(test_args=["full"])        # full    -- engine 310 assertions, 1m30
+Pkg.test(test_args=["text"])        # only the files named or tagged "text"
 ```
 
-The split follows the clock, not importance. The engine's full level adds the whole-dataset algorithms, the concurrency stress test, and the text testsets that fit a linguistic profile from a corpus -- everything they cover is covered in the light run too, at a size that runs in about a second each. The server's light level (210 assertions, 16 s, measured on 2026-11-19) covers the boundary with the engine -- wire names to engine types, engine errors to status and exit codes, wire items to engine items -- without starting a server or spawning a subprocess; its full level (967 assertions, 32 min) adds the HTTP, job, CLI and Julia client end-to-end suites. `SSE_TEST_LEVEL=full` selects the full level from CI.
+A run that receives names or tags includes only the test files that match one of them, with their heavy testsets. Each suite lists its files, with their names and tags, in the table `TEST_FILES` of its `runtests.jl`. The server's files are `api/01` to `api/17`, `cli/01` to `cli/06`, `e2e`, `boundary`, `dispatcher` and `config`. `SSE_TEST_SELECT="api/13 jobs"` gives the same selection from the environment. A name that matches no file is an error. `test/selection.jl` implements the selection for both suites.
+
+The split follows the clock, not importance. The engine's full level adds the whole-dataset algorithms, the concurrency stress test, and the text testsets that fit a linguistic profile from a corpus -- everything they cover is covered in the light run too, at a size that runs in about a second each. The server's light level (219 assertions, 15 s, measured on 2026-11-20) covers the boundary with the engine -- wire names to engine types, engine errors to status and exit codes, wire items to engine items -- without starting a server or spawning a subprocess; its full level (999 assertions, 30 min) adds the HTTP, job, CLI and Julia client end-to-end suites. `SSE_TEST_LEVEL=full` selects the full level from CI.
 
 A skipped testset is named at the end of a light run: a light run that looks identical to a full one is how a suite quietly stops testing something.
 

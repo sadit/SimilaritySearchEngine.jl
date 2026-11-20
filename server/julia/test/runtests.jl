@@ -60,6 +60,21 @@ body(x) = Vector{UInt8}(JSON3.write(x))
         @test_throws ArgumentError hybrid_search(h, RemoteProject(Connection("http://127.0.0.1:2"), "y"); text="x")
     end
 
+    @testset "a failed job names the category of its exit code" begin
+        exit_category = SimilaritySearchClient.exit_category
+        @test exit_category(2) === InvalidRequest && exit_category(4) === NotFound
+        @test exit_category(5) === ConflictingState && exit_category(70) === StorageFailure
+        @test exit_category(1) === nothing && exit_category(nothing) === nothing
+        e = JobFailed("j1", "fft", 2, InvalidRequest, "job process exited with status 2")
+        @test e isa RemoteError
+        @test sprint(showerror, e) == "JobFailed: fft job j1: job process exited with status 2 (InvalidRequest)"
+        @test occursin("still on the server", sprint(showerror, JobTimeout("j2", 5.0)))
+        h = RemoteProject(Connection("http://127.0.0.1:1"), "x")
+        @test_throws ArgumentError search_pages(h, [1.0], 10; page_size=0)
+        @test_throws ArgumentError search_pages(h, [1.0], 10; page_size=5, filter=(r, m) -> true)
+        @test FFTResult === CenterSelectionResult
+    end
+
     @testset "a connection holds the url and the token" begin
         c = Connection("http://host:8080/"; token="abc")
         @test c.url == "http://host:8080"

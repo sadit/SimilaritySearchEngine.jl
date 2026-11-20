@@ -24,6 +24,10 @@ export Connection, RemoteProject
 export create_project, open_project, close_project!, delete_project!, list_projects, project_info
 export append_items!, index!, search, ftsearch, fetch_items, exists, delete_item!, calibrate!, hybrid_search
 export meta_schema, partition_field, partition_graph_min, partitions, vocabulary_report
+export allknn, fft, neardup, dump_project, load_project
+export submit_job, job_info, wait_job, job_result, list_jobs, cancel_job!, kill_job!, block_job!, resume_job!
+export search_pages, SearchPages
+export KnnRow, CenterSelectionResult, FFTResult, NearDupResult, JobFailed, JobTimeout
 export AbstractItem, DenseItem, SparseItem, TextItem
 export SearchResult, StoredItem, ExistsResult, CalibrationLevel
 export RemoteError, EngineError, InvalidRequest, NotFound, ConflictingState, StorageFailure, AccessDenied
@@ -37,5 +41,7 @@ include("types.jl")
 include("connection.jl")
 include("projects.jl")
 include("operations.jl")
+include("jobs.jl")
+include("cursors.jl")
 
 end

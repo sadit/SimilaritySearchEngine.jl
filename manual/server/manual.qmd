@@ -399,6 +399,19 @@ A job's state is `queued`, `running`, `blocked`, `completed` or `failed`.
 `GET /api/v1/jobs/{job_id}/result` streams the file the job wrote, except for `dump`, whose
 result is a directory: for that one it answers `{"bundle_dir": ..., "manifest": {...}}`.
 
+The result of `allknn` has one line per item: `{"id", "neighbors", "dists"}`. The result of
+`fft` is one object with `centers`, `assign`, `dists`, `covering`, `separation`, `costdists`
+and `costblocks`. The result of `neardup` has `centers`, `assign`, `dists`, `duplicate_count`,
+`covering`, `epsilon`, `costdists` and `costblocks`. The cost fields of both and the
+`covering` and `epsilon` of `neardup` were added on 2026-11-19, so that a client can build the
+engine's result types from them.
+
+The record of a failed job (`GET /api/v1/jobs/{job_id}`) has `error` and, since 2026-11-19,
+`exit_code`: the exit status of the job's process. The command line exits with a code per
+category of engine error (section 5), so `exit_code` tells a client why the job failed. The
+message of the engine error is in the output of the process on the server, which the API
+does not return.
+
 ### Tokens
 
 - `POST /api/v1/admin/tokens` — creates one. Accepts `user`, `permissions` and an optional
@@ -529,15 +542,15 @@ The number of threads the server itself has is the one given to Julia when it st
 
 ## 7. Tests
 
-Two levels, selected with `test_args=["full"]` or `SSE_TEST_LEVEL=full`:
+The suite has two levels. A run can also select some of its files.
 
-- **light** (210 assertions, approximately 16 s, measured on 2026-11-19): the interface with
+- **light** (219 assertions, approximately 15 s, measured on 2026-11-20): the interface with
   the engine. It verifies the mapping from the names used in requests to engine types, from
   engine errors to status codes and exit codes, and from the items of a request to engine
   items. It also verifies that the Julia client has every error type of the engine. No server
   is started and no subprocess is created. This level detects a change in the engine on the
   day it is made.
-- **full** (967 assertions, approximately 32 minutes, measured on 2026-11-19): the end-to-end
+- **full** (999 assertions, approximately 30 minutes, measured on 2026-11-20): the end-to-end
   suites for the API, the jobs, the command lines and the Julia client. They start servers and
   execute subprocesses. Near the end, the run produces no output for about ten minutes, while
   the command-line suite waits for jobs to expire. The run has not stopped.
@@ -546,6 +559,23 @@ Two levels, selected with `test_args=["full"]` or `SSE_TEST_LEVEL=full`:
 julia --project=server -e 'using Pkg; Pkg.develop(path="."); Pkg.test()'
 julia --project=server -e 'using Pkg; Pkg.test(test_args=["full"])'
 ```
+
+Each test file has a name and a list of tags. The table `TEST_FILES` in
+`server/test/runtests.jl` lists them. The names are `config`, `boundary`, `dispatcher`, `e2e`, `api/01` to
+`api/17` and `cli/01` to `cli/06`. Examples of tags are `jobs`, `cursors`, `client`,
+`partitions`, `auth` and `cli`. A run that receives names or tags includes only the files that
+match one of them. The word `light` adds the files of the light level.
+
+```bash
+julia --project=server -e 'using Pkg; Pkg.test(test_args=["jobs", "client"])'
+julia --project=server -e 'using Pkg; Pkg.test(test_args=["light", "api/17"])'
+SSE_TEST_SELECT="api/13 api/17" julia --project=server -e 'using Pkg; Pkg.test()'
+```
+
+A name or tag that matches no file stops the run with an error, which lists the valid names and
+tags. Each file creates its own datasets, so a file can run without the files before it. The
+engine's suite uses the same selection: its files are `dense`, `text`, `persistence`,
+`text_partitions` and others, listed in `test/runtests.jl`.
 
 ## 8. Where to go next
 

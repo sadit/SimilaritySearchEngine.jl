@@ -140,7 +140,7 @@ function run_serve(host::String, port::Int, workdir::String;
     max_concurrent, threads_per_job = Executors.job_thread_budget(Threads.nthreads(), batch_threads_pct)
     println("Job execution: at most $max_concurrent concurrent job(s), $threads_per_job thread(s) each ",
             "($(batch_threads_pct)% of this server's $(Threads.nthreads()) thread(s)). Queries use the rest.")
-    @async Executors.run_dispatcher!(job_mgr, executor; max_concurrent, threads_per_job)
+    errormonitor(@async Executors.run_dispatcher!(job_mgr, executor; max_concurrent, threads_per_job))
 
     Server.run_server(host, port, app)
     return 0

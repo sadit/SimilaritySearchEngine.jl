@@ -64,6 +64,8 @@ The client sends each call to the server. The server does not accept every argum
 | `fetch_items` | `payload` is the vector or the text | `payload` is `nothing` |
 | `calibrate!` | several `levels` in one call | one level per call |
 | `close_project!` | closes the RocksDB database | does nothing |
+| `allknn`, `fft`, `neardup` | run in the calling process | run as a job on the server (section 5) |
+| `fft` | `start` and `verbose` keywords | not accepted |
 
 A filtered search on the server reads `max(5k, k+20)` candidates before it applies the filter, so a result can have fewer than `k` items.
 
@@ -95,15 +97,54 @@ All of them are subtypes of `RemoteError`. A connection that fails, for example 
 
 The server's test suite checks that the client has a type for every error type of the engine, in the same category. A new error type in the engine makes that test fail until the client has it.
 
-## 5. What the Client Does Not Cover Yet
+## 5. Jobs
 
-- The jobs: `allknn`, `fft`, `neardup`, `hsp`, `dump` and `load`. The engine's functions of the same names have no counterpart in the client yet.
-- The cursors of a paginated search (`page_size`). The client receives every result in one response.
-- The administration routes: tokens, unloading and reloading a dataset, and the operation log.
+`allknn`, `fft` and `neardup` have the arguments and the result types of the engine: a `Vector{KnnRow}`, a `CenterSelectionResult` and a `NearDupResult`. On the server, each one runs as a job: a separate Julia process. The call submits the job, asks for its state every `poll_interval` seconds (1 by default), and reads its result when it completes. The call takes at least the time that the server needs to start a Julia process.
 
-The Python client in `server/python/` covers these routes.
+```julia
+rows = allknn(h; k=16)                         # Vector{KnnRow}
+r = fft(h, 100)                                # CenterSelectionResult
+d = neardup(h, 0.05)                           # NearDupResult
 
-## 6. Tests
+# Several jobs at the same time, one task each.
+t1 = @async allknn(h1; k=16)
+t2 = @async allknn(h2; k=16)
+rows1, rows2 = fetch(t1), fetch(t2)
+```
+
+A job that fails raises `JobFailed`. Its `exit_code` is the exit status of the job's process, and its `category` is the engine error category that this status names: `2` is `InvalidRequest`, `4` is `NotFound`, `5` is `ConflictingState` and `70` is `StorageFailure`. Other statuses have no category; `1` is a dataset directory that does not exist. For example, `fft` on a text dataset fails with `exit_code == 2` and `category === InvalidRequest`. The message of the engine error stays in the output of the process on the server.
+
+`dump_project(h)` writes a copy of the dataset to a bundle directory on the server, and `load_project(conn, bundle_dir, "copy")` creates a dataset from it and loads it. The bundle is not sent over HTTP: `bundle_dir` is a path on the server's file system. `load_project` needs the `admin` permission.
+
+The functions that work with any job are these:
+
+| function | what it does |
+| :--- | :--- |
+| `submit_job(conn, kind; params...)` | submits a job, for example `submit_job(conn, "hsp"; dataset="papers", queries="/data/q.jsonl")`, and returns its id |
+| `wait_job(conn, id; poll_interval, timeout)` | waits for the job and returns its record; raises `JobFailed`, or `JobTimeout` after `timeout` seconds |
+| `job_info(conn, id)` | the state of the job (`:queued`, `:running`, `:blocked`, `:completed`, `:failed`) and its record |
+| `job_result(conn, id)` | the result of a completed job, as the text the server sends |
+| `list_jobs(conn; status, kind)` | the jobs of the server |
+| `cancel_job!`, `kill_job!`, `block_job!`, `resume_job!` | the control routes; they need the `admin` permission |
+
+## 6. Pages of a Search
+
+`search_pages` runs a dense or sparse search on the server and receives its results in pages, through a cursor of the server. It returns an iterator of `Vector{SearchResult}`, one per page:
+
+```julia
+for page in search_pages(h, q, 10_000; page_size=500)
+    # page::Vector{SearchResult}
+end
+```
+
+The server computes all `k` results at once. Each page after the first is one request. The iterator can be read once, and the cursor expires 300 seconds after the search. A page requested after that, or a second pass, raises `StateConflict`. The engine has no counterpart, because it returns every result at once.
+
+## 7. What the Client Does Not Cover Yet
+
+- The administration routes: tokens, unloading and reloading a dataset, and the operation log. The Python client in `server/python/` covers them.
+- The jobs `searchbatch`, `closestpair` and `build` have no function of their own. The server accepts them with an explicit command line, which `submit_job(conn, kind; command=[...])` sends.
+
+## 8. Tests
 
 The package's own tests need no server: they check the error mapping, the shape of the items sent, and the options checked before a request. The tests against a server are part of the full level of the server's suite (`server/test/api/test_17_julia_client.jl`), which starts one.
 

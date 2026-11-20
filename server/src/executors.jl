@@ -48,9 +48,15 @@ function submit(executor::LocalCLIExecutor, cli_args::Vector{String}; threads::I
     # offline instead (`src/apps/similarity-search.jl`), exactly like the CLI tests do.
     cmd = _job_command(cli_args, threads)
 
-    # Launch the process in the background (wait=false)
+    # Launch the process in the background (wait=false). `getpid` raises when the process has
+    # already exited and its handle is closed, which can happen when the event loop runs on
+    # another thread. Such a process still has an exit code, so it gets a handle of its own.
     proc = run(cmd, wait=false)
-    handle = string(getpid(proc))
+    handle = try
+        string(getpid(proc))
+    catch
+        "exited-" * string(objectid(proc); base=16)
+    end
 
     executor.running_processes[handle] = proc
     return handle
@@ -82,6 +88,21 @@ function poll(executor::LocalCLIExecutor, handle::String)
     else
         return "unknown"
     end
+end
+
+"""
+    exit_code(executor, handle) -> Union{Nothing,Int}
+
+The exit status of the finished process behind `handle`, or `nothing` when the executor does
+not know it. The CLI's exit codes name the category of an engine error (`cli_exit_code`), so
+the dispatcher records this status in the record of a failed job.
+"""
+exit_code(::AbstractJobExecutor, ::String) = nothing
+
+function exit_code(executor::LocalCLIExecutor, handle::String)
+    proc = get(executor.running_processes, handle, nothing)
+    (proc === nothing || !process_exited(proc)) && return nothing
+    return Int(proc.exitcode)
 end
 
 """
@@ -176,6 +197,11 @@ Background loop (meant to be run inside `@async`) that owns every `queued/` -> `
 `Jobs.create_job!` to enqueue; this loop is what actually dispatches and finishes jobs.
 Crash recovery for jobs orphaned in `running/` by a previous process must be done by the
 caller (via `Jobs.requeue_stale_running!`) before starting this loop.
+
+An error while one job is started or finished does not stop the loop. The error is logged,
+the job goes to `failed/` with the error in its record, and the loop continues with the next
+job. Until 2026-11-20 such an error ended the task without a message, and every job submitted
+after it stayed in `queued/`.
 """
 function run_dispatcher!(job_mgr::Jobs.JobManager, executor::AbstractJobExecutor;
                          max_concurrent::Int=4, threads_per_job::Int=1, poll_interval::Real=0.5)
@@ -188,37 +214,77 @@ function run_dispatcher!(job_mgr::Jobs.JobManager, executor::AbstractJobExecutor
             isempty(queued_ids) && break
 
             id = first(queued_ids)
-            _, record = Jobs.get_job(job_mgr, id)
-            record === nothing && continue
-
-            Jobs.update_job_state!(job_mgr, id, Jobs.Queued, Jobs.Running)
-            command = String.(get(record, "command", String[]))
-            handle = submit(executor, command; threads=threads_per_job)
-            Jobs.update_job_content!(job_mgr, Jobs.Running, id, Dict(
-                "executor_handle" => handle,
-                "started_at" => string(now(UTC)),
-            ))
-            active[id] = handle
+            try
+                _dispatch_one!(job_mgr, executor, active, id, threads_per_job)
+            catch e
+                @error "the job dispatcher could not start a job" id exception=(e, catch_backtrace())
+                _fail_dispatched_job!(job_mgr, id, "the dispatcher could not start the job: " * sprint(showerror, e))
+                delete!(active, id)
+            end
         end
 
         # Poll running jobs and finalize the ones that finished.
         for (id, handle) in collect(active)
-            status = poll(executor, handle)
-            if status == "completed"
-                Jobs.finish_job!(job_mgr, id, true)
-                delete!(active, id)
-            elseif status == "failed"
-                Jobs.finish_job!(job_mgr, id, false; error="job process exited with a non-zero status")
-                delete!(active, id)
-            elseif status == "unknown"
-                # The executor lost track of the handle -- treat as failed rather than
-                # leaving the job stuck in running/ forever.
-                Jobs.finish_job!(job_mgr, id, false; error="executor lost track of the job handle")
+            try
+                _finish_if_done!(job_mgr, executor, active, id, handle)
+            catch e
+                @error "the job dispatcher could not finish a job" id exception=(e, catch_backtrace())
+                _fail_dispatched_job!(job_mgr, id, "the dispatcher could not finish the job: " * sprint(showerror, e))
                 delete!(active, id)
             end
         end
 
         sleep(poll_interval)
+    end
+end
+
+# Moves one queued job to `running/` and starts its process. A job that left `queued/` after
+# it was listed (cancelled, blocked or started by someone else) is skipped.
+function _dispatch_one!(job_mgr, executor, active, id, threads_per_job)
+    state, record = Jobs.get_job(job_mgr, id)
+    state === Jobs.Queued || return
+    Jobs.update_job_state!(job_mgr, id, Jobs.Queued, Jobs.Running)
+    # TOML reads an empty array as `Any[]`, and `String.(Any[])` is still a `Vector{Any}`.
+    command = String[string(x) for x in get(record, "command", String[])]
+    handle = submit(executor, command; threads=threads_per_job)
+    active[id] = handle
+    Jobs.update_job_content!(job_mgr, Jobs.Running, id, Dict(
+        "executor_handle" => handle,
+        "started_at" => string(now(UTC)),
+    ))
+end
+
+function _finish_if_done!(job_mgr, executor, active, id, handle)
+    status = poll(executor, handle)
+    if status == "completed"
+        Jobs.finish_job!(job_mgr, id, true)
+        delete!(active, id)
+    elseif status == "failed"
+        code = exit_code(executor, handle)
+        Jobs.finish_job!(job_mgr, id, false; exit_code=code,
+                         error=code === nothing ? "job process exited with a non-zero status" :
+                                                  "job process exited with status $code")
+        delete!(active, id)
+    elseif status == "unknown"
+        # The executor lost track of the handle -- treat as failed rather than
+        # leaving the job stuck in running/ forever.
+        Jobs.finish_job!(job_mgr, id, false; error="executor lost track of the job handle")
+        delete!(active, id)
+    end
+end
+
+# Records a job the dispatcher could not handle as failed, from whichever state it is in.
+# A job that is already finished, or that no longer exists, is left as it is.
+function _fail_dispatched_job!(job_mgr, id, message)
+    try
+        state, _ = Jobs.get_job(job_mgr, id)
+        if state === Jobs.Queued
+            Jobs.update_job_state!(job_mgr, id, Jobs.Queued, Jobs.Running)
+            state = Jobs.Running
+        end
+        state === Jobs.Running && Jobs.finish_job!(job_mgr, id, false; error=message)
+    catch e
+        @error "the job dispatcher could not record a failed job" id exception=(e, catch_backtrace())
     end
 end
 

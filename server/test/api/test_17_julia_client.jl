@@ -103,6 +103,67 @@ import SimilaritySearchClient as C
         @test issorted([r.score for r in fused]; rev=true)
     end
 
+    @testset "pages of a search, through a cursor" begin
+        h = C.open_project(conn, "jc_dense")
+        q = vec(21)
+        pages = C.search_pages(h, q, 50; page_size=20)
+        # Item 9 is deleted above, and the server drops deleted results before it pages them.
+        want = C.search(h, q, 50)
+        @test pages.total == length(want) == 49
+        got = collect(pages)
+        @test length.(got) == [20, 20, 9]
+        @test reduce(vcat, got) == want
+        # The cursor is closed after its last page, so a second pass fails at its second page.
+        @test_throws C.StateConflict collect(pages)
+    end
+
+    @testset "jobs, with the engine's result types" begin
+        h = C.open_project(conn, "jc_dense")
+        n = length(rows)
+        # Each job is a Julia process on the server; running them in tasks overlaps them.
+        catching(f) = @async try f() catch e e end
+        t_knn = @async C.allknn(h; k=3, poll_interval=0.5)
+        t_fft = @async C.fft(h, 5; poll_interval=0.5)
+        t_dup = @async C.neardup(h, 0.5; poll_interval=0.5)
+        t_text = catching(() -> C.fft(C.RemoteProject(conn, "jc_text"), 3; poll_interval=0.5))
+        t_missing = catching(() -> C.allknn(C.RemoteProject(conn, "jc_missing"); poll_interval=0.5))
+
+        knn = fetch(t_knn)
+        @test knn isa Vector{C.KnnRow} && length(knn) == n
+        @test all(r -> length(r.neighbors) == 3 && issorted(r.dists), knn)
+        r = fetch(t_fft)
+        @test r isa C.CenterSelectionResult && length(r.centers) == 5 && length(r.assign) == n
+        @test all(a -> 1 <= a <= 5, r.assign) && r.covering ≈ maximum(r.assigndist) && r.costdists > 0
+        d = fetch(t_dup)
+        @test d isa C.NearDupResult && length(d.assign) == n && d.epsilon ≈ 0.5
+        @test length(d.centers) <= n
+
+        # A failed job carries the category of the engine error, read from the exit code.
+        e = fetch(t_text)
+        @test e isa C.JobFailed && e.kind == "fft" && e.exit_code == 2 && e.category === C.InvalidRequest
+        e = fetch(t_missing)
+        @test e isa C.JobFailed && e.exit_code == 1 && e.category === nothing
+
+        # The generic functions, on a job of its own.
+        id = C.submit_job(conn, "allknn"; dataset="jc_dense", k=2)
+        @test C.wait_job(conn, id; poll_interval=0.5)["kind"] == "allknn"
+        @test C.job_info(conn, id).status === :completed
+        @test any(j -> j.id == id && j.status === :completed, C.list_jobs(conn; kind="allknn"))
+        @test length(split(strip(C.job_result(conn, id)), '\n')) == n
+        @test_throws C.StateConflict C.cancel_job!(conn, id)
+        @test_throws C.StateConflict C.kill_job!(conn, id)
+        @test_throws C.StateConflict C.resume_job!(conn, id)
+        @test_throws C.ResourceNotFound C.job_info(conn, "no-such-job")
+
+        # dump writes a bundle on the server; load creates a dataset from it and loads it.
+        bundle = C.dump_project(C.open_project(conn, "jc_graph"); poll_interval=0.5)
+        @test isdir(bundle.bundle_dir) && !isempty(bundle.manifest)
+        restored = C.load_project(conn, bundle.bundle_dir, "jc_graph_copy"; poll_interval=0.5)
+        @test C.project_info(restored)["doc_count"] == n
+        @test C.search(restored, vec(12), 1)[1].doc_id == rows[12]["doc_id"]
+        C.delete_project!(restored)
+    end
+
     @testset "a token is sent with every request" begin
         new_token(user, perm, headers) = JSON3.read(String(HTTP.post("$(srv.base_url)/admin/tokens", headers,
             JSON3.write(Dict("user" => user, "permissions" => [perm]))).body)).token

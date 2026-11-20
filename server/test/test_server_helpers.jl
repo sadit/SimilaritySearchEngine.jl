@@ -49,7 +49,7 @@ function ensure_test_server()
             ReentrantLock()
         )
 
-        @async Executors.run_dispatcher!(job_mgr, executor)
+        errormonitor(@async Executors.run_dispatcher!(job_mgr, executor))
 
         port = 8765
         run_server("127.0.0.1", port, app; async=true)

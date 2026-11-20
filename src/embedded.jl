@@ -851,8 +851,11 @@ function close_project!(handle::EmbeddedEngine; compact::Bool=true)
         handle.oov.unflushed = 0
         Persistence.save_field!(handle.store, :oov_counters, handle.oov)
     end
-    if !(handle.engine isa Union{IndexEngine.DenseEngine{IndexEngine.GraphBackend},
-                                 IndexEngine.SparseEngine, IndexEngine.FullTextEngine})
+    # An exact index is saved whole at close. A read-only handle cannot write, and it changed
+    # nothing to save: until 2026-11-19 this raised, which made every job over an exact dataset
+    # fail when it closed its project.
+    if !handle.read_only && !(handle.engine isa Union{IndexEngine.DenseEngine{IndexEngine.GraphBackend},
+                                                      IndexEngine.SparseEngine, IndexEngine.FullTextEngine})
         Persistence.save_field!(handle.store, :index, handle.engine.backend.index)
     end
     handle.dense_vectors[] === nothing || close(handle.dense_vectors[])

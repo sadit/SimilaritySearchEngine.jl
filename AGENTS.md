@@ -44,6 +44,11 @@ julia --project=server -t auto -e 'using Pkg; Pkg.test()'
 julia --project=server/julia -e 'using Pkg; Pkg.test()'
 ```
 
+While working, run only the test files a change touches: `Pkg.test(test_args=["jobs", "api/17"])`
+selects files by name or tag (`TEST_FILES` in each `runtests.jl`, `test/selection.jl`). The
+server's full suite takes about 30 minutes. Run it with `test_args=["full"]` before a release
+and before a commit that changes the job model, the dispatcher or the shared test server.
+
 A new engine error type is not finished until the Julia client has a type of the same name, in
 the same category (`server/julia/src/errors.jl`).
 

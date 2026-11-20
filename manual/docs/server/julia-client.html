@@ -218,8 +218,10 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <li><a href="#use" id="toc-use" class="nav-link" data-scroll-target="#use">2. Use</a></li>
   <li><a href="#differences-with-the-engine" id="toc-differences-with-the-engine" class="nav-link" data-scroll-target="#differences-with-the-engine">3. Differences with the Engine</a></li>
   <li><a href="#errors" id="toc-errors" class="nav-link" data-scroll-target="#errors">4. Errors</a></li>
-  <li><a href="#what-the-client-does-not-cover-yet" id="toc-what-the-client-does-not-cover-yet" class="nav-link" data-scroll-target="#what-the-client-does-not-cover-yet">5. What the Client Does Not Cover Yet</a></li>
-  <li><a href="#tests" id="toc-tests" class="nav-link" data-scroll-target="#tests">6. Tests</a></li>
+  <li><a href="#jobs" id="toc-jobs" class="nav-link" data-scroll-target="#jobs">5. Jobs</a></li>
+  <li><a href="#pages-of-a-search" id="toc-pages-of-a-search" class="nav-link" data-scroll-target="#pages-of-a-search">6. Pages of a Search</a></li>
+  <li><a href="#what-the-client-does-not-cover-yet" id="toc-what-the-client-does-not-cover-yet" class="nav-link" data-scroll-target="#what-the-client-does-not-cover-yet">7. What the Client Does Not Cover Yet</a></li>
+  <li><a href="#tests" id="toc-tests" class="nav-link" data-scroll-target="#tests">8. Tests</a></li>
   </ul>
 </nav>
     </div>
@@ -349,6 +351,16 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <td style="text-align: left;">closes the RocksDB database</td>
 <td style="text-align: left;">does nothing</td>
 </tr>
+<tr class="odd">
+<td style="text-align: left;"><code>allknn</code>, <code>fft</code>, <code>neardup</code></td>
+<td style="text-align: left;">run in the calling process</td>
+<td style="text-align: left;">run as a job on the server (section 5)</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>fft</code></td>
+<td style="text-align: left;"><code>start</code> and <code>verbose</code> keywords</td>
+<td style="text-align: left;">not accepted</td>
+</tr>
 </tbody>
 </table>
 <p>A filtered search on the server reads <code>max(5k, k+20)</code> candidates before it applies the filter, so a result can have fewer than <code>k</code> items.</p>
@@ -412,19 +424,78 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>All of them are subtypes of <code>RemoteError</code>. A connection that fails, for example because no server listens on the address, raises the exception of HTTP.jl.</p>
 <p>The server’s test suite checks that the client has a type for every error type of the engine, in the same category. A new error type in the engine makes that test fail until the client has it.</p>
 </section>
+<section id="jobs" class="level2">
+<h2 class="anchored" data-anchor-id="jobs">5. Jobs</h2>
+<p><code>allknn</code>, <code>fft</code> and <code>neardup</code> have the arguments and the result types of the engine: a <code>Vector{KnnRow}</code>, a <code>CenterSelectionResult</code> and a <code>NearDupResult</code>. On the server, each one runs as a job: a separate Julia process. The call submits the job, asks for its state every <code>poll_interval</code> seconds (1 by default), and reads its result when it completes. The call takes at least the time that the server needs to start a Julia process.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>rows <span class="op">=</span> <span class="fu">allknn</span>(h; k<span class="op">=</span><span class="fl">16</span>)                         <span class="co"># Vector{KnnRow}</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>r <span class="op">=</span> <span class="fu">fft</span>(h, <span class="fl">100</span>)                                <span class="co"># CenterSelectionResult</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>d <span class="op">=</span> <span class="fu">neardup</span>(h, <span class="fl">0.05</span>)                           <span class="co"># NearDupResult</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Several jobs at the same time, one task each.</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>t1 <span class="op">=</span> <span class="pp">@async</span> <span class="fu">allknn</span>(h1; k<span class="op">=</span><span class="fl">16</span>)</span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>t2 <span class="op">=</span> <span class="pp">@async</span> <span class="fu">allknn</span>(h2; k<span class="op">=</span><span class="fl">16</span>)</span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>rows1, rows2 <span class="op">=</span> <span class="fu">fetch</span>(t1), <span class="fu">fetch</span>(t2)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>A job that fails raises <code>JobFailed</code>. Its <code>exit_code</code> is the exit status of the job’s process, and its <code>category</code> is the engine error category that this status names: <code>2</code> is <code>InvalidRequest</code>, <code>4</code> is <code>NotFound</code>, <code>5</code> is <code>ConflictingState</code> and <code>70</code> is <code>StorageFailure</code>. Other statuses have no category; <code>1</code> is a dataset directory that does not exist. For example, <code>fft</code> on a text dataset fails with <code>exit_code == 2</code> and <code>category === InvalidRequest</code>. The message of the engine error stays in the output of the process on the server.</p>
+<p><code>dump_project(h)</code> writes a copy of the dataset to a bundle directory on the server, and <code>load_project(conn, bundle_dir, "copy")</code> creates a dataset from it and loads it. The bundle is not sent over HTTP: <code>bundle_dir</code> is a path on the server’s file system. <code>load_project</code> needs the <code>admin</code> permission.</p>
+<p>The functions that work with any job are these:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: left;">function</th>
+<th style="text-align: left;">what it does</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;"><code>submit_job(conn, kind; params...)</code></td>
+<td style="text-align: left;">submits a job, for example <code>submit_job(conn, "hsp"; dataset="papers", queries="/data/q.jsonl")</code>, and returns its id</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>wait_job(conn, id; poll_interval, timeout)</code></td>
+<td style="text-align: left;">waits for the job and returns its record; raises <code>JobFailed</code>, or <code>JobTimeout</code> after <code>timeout</code> seconds</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>job_info(conn, id)</code></td>
+<td style="text-align: left;">the state of the job (<code>:queued</code>, <code>:running</code>, <code>:blocked</code>, <code>:completed</code>, <code>:failed</code>) and its record</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>job_result(conn, id)</code></td>
+<td style="text-align: left;">the result of a completed job, as the text the server sends</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>list_jobs(conn; status, kind)</code></td>
+<td style="text-align: left;">the jobs of the server</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>cancel_job!</code>, <code>kill_job!</code>, <code>block_job!</code>, <code>resume_job!</code></td>
+<td style="text-align: left;">the control routes; they need the <code>admin</code> permission</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="pages-of-a-search" class="level2">
+<h2 class="anchored" data-anchor-id="pages-of-a-search">6. Pages of a Search</h2>
+<p><code>search_pages</code> runs a dense or sparse search on the server and receives its results in pages, through a cursor of the server. It returns an iterator of <code>Vector{SearchResult}</code>, one per page:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> page <span class="kw">in</span> <span class="fu">search_pages</span>(h, q, <span class="fl">10_000</span>; page_size<span class="op">=</span><span class="fl">500</span>)</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>    <span class="co"># page::Vector{SearchResult}</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>The server computes all <code>k</code> results at once. Each page after the first is one request. The iterator can be read once, and the cursor expires 300 seconds after the search. A page requested after that, or a second pass, raises <code>StateConflict</code>. The engine has no counterpart, because it returns every result at once.</p>
+</section>
 <section id="what-the-client-does-not-cover-yet" class="level2">
-<h2 class="anchored" data-anchor-id="what-the-client-does-not-cover-yet">5. What the Client Does Not Cover Yet</h2>
+<h2 class="anchored" data-anchor-id="what-the-client-does-not-cover-yet">7. What the Client Does Not Cover Yet</h2>
 <ul>
-<li>The jobs: <code>allknn</code>, <code>fft</code>, <code>neardup</code>, <code>hsp</code>, <code>dump</code> and <code>load</code>. The engine’s functions of the same names have no counterpart in the client yet.</li>
-<li>The cursors of a paginated search (<code>page_size</code>). The client receives every result in one response.</li>
-<li>The administration routes: tokens, unloading and reloading a dataset, and the operation log.</li>
+<li>The administration routes: tokens, unloading and reloading a dataset, and the operation log. The Python client in <code>server/python/</code> covers them.</li>
+<li>The jobs <code>searchbatch</code>, <code>closestpair</code> and <code>build</code> have no function of their own. The server accepts them with an explicit command line, which <code>submit_job(conn, kind; command=[...])</code> sends.</li>
 </ul>
-<p>The Python client in <code>server/python/</code> covers these routes.</p>
 </section>
 <section id="tests" class="level2">
-<h2 class="anchored" data-anchor-id="tests">6. Tests</h2>
+<h2 class="anchored" data-anchor-id="tests">8. Tests</h2>
 <p>The package’s own tests need no server: they check the error mapping, the shape of the items sent, and the options checked before a request. The tests against a server are part of the full level of the server’s suite (<code>server/test/api/test_17_julia_client.jl</code>), which starts one.</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">--project</span><span class="op">=</span>server/julia <span class="at">-e</span> <span class="st">'using Pkg; Pkg.test()'</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">--project</span><span class="op">=</span>server/julia <span class="at">-e</span> <span class="st">'using Pkg; Pkg.test()'</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 
 
 </section>

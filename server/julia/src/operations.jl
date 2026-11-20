@@ -43,12 +43,18 @@ server does not accept them.
 """
 function search(h::RemoteProject, vector::AbstractVector{<:Real}, k::Integer=10; filter=nothing,
                 partition::Union{Nothing,AbstractString}=nothing, beamsearch_overrides=nothing)
+    body = _search_body(vector, k, filter, partition, beamsearch_overrides)
+    return _results(request(h.conn, "POST", dataset_path(h.id, "/search"); body))
+end
+
+"The body of `POST .../search`, shared by `search` and `search_pages`."
+function _search_body(vector, k, filter, partition, beamsearch_overrides)
     _check_filter(filter)
     body = Dict{String,Any}("vector" => convert(Vector{Float32}, vector), "k" => Int(k))
     filter === nothing || (body["filter"] = filter)
     partition === nothing || (body["partition"] = partition)
     beamsearch_overrides === nothing || (body["beamsearch_overrides"] = Dict(pairs(beamsearch_overrides)))
-    return _results(request(h.conn, "POST", dataset_path(h.id, "/search"); body))
+    return body
 end
 
 """
