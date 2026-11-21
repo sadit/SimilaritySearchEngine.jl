@@ -56,14 +56,16 @@ lock is exclusive per process.
 
 The parameter `index_kind` of the API names a pair: the type of data a project holds, and the structure that indexes it:
 
-| `index_kind` | engine | backend | notes |
-| :--- | :--- | :--- | :--- |
-| `searchgraph` | `DenseEngine` | `SearchGraph` | approximate, adjusts its own parameters; the default |
-| `exhaustive_search` | `DenseEngine` | `ExhaustiveSearch` | exact, linear scan |
-| `parallel_exhaustive_search` | `DenseEngine` | `ParallelExhaustiveSearch` | exact, data-parallel |
-| `bm25_invfile` | `FullTextEngine` | `BM25InvertedFile` | BM25 scoring |
-| `invfile` | `FullTextEngine` | `TextInvertedFile` | TF-IDF cosine |
-| `sparse_invfile` | `SparseEngine` | `InvertedFile` | sparse vectors encoded by the caller; requires `dimension` |
+| `index_kind` | engine spec | notes |
+| :--- | :--- | :--- |
+| `searchgraph` | `DenseVectors(distance; index=Graph())` | approximate, adjusts its own parameters; the default |
+| `exhaustive_search` | `DenseVectors(distance; index=Exhaustive())` | exact, linear scan |
+| `parallel_exhaustive_search` | `DenseVectors(distance; index=Exhaustive(parallel=true))` | exact, data-parallel |
+| `bm25_invfile` | `TextDocuments(FitFromCorpus(); index=BM25())` | BM25 scoring |
+| `invfile` | `TextDocuments(FitFromCorpus(); index=VectorSpace(distance))` | TF-IDF cosine |
+| `sparse_invfile` | `SparseVectors(dimension, distance)` | sparse vectors encoded by the caller; requires `dimension` |
+
+The server builds the spec from the fields of the request with `dataset_spec(index_kind, distance, dimension)`. When the request gives no distance, a dense dataset uses `SqL2`, and `invfile` and `sparse_invfile` use `NormCosine`. BM25 scoring does not use a distance. See [Project Specifications](../architecture.qmd#project-specifications) in the engine manual.
 
 A text project is created with `FitFromCorpus`. Its vocabulary is fitted from the documents the
 dataset has received when `index!` is called for the first time. Sending a pre-computed text

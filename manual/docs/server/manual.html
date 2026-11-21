@@ -319,58 +319,51 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>The parameter <code>index_kind</code> of the API names a pair: the type of data a project holds, and the structure that indexes it:</p>
 <table class="caption-top table">
 <colgroup>
-<col style="width: 25%">
-<col style="width: 25%">
-<col style="width: 25%">
-<col style="width: 25%">
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
 </colgroup>
 <thead>
 <tr class="header">
 <th style="text-align: left;"><code>index_kind</code></th>
-<th style="text-align: left;">engine</th>
-<th style="text-align: left;">backend</th>
+<th style="text-align: left;">engine spec</th>
 <th style="text-align: left;">notes</th>
 </tr>
 </thead>
 <tbody>
 <tr class="odd">
 <td style="text-align: left;"><code>searchgraph</code></td>
-<td style="text-align: left;"><code>DenseEngine</code></td>
-<td style="text-align: left;"><code>SearchGraph</code></td>
+<td style="text-align: left;"><code>DenseVectors(distance; index=Graph())</code></td>
 <td style="text-align: left;">approximate, adjusts its own parameters; the default</td>
 </tr>
 <tr class="even">
 <td style="text-align: left;"><code>exhaustive_search</code></td>
-<td style="text-align: left;"><code>DenseEngine</code></td>
-<td style="text-align: left;"><code>ExhaustiveSearch</code></td>
+<td style="text-align: left;"><code>DenseVectors(distance; index=Exhaustive())</code></td>
 <td style="text-align: left;">exact, linear scan</td>
 </tr>
 <tr class="odd">
 <td style="text-align: left;"><code>parallel_exhaustive_search</code></td>
-<td style="text-align: left;"><code>DenseEngine</code></td>
-<td style="text-align: left;"><code>ParallelExhaustiveSearch</code></td>
+<td style="text-align: left;"><code>DenseVectors(distance; index=Exhaustive(parallel=true))</code></td>
 <td style="text-align: left;">exact, data-parallel</td>
 </tr>
 <tr class="even">
 <td style="text-align: left;"><code>bm25_invfile</code></td>
-<td style="text-align: left;"><code>FullTextEngine</code></td>
-<td style="text-align: left;"><code>BM25InvertedFile</code></td>
+<td style="text-align: left;"><code>TextDocuments(FitFromCorpus(); index=BM25())</code></td>
 <td style="text-align: left;">BM25 scoring</td>
 </tr>
 <tr class="odd">
 <td style="text-align: left;"><code>invfile</code></td>
-<td style="text-align: left;"><code>FullTextEngine</code></td>
-<td style="text-align: left;"><code>TextInvertedFile</code></td>
+<td style="text-align: left;"><code>TextDocuments(FitFromCorpus(); index=VectorSpace(distance))</code></td>
 <td style="text-align: left;">TF-IDF cosine</td>
 </tr>
 <tr class="even">
 <td style="text-align: left;"><code>sparse_invfile</code></td>
-<td style="text-align: left;"><code>SparseEngine</code></td>
-<td style="text-align: left;"><code>InvertedFile</code></td>
+<td style="text-align: left;"><code>SparseVectors(dimension, distance)</code></td>
 <td style="text-align: left;">sparse vectors encoded by the caller; requires <code>dimension</code></td>
 </tr>
 </tbody>
 </table>
+<p>The server builds the spec from the fields of the request with <code>dataset_spec(index_kind, distance, dimension)</code>. When the request gives no distance, a dense dataset uses <code>SqL2</code>, and <code>invfile</code> and <code>sparse_invfile</code> use <code>NormCosine</code>. BM25 scoring does not use a distance. See <a href="../architecture.html#project-specifications">Project Specifications</a> in the engine manual.</p>
 <p>A text project is created with <code>FitFromCorpus</code>. Its vocabulary is fitted from the documents the dataset has received when <code>index!</code> is called for the first time. Sending a pre-computed text profile to the server is not available over HTTP.</p>
 </section>
 <section id="rest-api-base-endpoints" class="level2">

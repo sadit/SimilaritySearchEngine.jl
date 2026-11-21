@@ -2061,6 +2061,14 @@ function engine_error_response(e::SSE.EngineError)
     json_response(status, Dict("error" => sprint(showerror, e), "kind" => string(nameof(typeof(e)))))
 end
 
+"""
+    parse_distance(name::Union{AbstractString,Nothing}) -> Union{SimilaritySearch.PreMetric,Nothing}
+
+The distance that a wire name selects: `l2` and `sql2` give `SqL2`, and `cosine`, `normcosine`,
+`angle`, `normangle` and `jaccard` give the distance of the same name. The name is not case
+sensitive. `nothing` and the empty string give `nothing`, which lets
+[`dataset_spec`](@ref) choose the default distance of the dataset kind.
+"""
 function parse_distance(dist::Union{AbstractString,Nothing})
     dist === nothing && return nothing
     d = lowercase(dist)

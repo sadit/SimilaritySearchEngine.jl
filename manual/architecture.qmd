@@ -187,10 +187,7 @@ classDiagram
 
 - **Sparse engine (`SparseEngine`)**: Performs inverted-index search over sparse vectors encoded outside the package. The caller supplies `SparseVector` objects, and no tokenizer or text profile is involved.
 - **Introspection of the payload type (`payload_kind`)**: Returns `:dense`, `:sparse` or `:text`, so that a calling layer can determine what a project accepts.
-- **Backend Compatibility Registry (`BACKENDS`)**: Enforces valid combinations of payload engines and search backends:
-  - `DenseEngine` accepts `SearchGraph`, `ExhaustiveSearch`, and `ParallelExhaustiveSearch`.
-  - `SparseEngine` accepts `InvertedFile`.
-  - `FullTextEngine` accepts `BM25InvertedFile` and `TextInvertedFile`.
+- **Valid combinations of engine and backend**: The spec types fix them. A `DenseVectors` spec takes a dense index (`Graph` or `Exhaustive`). A `TextDocuments` spec takes a text index (`BM25` or `VectorSpace`). A `SparseVectors` spec has no index option, because `InvertedFile` is its only backend. A combination that is not valid cannot be written as a spec.
 - **Domain Separation of BM25**: `BM25InvertedFile` is restricted to `FullTextEngine` because BM25 scoring relies on corpus-level document frequencies and average document lengths rather than purely geometric vector properties.
 - **Structural Dimension Constraints**: `SparseBackend` requires an explicit `dimension` parameter at initialization because an `InvertedFile` allocates a fixed array of posting lists.
 - **Text model**: `FullTextEngine` keeps its linguistic configuration in a `TextProfile` (`profile`): vocabulary frequencies, term weighting, stopword lists, lemma clusters, and query-expansion graphs.

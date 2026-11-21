@@ -140,9 +140,10 @@ The filter is applied to a fixed number of candidates read from the index. That 
 The value of `candidates` should correspond to the selectivity of the predicate. A predicate satisfied by approximately one item in $n$ requires approximately $n \cdot k$ candidates to return $k$ results:
 
 ```julia
-# One document in ~26 carries this year: 20 candidates are not enough for 10 results
-rare = search(h, query, 10; filter = (record, meta) -> meta["year"] == 2005)                   # returns 0
-enough = search(h, query, 10; filter = (record, meta) -> meta["year"] == 2005, candidates=8192) # returns 10
+# About one paragraph in 18 has 13 verbs or more: 20 candidates are not enough for 10 results
+many_verbs(record, meta) = meta["verb_count"] >= 13
+rare = search(h, query, 10; filter = many_verbs)                     # 2 results
+enough = search(h, query, 10; filter = many_verbs, candidates=362)   # 10 results
 ```
 
 ### 6. Declaring What `meta` Holds
@@ -150,8 +151,8 @@ enough = search(h, query, 10; filter = (record, meta) -> meta["year"] == 2005, c
 A project may declare the fields of `meta` it expects, and the type of each one:
 
 ```julia
-h = create_project(workdir, "frankenstein_typed", DenseVectors();
-                   meta_schema = ["word_count" => :int64, "published" => :timestamp])
+htyped = create_project(workdir, "frankenstein_typed", DenseVectors();
+                        meta_schema = ["word_count" => :int64, "published" => :timestamp])
 ```
 
 `append_items!` then checks those fields. A value that is not the declared type is rejected
@@ -164,9 +165,16 @@ What this buys, since the declared fields are not indexed, is that a comparison 
 the declared type. A field declared `:timestamp` is compared as an instant:
 
 ```julia
-# The same instant written two ways: this matches a record stored as "2026-01-02T00:00:00"
-search(h, query, 5; filter = (record, meta) -> Schema.matches_filter(
-    record, meta, Dict("published" => "2026-01-02T00:00"), meta_schema(h)))
+using SimilaritySearchEngine: Schema
+
+append_items!(htyped, [DenseItem(query; doc_id = "dated",
+    meta = Dict{String,Any}("word_count" => 2024.0, "published" => "2026-01-02T00:00:00"))])
+index!(htyped)
+
+# The same instant written two ways: "2026-01-02T00:00" matches the stored "2026-01-02T00:00:00"
+search(htyped, query, 5; filter = (record, meta) -> Schema.matches_filter(
+    record, meta, Dict("published" => "2026-01-02T00:00"), meta_schema(htyped)))
+close_project!(htyped)
 ```
 
 Declaring on a project that already holds records reads none of them:
@@ -465,6 +473,12 @@ Loads a published language profile, for example Spanish or English, and refits i
 
 ```julia
 hes = create_project(workdir, "news_es", TextDocuments(DefaultProfile(:es)))
+append_items!(hes, [
+    TextItem("Un concierto de música clásica en el teatro de la ciudad"; doc_id = "n1"),
+    TextItem("Las novelas sobre la guerra civil siguen en las librerías"; doc_id = "n2"),
+    TextItem("El próximo concierto de la orquesta será en marzo"; doc_id = "n3"),
+])
+index!(hes)    # refits the Spanish profile against these documents
 ```
 
 The project then uses the stopword lists, lemma clusters and query-expansion networks derived from a reference corpus, with term frequencies adjusted to the dataset of the project.
@@ -503,10 +517,10 @@ A full-text query is executed under a [`QueryPolicy`](https://sadit.github.io/Te
 
 ```julia
 # Default policy: automatic orthographic correction
-ftsearch(hes, "musica clasica", 5)
+ftsearch(hes, "proximo concierto", 5)
 
 # Disable correction: search literal tokens as entered
-ftsearch(hes, "musica clasica", 5; policy=QueryPolicy(correction=:off))
+ftsearch(hes, "proximo concierto", 5; policy=QueryPolicy(correction=:off))
 ```
 
 ### Explaining Corrections: `ftexplain`
@@ -514,14 +528,16 @@ ftsearch(hes, "musica clasica", 5; policy=QueryPolicy(correction=:off))
 `ftexplain` reports the token substitutions that were applied to the query:
 
 ```julia
-ftexplain(hes, "musica clasica")
+ftexplain(hes, "proximo concierto")
+# ["proximo not found, searched as próximo (variant), pròximo (variant), Próximo (variant) instead"]
 ```
 
 ### Correcting Misspelled Tokens: `edit_correction`
 
-The default correction folds case and diacritics, so it maps `musica` to `música`. It does not map `guerar` to `guerra`, because that correction exchanges two letters. The option `edit_correction=true` of `Runtime` adds this kind of correction. A query token that is absent from the vocabulary is replaced by the only vocabulary token at Damerau-Levenshtein distance 1 from it. The Damerau-Levenshtein distance counts insertions, deletions, substitutions and exchanges of two adjacent letters. If there are two or more such tokens, the query token is not replaced.
+The default correction folds case and diacritics, so it maps `proximo` to `próximo`. It does not map `guerar` to `guerra`, because that correction exchanges two letters. The option `edit_correction=true` of `Runtime` adds this kind of correction. A query token that is absent from the vocabulary is replaced by the only vocabulary token at Damerau-Levenshtein distance 1 from it. The Damerau-Levenshtein distance counts insertions, deletions, substitutions and exchanges of two adjacent letters. If there are two or more such tokens, the query token is not replaced.
 
 ```julia
+close_project!(hes)
 hes = open_project(workdir, "news_es"; runtime=Runtime(edit_correction=true))
 ftexplain(hes, "guerar civil")    # ["guerar not found, searched as guerra (edit) instead"]
 ```
@@ -651,19 +667,20 @@ The engine raises typed errors, and the type indicates why the call failed. Ther
 using SimilaritySearchEngine
 
 try
-    searchbatch(h, queries, 10)
+    searchbatch(h2, queries, 10)
 catch e
     if e isa PendingBacklog
         # Items were appended but not indexed yet. The engine reports both counts.
         @info "indexing $(e.staged - e.connected) pending item(s) first"
-        index!(h)
-        searchbatch(h, queries, 10)
+        index!(h2)
+        searchbatch(h2, queries, 10)
     elseif e isa ConflictingState
         rethrow()          # some other state problem: not trained, empty, no index
     else
         rethrow()
     end
 end
+close_project!(h2)
 ```
 
 The categories, and when each one appears:
@@ -685,8 +702,8 @@ This tutorial covered the following operations:
 1. Creation of a project from a specification of its payload and its index.
 2. Insertion with `append_items!` and construction of the graph or the vocabulary with `index!`.
 3. Nearest-neighbor queries with metadata filtering, an explicit number of candidates, and deleted records.
-5. A declared schema for `meta`, which states what a field holds and how a filter compares it.
-4. Batch queries, with metadata (`search`) or without it (`searchbatch`).
+4. A declared schema for `meta`, which states what a field holds and how a filter compares it.
+5. Batch queries, with metadata (`search`) or without it (`searchbatch`).
 6. Calibration of the search parameters (`calibrate!`) for a target recall, and measurement of the cost of a query.
 7. Operations over the entire dataset, executed in the calling process.
 8. Retrieval by external identifier, and compaction of the storage when the project is closed.

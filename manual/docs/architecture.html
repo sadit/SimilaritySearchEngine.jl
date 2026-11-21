@@ -487,12 +487,7 @@ window.Quarto = {
 <ul>
 <li><strong>Sparse engine (<code>SparseEngine</code>)</strong>: Performs inverted-index search over sparse vectors encoded outside the package. The caller supplies <code>SparseVector</code> objects, and no tokenizer or text profile is involved.</li>
 <li><strong>Introspection of the payload type (<code>payload_kind</code>)</strong>: Returns <code>:dense</code>, <code>:sparse</code> or <code>:text</code>, so that a calling layer can determine what a project accepts.</li>
-<li><strong>Backend Compatibility Registry (<code>BACKENDS</code>)</strong>: Enforces valid combinations of payload engines and search backends:
-<ul>
-<li><code>DenseEngine</code> accepts <code>SearchGraph</code>, <code>ExhaustiveSearch</code>, and <code>ParallelExhaustiveSearch</code>.</li>
-<li><code>SparseEngine</code> accepts <code>InvertedFile</code>.</li>
-<li><code>FullTextEngine</code> accepts <code>BM25InvertedFile</code> and <code>TextInvertedFile</code>.</li>
-</ul></li>
+<li><strong>Valid combinations of engine and backend</strong>: The spec types fix them. A <code>DenseVectors</code> spec takes a dense index (<code>Graph</code> or <code>Exhaustive</code>). A <code>TextDocuments</code> spec takes a text index (<code>BM25</code> or <code>VectorSpace</code>). A <code>SparseVectors</code> spec has no index option, because <code>InvertedFile</code> is its only backend. A combination that is not valid cannot be written as a spec.</li>
 <li><strong>Domain Separation of BM25</strong>: <code>BM25InvertedFile</code> is restricted to <code>FullTextEngine</code> because BM25 scoring relies on corpus-level document frequencies and average document lengths rather than purely geometric vector properties.</li>
 <li><strong>Structural Dimension Constraints</strong>: <code>SparseBackend</code> requires an explicit <code>dimension</code> parameter at initialization because an <code>InvertedFile</code> allocates a fixed array of posting lists.</li>
 <li><strong>Text model</strong>: <code>FullTextEngine</code> keeps its linguistic configuration in a <code>TextProfile</code> (<code>profile</code>): vocabulary frequencies, term weighting, stopword lists, lemma clusters, and query-expansion graphs.</li>

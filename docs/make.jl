@@ -29,7 +29,10 @@ makedocs(;
         prettyurls=get(ENV, "CI", nothing) == "true",
         canonical="https://sadit.github.io/SimilaritySearchEngine.jl/api",
         assets=String[],
-        size_threshold=500_000,
+        # engine.md holds every docstring of the engine on one page, so that a link such as
+        # engine.html#SimilaritySearchEngine.IndexEngine.SparseVectors keeps working. The
+        # docstrings of the project specs (issue #2) made it 500.5 KiB on 2026-11-21.
+        size_threshold=700_000,
         size_threshold_warn=300_000,
     ),
     pages=[
