@@ -372,7 +372,8 @@ const _PROJECT_CFS = [Persistence.ENGINE_CF, Persistence.ADJACENCY_CF, Persisten
 """
     create_project(workdir, dataset; engine=DenseEngine, backend=nothing, distance=nothing,
                    minrecall=0.9, dimension=nothing, textmodel=nothing, schema_version=1,
-                   edit_correction=false, partition_by=nothing) -> EmbeddedEngine
+                   edit_correction=false, partition_by=nothing, partition_graph_min=nothing,
+                   quantizer=nothing) -> EmbeddedEngine
 
 Creates a brand-new project directly on disk at `<workdir>/<dataset>`, with no HTTP server or
 CLI subprocess involved -- the same on-disk layout `similarity-search build` already produces,
@@ -470,6 +471,15 @@ own graph, which `index!` builds and extends. On an exact project every partitio
 `partition_graph_min` is saved with the project, and it is an error without `partition_by` or
 on a project that is not dense.
 
+`quantizer=ScalarQuantizer(:sqgu8)` makes a dense project store each vector as the codes of a
+scalar quantizer instead of `Float32` values (issue #1). At 8 bits a vector takes a quarter of
+the memory and of the disk space. It works with every dense backend: `SearchGraph`,
+`ExhaustiveSearch` and `ParallelExhaustiveSearch`. The distance must be `SqL2`, `L2`, `L1`,
+`Cosine` or `NormCosine`. [`append_items!`](@ref) stages the vectors on every backend, and
+[`index!`](@ref index!(::EmbeddedEngine)) encodes them. The first `index!` also fits the range of
+a global quantizer on a sample of the staged vectors. See [`ScalarQuantizer`](@ref) for the
+kinds, the rotation and `keep_vectors`, and [`quantizer_info`](@ref) for what a project reports.
+
 `schema_version` is stamped onto every `Schema.MetadataRecord` [`append_items!`](@ref)
 writes for this project's lifetime (not persisted/restored itself -- like `minrecall`
 before it was carried on the engine, a caller reopening this same project later must pass
@@ -498,7 +508,8 @@ function create_project(workdir::String, dataset::String;
                         maxbatches::Union{Nothing,Integer}=nothing,
                         postings_cache_max::Int=4096, postings_cache_base::Int=2048,
                         edit_correction::Bool=false, partition_by::Union{Nothing,AbstractString}=nothing,
-                        partition_graph_min::Union{Nothing,Integer}=nothing)
+                        partition_graph_min::Union{Nothing,Integer}=nothing,
+                        quantizer::Union{Nothing,IndexEngine.ScalarQuantizer}=nothing)
     index_type === nothing || invalid_option(:index_type, """
         `index_type` is gone: a project now names the kind of data it holds and, separately, the
         index that holds it.
@@ -541,6 +552,14 @@ function create_project(workdir::String, dataset::String;
     elseif dimension !== nothing
         invalid_option(:dimension, "`dimension` only applies to a sparse project; $(nameof(engine)) does not take one")
     end
+    # The sentinel is resolved here, once, and everything below this line receives a real
+    # value -- the whole of the no-defaults-below-the-surface policy in one statement.
+    dist = distance === nothing ? IndexEngine.default_distance(back) : distance
+    if quantizer !== nothing
+        kind === :dense ||
+            invalid_option(:quantizer, "`quantizer` applies to a dense project; $(nameof(engine)) indexes $kind items")
+        IndexEngine.quantized_distance(dist)
+    end
 
     dir = joinpath(workdir, dataset)
     mkpath(dir)
@@ -559,6 +578,10 @@ function create_project(workdir::String, dataset::String;
     # objects, and an exact index has nothing to report so its whole index is flushed instead.
     on_change = if kind === :dense && back === SearchGraph
         _searchgraph_on_change(store, Persistence.open_adjacency_store(project.db))
+    elseif quantizer !== nothing
+        # A quantized exact index keeps its codes in their own file (see `_index_quantized!`),
+        # so there is no whole index to flush.
+        nothing
     elseif kind === :text
         # A text project persists its *index* (see `Persistence.InvertedIndexStore`), written a
         # block at a time by `IndexEngine.index!` itself, so there is nothing for an observer to
@@ -574,12 +597,10 @@ function create_project(workdir::String, dataset::String;
                              baselists=postings_cache_base) :
         nothing
 
-    # The sentinel is resolved here, once, and everything below this line receives a real
-    # value -- the whole of the no-defaults-below-the-surface policy in one statement.
-    dist = distance === nothing ? IndexEngine.default_distance(back) : distance
     eng = kind === :sparse ?
         IndexEngine.create_sparse_engine(; distance=dist, dimension, on_change, log_io=nothing, maxbatches) :
         IndexEngine.create_engine(back; distance=dist, minrecall, textmodel, on_change, log_io=nothing, adj_factory, maxbatches, edit_correction)
+    quantizer === nothing || (eng = IndexEngine.enable_quantization!(eng, quantizer, dist))
     Persistence.save_fields!(store, IndexEngine.snapshot_state(eng))
     isempty(schema) || Persistence.save_field!(store, :meta_schema, schema)
     partition_by === nothing || Persistence.save_field!(store, :partition_by, String(partition_by))
@@ -744,6 +765,9 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
             edit_correction=false)
         Persistence.save_fields!(store, IndexEngine.snapshot_state(engine))
         engine
+    elseif kind === :dense && Persistence.load_field(store, :quantizer, nothing) !== nothing
+        dense_vectors[] = Persistence.open_dense_vectors(dir; read_only)
+        _open_quantized_engine(dir, store, project, backend, dense_vectors; read_only, maxbatches)
     elseif kind === :dense && backend === :graph
         dense_vectors[] = Persistence.open_dense_vectors(dir; read_only)
         adj_store = Persistence.open_adjacency_store(project.db)
@@ -827,6 +851,68 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
 end
 
 """
+    _open_quantized_engine(dir, store, project, backend, dense_vectors; read_only, maxbatches) -> DenseEngine
+
+Rebuilds the engine of a quantized dense project (issue #1): an empty engine of the saved
+backend and distance, its quantizer, and, once the encoder exists, the index over the codes file
+with the saved graph. The staged vectors not yet encoded are counted from the dense-vector file
+and `:raw_offset`. A file that holds only encoded vectors of a project that does not keep them is
+what an `index!` interrupted before removing it leaves, and it is removed here.
+"""
+function _open_quantized_engine(dir::String, store, project, backend::Symbol, dense_vectors;
+                                read_only::Bool, maxbatches)
+    spec = Persistence.load_field(store, :quantizer, nothing)
+    distance = Persistence.load_field(store, :distance, nothing)
+    is_graph = backend === :graph
+    back = is_graph ? SearchGraph : backend === :exhaustive ? ExhaustiveSearch :
+           backend === :parallel_exhaustive ? ParallelExhaustiveSearch :
+           corrupted_storage("unknown dense backend $(repr(backend)); expected :graph, :exhaustive or :parallel_exhaustive")
+    adj_store = is_graph ? Persistence.open_adjacency_store(project.db) : nothing
+    on_change = is_graph ? _searchgraph_on_change(store, adj_store) : nothing
+    minrecall = is_graph ? Persistence.load_field(store, :minrecall, nothing) : nothing
+    engine = IndexEngine.create_engine(back; distance, minrecall, textmodel=nothing, on_change, log_io=nothing,
+                                       adj_factory=nothing, maxbatches, edit_correction=false)
+    engine.deleted_ids = something(Persistence.load_field(store, :deleted_ids, nothing), Set{UInt32}())
+    if is_graph
+        opt = Persistence.load_field(store, :opt_beamsearch, nothing)
+        opt === nothing || (engine.backend.opt_beamsearch = opt)
+        bs = Persistence.load_field(store, :beamsearch, nothing)
+        bs === nothing || (engine.backend.index.algo[] = bs)
+        hints = Persistence.load_field(store, :hints, nothing)
+        hints === nothing || append!(engine.backend.index.hints, hints)
+    end
+    engine = IndexEngine.enable_quantization!(engine, spec, distance)
+    q = engine.quant
+    encoder = Persistence.load_field(store, :encoder, nothing)
+    if encoder !== nothing
+        codes, ranges = Persistence.open_dense_codes(dir; read_only)
+        if codes === nothing
+            read_only && corrupted_storage("the codes file of this quantized project is missing; open it for writing once to create it")
+            codes, ranges = _create_code_files(dir, encoder)
+        end
+        per_vector = ranges === nothing ? ScalarQuant.SQMinC[] :
+            [ScalarQuant.SQMinC(r[1], r[2]) for r in (ranges[i] for i in 1:length(ranges))]
+        IndexEngine.install_encoder!(engine, encoder, codes, ranges, per_vector)
+        if is_graph
+            graph_len = min(Persistence.load_field(store, :graph_len, 0), length(codes))
+            IndexEngine.restore_adjacency!(engine.backend.index, i -> Persistence.load_neighbors(adj_store, i), graph_len)
+        end
+    end
+    raw = dense_vectors[]
+    if raw !== nothing
+        pending = Persistence.load_field(store, :raw_offset, 0) + length(raw) - IndexEngine.quantized_length(q)
+        pending >= 0 || corrupted_storage("the staged vectors of this quantized project end before its codes do")
+        q.npending = pending
+        if pending == 0 && !spec.keep_vectors && !read_only
+            close(raw)
+            dense_vectors[] = nothing
+            rm(Persistence.dense_vectors_path(dir); force=true)
+        end
+    end
+    return engine
+end
+
+"""
     close_project!(handle::EmbeddedEngine; compact::Bool=true)
 
 Flushes the engine's index one final time and closes the project's RocksDB connection
@@ -854,11 +940,14 @@ function close_project!(handle::EmbeddedEngine; compact::Bool=true)
     # An exact index is saved whole at close. A read-only handle cannot write, and it changed
     # nothing to save: until 2026-11-19 this raised, which made every job over an exact dataset
     # fail when it closed its project.
-    if !handle.read_only && !(handle.engine isa Union{IndexEngine.DenseEngine{IndexEngine.GraphBackend},
-                                                      IndexEngine.SparseEngine, IndexEngine.FullTextEngine})
+    # A quantized index keeps its codes in their own file, which `index!` already flushed.
+    if !handle.read_only && !IndexEngine.isquantized(handle.engine) &&
+            !(handle.engine isa Union{IndexEngine.DenseEngine{IndexEngine.GraphBackend},
+                                      IndexEngine.SparseEngine, IndexEngine.FullTextEngine})
         Persistence.save_field!(handle.store, :index, handle.engine.backend.index)
     end
     handle.dense_vectors[] === nothing || close(handle.dense_vectors[])
+    IndexEngine.isquantized(handle.engine) && IndexEngine.close_quantized!(handle.engine)
     compact && compact_project!(handle)
     Project.close_project(handle.project)
     return nothing
@@ -945,7 +1034,9 @@ that fed it.
 function index!(handle::EmbeddedEngine)
     handle.wrote[] = true
     engine = handle.engine
-    if engine isa IndexEngine.DenseEngine{IndexEngine.GraphBackend}
+    if IndexEngine.isquantized(engine)
+        _index_quantized!(handle, Random.default_rng())
+    elseif engine isa IndexEngine.DenseEngine{IndexEngine.GraphBackend}
         if engine.partitions === nothing
             IndexEngine.index!(engine)
         else
@@ -966,6 +1057,124 @@ function index!(handle::EmbeddedEngine)
     end
     return handle
 end
+
+"""
+    QUANT_ENCODE_BLOCK
+
+The number of staged vectors [`index!`](@ref index!(::EmbeddedEngine)) reads, encodes and inserts
+at a time in a quantized project. It bounds the `Float32` vectors held in memory during an
+`index!` to `QUANT_ENCODE_BLOCK × dim × 4` bytes: 64 MB at dimension 1024.
+"""
+const QUANT_ENCODE_BLOCK = 16_384
+
+# `index!` of a quantized project (issue #1): fit the encoder if there is none, encode the staged
+# vectors a block at a time, insert the codes, connect them on a graph, add the new ids to their
+# partitions, and remove the staged vectors that `keep_vectors=false` does not keep.
+function _index_quantized!(handle::EmbeddedEngine, rng::AbstractRNG)
+    engine = handle.engine
+    q = engine.quant
+    _fit_quantizer!(handle, rng)
+    raw = handle.dense_vectors[]
+    parts = handle.partitions[]
+    is_graph = engine isa IndexEngine.DenseEngine{IndexEngine.GraphBackend}
+    if raw !== nothing && q.npending > 0
+        offset = Persistence.load_field(handle.store, :raw_offset, 0)
+        first_row = IndexEngine.quantized_length(q) - offset + 1
+        for rows in Iterators.partition(first_row:length(raw), QUANT_ENCODE_BLOCK)
+            codes = IndexEngine.encode_vectors(q.encoder, [raw[i] for i in rows])
+            ids = IndexEngine.insert_codes!(engine, codes)
+            # A graph adds the members of a partition when it connects them, below.
+            if !is_graph && parts !== nothing
+                IndexEngine.add_partition_members!(engine, first(ids), Persistence._load_members(parts, ids))
+            end
+        end
+        IndexEngine.flush_quantized!(engine)
+    end
+    if is_graph
+        if engine.partitions === nothing
+            IndexEngine.index!(engine)
+        else
+            IndexEngine.index!(engine, ids -> Persistence._load_members(parts, ids))
+            _save_partition_state!(handle)
+        end
+        _save_search_state!(handle)
+    end
+    _drop_encoded_vectors!(handle)
+    return handle
+end
+
+# Fits the encoder of a quantized project on a sample of its staged vectors, saves it, creates
+# the files of the codes, and installs the index over them. Does nothing when the encoder exists.
+function _fit_quantizer!(handle::EmbeddedEngine, rng::AbstractRNG)
+    engine = handle.engine
+    q = engine.quant
+    q.encoder === nothing || return nothing
+    raw = handle.dense_vectors[]
+    (raw === nothing || length(raw) == 0) &&
+        nothing_staged("this quantized project has nothing staged yet -- append_items! at least one vector " *
+                       "before index!; the quantizer is fitted on a sample of the staged vectors")
+    n = length(raw)
+    s = min(q.spec.samplesize, n)
+    rows = s == n ? (1:n) : sort!(Random.shuffle(rng, collect(1:n))[1:s])
+    sample = reduce(hcat, (Vector{Float32}(raw[i]) for i in rows))
+    encoder = IndexEngine.fit_encoder(q.spec, q.distance, sample, rng)
+    # The encoder is saved before the files exist: a project reopened after an interruption
+    # between the two creates empty files, and never holds codes without their encoder.
+    Persistence.save_field!(handle.store, :encoder, encoder)
+    codes, ranges = _create_code_files(handle.dir, encoder)
+    IndexEngine.install_encoder!(engine, encoder, codes, ranges, ScalarQuant.SQMinC[])
+    return nothing
+end
+
+function _create_code_files(dir::String, encoder)
+    B = ScalarQuant.codewidth(encoder)
+    cpath = Persistence.dense_codes_path(dir)
+    rpath = Persistence.dense_code_ranges_path(dir)
+    rm(cpath; force=true)
+    rm(rpath; force=true)
+    codes = MMapMatrixDatabase(cpath, cld(encoder.dim * B, 8), UInt8)
+    ranges = ScalarQuant.isglobal(encoder) ? nothing : MMapMatrixDatabase(rpath, 2, Float32)
+    return codes, ranges
+end
+
+# Removes the staged vectors of a quantized project once every one of them is encoded, unless
+# the project keeps them. The next append starts a new file, whose first row is the next item
+# (`:raw_offset`).
+function _drop_encoded_vectors!(handle::EmbeddedEngine)
+    q = handle.engine.quant
+    raw = handle.dense_vectors[]
+    (raw === nothing || q.spec.keep_vectors || q.npending > 0 || handle.read_only) && return nothing
+    close(raw)
+    handle.dense_vectors[] = nothing
+    rm(Persistence.dense_vectors_path(handle.dir); force=true)
+    return nothing
+end
+
+"""
+    fit_quantizer!(handle::EmbeddedEngine; rng=Random.default_rng()) -> EmbeddedEngine
+
+Fits the encoder of a quantized project on a sample of its staged vectors (issue #1), without
+encoding them. [`index!`](@ref index!(::EmbeddedEngine)) fits it on its first call, so this is
+needed only to choose the `rng` of the sample and of a random rotation, or to fit before the
+whole collection is staged. Does nothing when the encoder exists. Raises `NothingStaged` when
+nothing is staged, and `InvalidOption` for a project that is not quantized.
+"""
+function fit_quantizer!(handle::EmbeddedEngine; rng::AbstractRNG=Random.default_rng())
+    IndexEngine.isquantized(handle.engine) ||
+        invalid_option(:quantizer, "fit_quantizer! applies to a quantized project; this one was created without `quantizer`")
+    handle.wrote[] = true
+    _fit_quantizer!(handle, rng)
+    return handle
+end
+
+"""
+    quantizer_info(handle::EmbeddedEngine) -> Union{QuantizerInfo,Nothing}
+
+The quantizer of a dense project (issue #1), or `nothing` for a project that stores `Float32`
+vectors. See [`QuantizerInfo`](@ref) for the fields.
+"""
+quantizer_info(handle::EmbeddedEngine) =
+    IndexEngine.isquantized(handle.engine) ? IndexEngine.quantizer_info(handle.engine.quant) : nothing
 
 """
     append_items!(handle::EmbeddedEngine, items) -> Int
@@ -1044,6 +1253,9 @@ function append_items!(handle::EmbeddedEngine, items::AbstractVector{<:Schema.Ab
     project = handle.project
     is_text = IndexEngine.payload_kind(engine) === :text
     is_dense_graph = engine isa IndexEngine.DenseEngine{IndexEngine.GraphBackend}
+    # A graph project and a quantized project of any backend stage the vectors in the
+    # dense-vector file, and `index!` indexes them.
+    stages_vectors = is_dense_graph || IndexEngine.isquantized(engine)
     staged_vectors = Vector{Float32}[]
     staged_texts = String[]
     text_sp = is_text ? _current_size(engine) + 1 : 0
@@ -1066,7 +1278,7 @@ function append_items!(handle::EmbeddedEngine, items::AbstractVector{<:Schema.Ab
         IndexEngine.add_item!(engine, p)
         if is_text
             push!(staged_texts, p)
-        elseif is_dense_graph
+        elseif stages_vectors
             push!(staged_vectors, p)
         end
         _maybe_flush_index!(handle)
@@ -1081,12 +1293,16 @@ function append_items!(handle::EmbeddedEngine, items::AbstractVector{<:Schema.Ab
 
     # An exact project indexes on append, so its partitions grow here. A graph project adds the
     # members of a partition when `index!` indexes them.
-    if dense_members !== nothing && !is_dense_graph
+    if dense_members !== nothing && !stages_vectors
         IndexEngine.add_partition_members!(engine, dense_sp, dense_members)
     end
 
-    if is_dense_graph && !isempty(staged_vectors)
+    if stages_vectors && !isempty(staged_vectors)
         if handle.dense_vectors[] === nothing
+            # The first row of a new file of a quantized project is the item after the ones
+            # already encoded (see `_drop_encoded_vectors!`). Saved before the file exists, so
+            # the file never exists without it.
+            IndexEngine.isquantized(engine) && Persistence.save_field!(handle.store, :raw_offset, dense_sp - 1)
             handle.dense_vectors[] = MMapMatrixDatabase(Persistence.dense_vectors_path(handle.dir), length(staged_vectors[1]), Float32)
         end
         SimilaritySearch.append_items!(handle.dense_vectors[], staged_vectors)
@@ -1129,7 +1345,10 @@ The fallback method is `length(engine.backend.index)`, which is right for every 
 indexes on insertion -- the exact dense ones and a sparse project's `InvertedFile` -- because
 there the index already reflects the item just added.
 """
-_current_size(engine::IndexEngine.DenseEngine{IndexEngine.GraphBackend}) = length(SimilaritySearch.database(engine.backend.index))
+_current_size(engine::IndexEngine.DenseEngine{IndexEngine.GraphBackend}) =
+    length(SimilaritySearch.database(engine.backend.index)) + _quant_pending(engine)
+_current_size(engine::IndexEngine.DenseEngine) = length(engine.backend.index) + _quant_pending(engine)
+_quant_pending(engine::IndexEngine.DenseEngine) = IndexEngine.isquantized(engine) ? engine.quant.npending : 0
 _current_size(engine::IndexEngine.FullTextEngine) = length(engine.staged)
 _current_size(engine::IndexEngine.AbstractSearchEngine) = length(engine.backend.index)
 
@@ -1252,6 +1471,8 @@ whatever the values happened to be.
 """
 function _search_query(engine::IndexEngine.AbstractSearchEngine, vector)
     kind = IndexEngine.payload_kind(engine)
+    kind === :dense && IndexEngine.isquantized(engine) &&
+        return IndexEngine.prepare_query(engine, convert(Vector{Float32}, vector))
     kind === :dense && return convert(Vector{Float32}, vector)
     kind === :sparse || payload_mismatch("search(handle, vector) needs a dense or sparse project; this one holds $kind")
     vector isa AbstractSparseVector ||
@@ -2054,12 +2275,21 @@ function fetch_items(handle::EmbeddedEngine, ids)
     for raw_id in ids
         for record in _resolve_records(project, raw_id)
             meta = something(get_meta(project, record._id; lazy=false), Dict{String,Any}())
-            push!(results, Schema.StoredItem(record,
-                                             IndexEngine.stored_payload(handle.engine, record._id),
-                                             meta))
+            push!(results, Schema.StoredItem(record, _stored_payload(handle, record._id), meta))
         end
     end
     return results
+end
+
+# The payload `fetch_items` returns. A quantized project returns the vector it kept in its
+# dense-vector file, or `nothing`: its index holds codes, not the vectors that were appended.
+function _stored_payload(handle::EmbeddedEngine, id::Integer)
+    IndexEngine.isquantized(handle.engine) || return IndexEngine.stored_payload(handle.engine, id)
+    raw = handle.dense_vectors[]
+    raw === nothing && return nothing
+    row = id - Persistence.load_field(handle.store, :raw_offset, 0)
+    1 <= row <= length(raw) || return nothing
+    return Vector{Float32}(raw[row])
 end
 
 """
@@ -2126,6 +2356,10 @@ function calibrate!(handle::EmbeddedEngine; levels=IndexEngine.DEFAULT_MINRECALL
                     nboot::Int=1000, confidence::Real=0.95, rng::AbstractRNG=Random.default_rng(),
                     partition::Union{Nothing,AbstractString}=nothing)
     handle.wrote[] = true
+    # The queries of a quantized project are evaluated against codes, as in `search`.
+    if queries !== nothing && IndexEngine.isquantized(handle.engine)
+        queries = [_search_query(handle.engine, q) for q in queries]
+    end
     if partition !== nothing
         handle.engine isa IndexEngine.DenseEngine{IndexEngine.GraphBackend} ||
             invalid_option(:partition, "calibrate! with a partition needs a dense project on a SearchGraph backend")

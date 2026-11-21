@@ -3,6 +3,9 @@ module SimilaritySearchEngine
 using Avro
 using JSON3
 using SimilaritySearch
+# Not exported by SimilaritySearch, and re-exported by this package below. Until 2026-11-20 it
+# was exported without this import, so `using SimilaritySearchEngine` did not define it.
+import SimilaritySearch: ParallelExhaustiveSearch
 using TextSearch
 using RocksDB
 using Random: Random, AbstractRNG
@@ -96,6 +99,10 @@ export BACKENDS, default_backend
 # without first having to know which of the two libraries that name comes from.
 export SearchGraph, ExhaustiveSearch, ParallelExhaustiveSearch, InvertedFile
 export BM25InvertedFile, TextInvertedFile
+
+# A dense project that stores the codes of a scalar quantizer instead of `Float32` vectors
+# (issue #1): the specification `create_project` takes, and what an open project reports.
+export ScalarQuantizer, QuantizerInfo, fit_quantizer!, quantizer_info
 
 # For asking an *open* project what it holds -- which a Julia caller needs, because the item
 # type it must build follows from it (`:dense` takes DenseItem, `:sparse` SparseItem, `:text`

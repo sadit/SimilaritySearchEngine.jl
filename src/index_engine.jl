@@ -620,6 +620,10 @@ mutable struct TextBackend
     edit_correction::Bool
 end
 
+# The quantizer of a dense project (issue #1): its types, and the functions that fit it, encode
+# with it and install an index over its codes. Included before `DenseEngine`, which holds one.
+include("quantization.jl")
+
 """
     persist_block!(adj, base::Int, docvecs, postings::Dict{UInt32,Vector{UInt32}})
 
@@ -722,6 +726,8 @@ being defined-but-inert on the other.
 - `lock::ReadWriteLock`: see its docstring for why a reader/writer lock and not a mutex.
 - `partitions::Union{Nothing,DensePartitions}`: the partitions of the project (PLAN.md §5.10),
   or `nothing` when it declares no partition field.
+- `quant::Union{Nothing,QuantState}`: the quantizer of the project (issue #1), or `nothing` for
+  a project of `Float32` vectors. See [`ScalarQuantizer`](@ref).
 """
 mutable struct DenseEngine{B} <: AbstractSearchEngine
     backend::B
@@ -731,10 +737,20 @@ mutable struct DenseEngine{B} <: AbstractSearchEngine
     # The partitions of the project (PLAN.md §5.10), or `nothing` when it declares no partition
     # field. Set by `enable_partitions!`.
     partitions::Union{Nothing,DensePartitions}
+    # The quantizer of the project (issue #1), or `nothing` for a project of `Float32` vectors.
+    # Set by `enable_quantization!`.
+    quant::Union{Nothing,QuantState}
 end
 
 DenseEngine(backend::B, search_ctx_pool::ContextPool, deleted_ids::Set{UInt32}, lock::ReadWriteLock) where {B} =
-    DenseEngine{B}(backend, search_ctx_pool, deleted_ids, lock, nothing)
+    DenseEngine{B}(backend, search_ctx_pool, deleted_ids, lock, nothing, nothing)
+
+"""
+    isquantized(engine) -> Bool
+
+Whether `engine` is a dense engine that stores the codes of a scalar quantizer (issue #1).
+"""
+isquantized(engine::AbstractSearchEngine) = engine isa DenseEngine && engine.quant !== nothing
 
 """
     SparseEngine
@@ -1517,14 +1533,25 @@ this design avoids. A caller restoring any of them assembles `staged`/`vector_bl
 into the `state` NamedTuple by hand from that dedicated store (see [`restore_engine`](@ref)'s
 docstring) rather than getting it from `snapshot_state`.
 """
-snapshot_state(engine::DenseEngine{GraphBackend}) =
-    (kind=:dense, backend=:graph, distance=engine.backend.index.dist,
-     minrecall=engine.backend.minrecall, opt_beamsearch=engine.backend.opt_beamsearch,
-     beamsearch=engine.backend.index.algo[], hints=collect(UInt32, engine.backend.index.hints),
-     deleted_ids=engine.deleted_ids)
+function snapshot_state(engine::DenseEngine{GraphBackend})
+    base = (kind=:dense, backend=:graph,
+            minrecall=engine.backend.minrecall, opt_beamsearch=engine.backend.opt_beamsearch,
+            beamsearch=engine.backend.index.algo[], hints=collect(UInt32, engine.backend.index.hints),
+            deleted_ids=engine.deleted_ids)
+    isquantized(engine) || return (; base..., distance=engine.backend.index.dist)
+    return (; base..., _quant_fields(engine.quant)...)
+end
+
+# A quantized exact engine saves no `:index`: its codes are in their own file, which grows with
+# each `index!`, and the rest of the index is the encoder and the distance.
 snapshot_state(engine::DenseEngine{<:ExactBackend}) =
-    (kind=:dense, backend=backend_tag(engine.backend), index=engine.backend.index,
-     deleted_ids=engine.deleted_ids)
+    isquantized(engine) ?
+        (; kind=:dense, backend=backend_tag(engine.backend), deleted_ids=engine.deleted_ids, _quant_fields(engine.quant)...) :
+        (kind=:dense, backend=backend_tag(engine.backend), index=engine.backend.index,
+         deleted_ids=engine.deleted_ids)
+
+# `distance` is the one the project was created with, not the one over codes it maps to.
+_quant_fields(q::QuantState) = (distance=q.distance, quantizer=q.spec, encoder=q.encoder)
 snapshot_state(engine::SparseEngine) =
     (kind=:sparse, backend=:inverted_file, distance=engine.backend.distance,
      dimension=engine.backend.dimension, deleted_ids=engine.deleted_ids)
@@ -2094,6 +2121,8 @@ yet -- and does not get encoded/indexed until an explicit
 synchronously, with no staging step at all.
 """
 function add_item!(engine::DenseEngine, item)
+    # A quantized engine counts the vector, which the caller stores, and encodes it at `index!`.
+    isquantized(engine) && return stage_quantized!(engine)
     write_lock(engine.lock) do
         insert_dense!(engine.backend.index, engine.backend.ctx, item)
     end
@@ -2137,6 +2166,9 @@ function stored_payload(engine::FullTextEngine, id::Integer)
 end
 
 function stored_payload(engine::DenseEngine, id::Integer)
+    # A quantized engine holds codes, not the vectors that were appended. The caller reads the
+    # kept vectors, if any, from their own file.
+    isquantized(engine) && return nothing
     db = database(engine.backend.index)
     1 <= id <= length(db) || return nothing
     convert(Vector{Float32}, db[id])
@@ -2430,7 +2462,8 @@ are actually known to read the adjacency list this way today.
 """
 function _require_no_backlog(engine::DenseEngine, opname::AbstractString)
     n_connected = length(engine.backend.index)
-    n_staged = length(SimilaritySearch.database(engine.backend.index))
+    n_staged = length(SimilaritySearch.database(engine.backend.index)) +
+               (isquantized(engine) ? engine.quant.npending : 0)
     n_connected == n_staged ||
         pending_backlog(Symbol(opname), n_staged, n_connected,
               "$opname requires no pending backlog: $(n_staged - n_connected) item(s) staged " *

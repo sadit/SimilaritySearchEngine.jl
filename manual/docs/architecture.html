@@ -272,6 +272,7 @@ window.Quarto = {
   <li><a href="#the-persisted-text-index" id="toc-the-persisted-text-index" class="nav-link" data-scroll-target="#the-persisted-text-index">The Persisted Text Index</a></li>
   <li><a href="#partitioned-text-indexes" id="toc-partitioned-text-indexes" class="nav-link" data-scroll-target="#partitioned-text-indexes">Partitioned Text Indexes</a></li>
   <li><a href="#partitioned-dense-indexes" id="toc-partitioned-dense-indexes" class="nav-link" data-scroll-target="#partitioned-dense-indexes">Partitioned Dense Indexes</a></li>
+  <li><a href="#quantized-dense-indexes" id="toc-quantized-dense-indexes" class="nav-link" data-scroll-target="#quantized-dense-indexes">Quantized Dense Indexes</a></li>
   <li><a href="#external-identifier-resolution" id="toc-external-identifier-resolution" class="nav-link" data-scroll-target="#external-identifier-resolution">External Identifier Resolution</a></li>
   <li><a href="#compaction" id="toc-compaction" class="nav-link" data-scroll-target="#compaction">Compaction</a></li>
   <li><a href="#storage-subsystems" id="toc-storage-subsystems" class="nav-link" data-scroll-target="#storage-subsystems">Storage Subsystems</a></li>
@@ -484,6 +485,11 @@ window.Quarto = {
 <li><strong><code>ExhaustiveSearch</code> and <code>InvertedFile</code> (Sparse Engine)</strong>:
 <ul>
 <li>An exact linear scan evaluates the database directly, and a sparse inverted file updates its posting lists on insertion. <code>append_items!</code> therefore makes an item searchable immediately, and <code>index!</code> performs no work.</li>
+</ul></li>
+<li><strong>Quantized dense projects, on every dense backend</strong>:
+<ul>
+<li><code>append_items!</code> writes the <code>Float32</code> vectors to <code>dense_vectors.mmapdb</code>, as on <code>SearchGraph</code>. An item is not searchable until <code>index!</code>, also on <code>ExhaustiveSearch</code>.</li>
+<li><code>index!</code> fits the quantizer on its first call, encodes the staged vectors, and inserts the codes into the index. On <code>SearchGraph</code> it then builds the graph connections of the new codes. See <a href="#quantized-dense-indexes">Quantized Dense Indexes</a>.</li>
 </ul></li>
 </ol>
 <hr>
@@ -707,6 +713,19 @@ window.Quarto = {
 </table>
 <p>The own graphs were tuned with <code>MinRecall(0.9)</code>. The global graph was not tuned, so the last column also reflects its own recall. A measurement on real embeddings will set the default threshold again.</p>
 </section>
+<section id="quantized-dense-indexes" class="level3">
+<h3 class="anchored" data-anchor-id="quantized-dense-indexes">Quantized Dense Indexes</h3>
+<p>A dense project created with <code>quantizer=ScalarQuantizer(kind)</code> stores the codes of a scalar quantizer of <code>SimilaritySearch.ScalarQuant</code> instead of <code>Float32</code> vectors (issue #1). The index is the backend the project was created with, built over a <code>QuantDatabase</code>. A query is rotated and prepared once by <code>encodequery</code>, and then evaluated against the codes with the distance of <code>ScalarQuant</code> that corresponds to the distance of the project: <code>SqL2</code>, <code>L2</code>, <code>L1</code>, <code>Cosine</code> or <code>NormCosine</code>.</p>
+<ul>
+<li><strong>Kinds.</strong> <code>:sqgu8</code>, <code>:sqgu4</code> and <code>:sqgu2</code> use one range for every coordinate of every vector. <code>:squ8</code>, <code>:squ4</code> and <code>:squ2</code> use one range per vector, which costs 8 bytes per vector.</li>
+<li><strong>Rotation.</strong> <code>rotation=:none</code> is the default. It works for the output of most modern neural embedding models, whose coordinates have similar scales. <code>rotation=:qr</code> gives every coordinate the same scale. Use it for vectors that are not normalized, for vectors of several models in one project, for features that a neural model did not produce, or when the recall on a sample of queries is clearly below the exact search.</li>
+<li><strong>Fitting.</strong> The first <code>index!</code> fits a global quantizer on <code>samplesize</code> staged vectors, chosen at random, unless <code>minmax</code> gives its range. <code>fit_quantizer!(h; rng)</code> fits it without encoding. The fitted encoder, with its rotation matrix, is saved in the engine field <code>:encoder</code>. A per-vector quantizer has no range to fit.</li>
+<li><strong>Storage.</strong> The codes are in <code>dense_codes.mmapdb</code>, a memory-mapped file with one row of bytes per vector. The ranges of a per-vector quantizer are in <code>dense_code_ranges.mmapdb</code>, two <code>Float32</code> per vector. <code>index!</code> reads, encodes and inserts the staged vectors in blocks of <code>QUANT_ENCODE_BLOCK</code> (16,384). With <code>keep_vectors=false</code>, the default, <code>index!</code> then removes <code>dense_vectors.mmapdb</code>, and the next <code>append_items!</code> starts a new one. The engine field <code>:raw_offset</code> holds the number of items before its first row.</li>
+<li><strong>Reading back.</strong> <code>fetch_items</code> returns the vector of an item whose <code>Float32</code> vector is still on disk: every item with <code>keep_vectors=true</code>, and an item not yet encoded otherwise. It returns <code>nothing</code> as the payload of any other item, because the codes do not give back the vector that was appended.</li>
+<li><strong>Opening.</strong> <code>open_project</code> reads the encoder, maps the codes file, and on <code>SearchGraph</code> restores the graph from the adjacency store. The staged vectors not yet encoded are the rows of <code>dense_vectors.mmapdb</code> after <code>:raw_offset</code> plus the number of codes. A file whose rows are all encoded, in a project that does not keep them, is what an interrupted <code>index!</code> leaves, and it is removed.</li>
+<li><strong>Memory.</strong> The codes stay in the mapped file, and only the code sums (8 bytes per vector) and, for a per-vector quantizer, the ranges (8 bytes per vector) are in memory. A <code>Float32</code> project holds every vector in memory: an exact project deserializes its index, and a graph project copies the vectors out of <code>dense_vectors.mmapdb</code> when it is opened. Measured on 2026-11-20 with 200,000 vectors of dimension 256 (test <code>quantized project: resident memory follows the size of the codes</code>): opening the project and running one search added 403 MB of resident memory for the <code>Float32</code> vectors of a graph project, and 50 MB for the 8-bit codes, whose file holds 51 MB.</li>
+</ul>
+</section>
 <section id="external-identifier-resolution" class="level3">
 <h3 class="anchored" data-anchor-id="external-identifier-resolution">External Identifier Resolution</h3>
 <p><code>doc_id</code> is the identifier supplied by the caller. It is resolved through the <code>idx_docid</code> column family, not by scanning <code>records</code>. Keys are composite: the bytes of <code>doc_id</code> followed by the four bytes of <code>_id</code>. This allows several items to share one <code>doc_id</code>. <code>fetch_items</code> returns every record that carries the requested identifier, in ascending <code>_id</code> order, and <code>exists</code> reports the identifier as deleted only when all of those records are deleted. On a project of 50,000 items, resolving an external identifier takes 0.12 ms through this index, compared with 59 ms for the scan it replaces.</p>
@@ -730,6 +749,10 @@ window.Quarto = {
 <ul>
 <li>Dense vectors are stored in a dedicated memory-mapped binary file managed by <code>MMapMatrixDatabase</code>.</li>
 <li>Avoids key-value serialization. Appends are sequential, and random access reads the vector without copying it.</li>
+</ul></li>
+<li><strong>Quantized Code Storage (<code>dense_codes.mmapdb</code>, <code>dense_code_ranges.mmapdb</code>)</strong>:
+<ul>
+<li>The codes of a quantized project, and the ranges of a per-vector quantizer. See <a href="#quantized-dense-indexes">Quantized Dense Indexes</a>.</li>
 </ul></li>
 <li><strong><code>AdjacencyStore</code> (Graph Topology)</strong>:
 <ul>

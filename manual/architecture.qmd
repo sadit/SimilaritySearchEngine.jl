@@ -199,6 +199,9 @@ The package separates the insertion of items from the construction of the index,
      - On subsequent invocations, `index!` encodes staged strings and inserts posting list entries.
 3. **`ExhaustiveSearch` and `InvertedFile` (Sparse Engine)**:
    - An exact linear scan evaluates the database directly, and a sparse inverted file updates its posting lists on insertion. `append_items!` therefore makes an item searchable immediately, and `index!` performs no work.
+4. **Quantized dense projects, on every dense backend**:
+   - `append_items!` writes the `Float32` vectors to `dense_vectors.mmapdb`, as on `SearchGraph`. An item is not searchable until `index!`, also on `ExhaustiveSearch`.
+   - `index!` fits the quantizer on its first call, encodes the staged vectors, and inserts the codes into the index. On `SearchGraph` it then builds the graph connections of the new codes. See [Quantized Dense Indexes](#quantized-dense-indexes).
 
 ---
 
@@ -401,6 +404,18 @@ A dense project declares its partition field in the same way as a text project, 
 
 The own graphs were tuned with `MinRecall(0.9)`. The global graph was not tuned, so the last column also reflects its own recall. A measurement on real embeddings will set the default threshold again.
 
+### Quantized Dense Indexes
+
+A dense project created with `quantizer=ScalarQuantizer(kind)` stores the codes of a scalar quantizer of `SimilaritySearch.ScalarQuant` instead of `Float32` vectors (issue #1). The index is the backend the project was created with, built over a `QuantDatabase`. A query is rotated and prepared once by `encodequery`, and then evaluated against the codes with the distance of `ScalarQuant` that corresponds to the distance of the project: `SqL2`, `L2`, `L1`, `Cosine` or `NormCosine`.
+
+- **Kinds.** `:sqgu8`, `:sqgu4` and `:sqgu2` use one range for every coordinate of every vector. `:squ8`, `:squ4` and `:squ2` use one range per vector, which costs 8 bytes per vector.
+- **Rotation.** `rotation=:none` is the default. It works for the output of most modern neural embedding models, whose coordinates have similar scales. `rotation=:qr` gives every coordinate the same scale. Use it for vectors that are not normalized, for vectors of several models in one project, for features that a neural model did not produce, or when the recall on a sample of queries is clearly below the exact search.
+- **Fitting.** The first `index!` fits a global quantizer on `samplesize` staged vectors, chosen at random, unless `minmax` gives its range. `fit_quantizer!(h; rng)` fits it without encoding. The fitted encoder, with its rotation matrix, is saved in the engine field `:encoder`. A per-vector quantizer has no range to fit.
+- **Storage.** The codes are in `dense_codes.mmapdb`, a memory-mapped file with one row of bytes per vector. The ranges of a per-vector quantizer are in `dense_code_ranges.mmapdb`, two `Float32` per vector. `index!` reads, encodes and inserts the staged vectors in blocks of `QUANT_ENCODE_BLOCK` (16,384). With `keep_vectors=false`, the default, `index!` then removes `dense_vectors.mmapdb`, and the next `append_items!` starts a new one. The engine field `:raw_offset` holds the number of items before its first row.
+- **Reading back.** `fetch_items` returns the vector of an item whose `Float32` vector is still on disk: every item with `keep_vectors=true`, and an item not yet encoded otherwise. It returns `nothing` as the payload of any other item, because the codes do not give back the vector that was appended.
+- **Opening.** `open_project` reads the encoder, maps the codes file, and on `SearchGraph` restores the graph from the adjacency store. The staged vectors not yet encoded are the rows of `dense_vectors.mmapdb` after `:raw_offset` plus the number of codes. A file whose rows are all encoded, in a project that does not keep them, is what an interrupted `index!` leaves, and it is removed.
+- **Memory.** The codes stay in the mapped file, and only the code sums (8 bytes per vector) and, for a per-vector quantizer, the ranges (8 bytes per vector) are in memory. A `Float32` project holds every vector in memory: an exact project deserializes its index, and a graph project copies the vectors out of `dense_vectors.mmapdb` when it is opened. Measured on 2026-11-20 with 200,000 vectors of dimension 256 (test `quantized project: resident memory follows the size of the codes`): opening the project and running one search added 403 MB of resident memory for the `Float32` vectors of a graph project, and 50 MB for the 8-bit codes, whose file holds 51 MB.
+
 ### External Identifier Resolution
 
 `doc_id` is the identifier supplied by the caller. It is resolved through the `idx_docid` column family, not by scanning `records`. Keys are composite: the bytes of `doc_id` followed by the four bytes of `_id`. This allows several items to share one `doc_id`. `fetch_items` returns every record that carries the requested identifier, in ascending `_id` order, and `exists` reports the identifier as deleted only when all of those records are deleted. On a project of 50,000 items, resolving an external identifier takes 0.12 ms through this index, compared with 59 ms for the scan it replaces.
@@ -421,10 +436,12 @@ Bulk writes leave a write-ahead log, and the next open must replay it. Compactio
 2. **Dense Vector Storage (`dense_vectors.mmapdb`)**:
    - Dense vectors are stored in a dedicated memory-mapped binary file managed by `MMapMatrixDatabase`.
    - Avoids key-value serialization. Appends are sequential, and random access reads the vector without copying it.
-3. **`AdjacencyStore` (Graph Topology)**:
+3. **Quantized Code Storage (`dense_codes.mmapdb`, `dense_code_ranges.mmapdb`)**:
+   - The codes of a quantized project, and the ranges of a per-vector quantizer. See [Quantized Dense Indexes](#quantized-dense-indexes).
+4. **`AdjacencyStore` (Graph Topology)**:
    - Graph adjacencies are persisted incrementally through `CallbackLog` observer hooks during `index!`.
    - Stores only forward (direct) edges; reverse edges are reconstructed dynamically in memory during project reopening to ensure idempotency.
-4. **`StagedTextStore` and `InvertedFileObjectStore`**:
+5. **`StagedTextStore` and `InvertedFileObjectStore`**:
    - `StagedTextStore` holds un-encoded raw text lines.
    - `InvertedFileObjectStore` stores contiguous blocks of encoded posting-list objects.
 

@@ -12,6 +12,7 @@ using ..Errors
 export EngineStore, ENGINE_CF, open_engine_store, save_field!, load_field, has_field, save_fields!
 export AdjacencyStore, ADJACENCY_CF, open_adjacency_store, save_neighbors!, load_neighbors
 export DENSE_VECTORS_FILENAME, dense_vectors_path, open_dense_vectors, load_dense_vector_blocks
+export DENSE_CODES_FILENAME, DENSE_CODE_RANGES_FILENAME, dense_codes_path, dense_code_ranges_path, open_dense_codes
 export InvertedFileObjectStore, INVFILE_DB_CF, open_invertedfile_object_store, append_objects!, load_object_blocks
 export StagedTextStore, STAGED_TEXT_CF, open_staged_text_store, append_staged_texts!, load_staged_text_blocks
 export InvertedIndexStore, INVFILE_POSTINGS_CF, INVFILE_DOCVECS_CF, open_inverted_index_store, has_inverted_index,
@@ -216,6 +217,40 @@ function open_dense_vectors(dir::String; read_only::Bool)
     path = dense_vectors_path(dir)
     isfile(path) || return nothing
     MMapMatrixDatabase(path; read_only)
+end
+
+"""
+    DENSE_CODES_FILENAME
+
+Filename of the `SimilaritySearch.MMapMatrixDatabase{UInt8}` file that holds the codes of a
+quantized dense project (issue #1), one row per vector.
+"""
+const DENSE_CODES_FILENAME = "dense_codes.mmapdb"
+
+"""
+    DENSE_CODE_RANGES_FILENAME
+
+Filename of the `SimilaritySearch.MMapMatrixDatabase{Float32}` file that holds the `(min, c)`
+pair of each vector of a project with a per-vector quantizer (issue #1). A project with a
+global quantizer has no such file.
+"""
+const DENSE_CODE_RANGES_FILENAME = "dense_code_ranges.mmapdb"
+
+dense_codes_path(dir::String) = joinpath(dir, DENSE_CODES_FILENAME)
+dense_code_ranges_path(dir::String) = joinpath(dir, DENSE_CODE_RANGES_FILENAME)
+
+"""
+    open_dense_codes(dir; read_only) -> (codes, ranges)
+
+Reopens the codes of a quantized project and, for a per-vector quantizer, the file of its
+ranges. Each is `nothing` when its file does not exist.
+"""
+function open_dense_codes(dir::String; read_only::Bool)
+    cpath = dense_codes_path(dir)
+    rpath = dense_code_ranges_path(dir)
+    codes = isfile(cpath) ? MMapMatrixDatabase(cpath; read_only) : nothing
+    ranges = isfile(rpath) ? MMapMatrixDatabase(rpath; read_only) : nothing
+    return codes, ranges
 end
 
 """

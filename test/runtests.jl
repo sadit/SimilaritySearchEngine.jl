@@ -51,6 +51,7 @@ const TEST_FILES = [
     TestFile("search", "search.jl"; tags=["search", "dense"]),
     TestFile("text_partitions", "text_partitions.jl"; tags=["partitions", "text"]),
     TestFile("dense_partitions", "dense_partitions.jl"; tags=["partitions", "dense"]),
+    TestFile("quantized", "quantized.jl"; tags=["quantized", "dense"]),
 ]
 
 const CHOSEN = selected_files(SELECTION, TEST_FILES)
