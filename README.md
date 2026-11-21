@@ -21,9 +21,11 @@ They are developed together and tested in one CI run, with separate dependency s
 
 ## Architectural Highlights
 
-- **Decoupled Engine and Backend Models**: 
-  - **Payload Engines**: Specify the payload data domain (`DenseEngine`, `SparseEngine`, `FullTextEngine`).
-  - **Index Backends**: Specify the underlying indexing algorithm (`SearchGraph`, `ExhaustiveSearch`, `ParallelExhaustiveSearch`, `InvertedFile`, `BM25InvertedFile`).
+- **Project Specifications**: A project is described by one value, built from smaller ones (issue #2):
+  - What it holds: `DenseVectors(distance; index, storage)`, `SparseVectors(dimension, distance)`, `TextDocuments(model; index)`.
+  - The index: `Graph(; minrecall)` (a `SearchGraph`) or `Exhaustive(; parallel)` for dense vectors, `BM25()` or `VectorSpace(; distance)` for text.
+  - The storage of dense vectors: `Float32Vectors()` or `Quantized(SQ(bits; range); rotation, keep_vectors)`.
+  - Each type holds only its own options, so a combination that does not exist cannot be written. `project_spec(h)` returns the spec of an open project.
   - Strong typing with dedicated item containers: `DenseItem`, `SparseItem`, and `TextItem`.
 - **Dense Vector Search**: Approximate nearest-neighbor search via `SearchGraph` with dynamic beam-search tuning, or exact brute-force search via `ExhaustiveSearch`.
 - **Sparse Vector Search**: Direct indexing of user-provided sparse representations with fixed dimensionality via `InvertedFile`, evaluated under cosine distance or discrete set metrics (`Dist.Sets.*`).
@@ -72,7 +74,7 @@ using SimilaritySearchEngine
 
 # 1. Initialize a working directory and create a dense project
 workdir = mktempdir()
-h = create_project(workdir, "demo_dense"; engine=DenseEngine, backend=SearchGraph, minrecall=0.9)
+h = create_project(workdir, "demo_dense", DenseVectors(Dist.SqL2(); index=Graph(minrecall=0.9)))
 
 # 2. Stage dense vector items
 batch = [DenseItem(rand(Float32, 32); doc_id="doc-$i") for i in 1:1000]

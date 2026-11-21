@@ -63,8 +63,8 @@ export SearchResult, SearchStats, ExistsResult, KnnRow, FFTResult, CenterSelecti
        CalibrationLevel
 
 # Re-exported from TextSearch.jl, not defined here: they are the vocabulary a caller needs to
-# say anything to a *text* project -- `textmodel=FitFromCorpus(TextConfig(language=:es))`,
-# `textmodel=BaseProfile(load_profile("wiki20231101-es.zip"))`,
+# say anything to a *text* project -- `TextDocuments(FitFromCorpus(TextConfig(language=:es)))`,
+# `TextDocuments(BaseProfile(load_profile("wiki20231101-es.zip")))`,
 # `ftsearch(h, q; policy=QueryPolicy(correction=:off))`. Re-exporting them keeps a script that
 # only ever does `using SimilaritySearchEngine` from needing a second `using` line to reach the
 # arguments this package's own API asks for.
@@ -85,24 +85,19 @@ export vocabulary_report, DEFAULT_OOV_SCAN_SAMPLE
 export AbstractTextModelSpec, BaseProfile, DefaultProfile, FitFromCorpus
 export DEFAULT_PROFILE_NICKNAMES, default_profile_path, train_profile
 
-# What kind of project to create, and which index to hold it in. `create_project` takes both as
-# types, so both have to be nameable by a caller who wrote one `using` line: `engine=` says what
-# the project indexes (dense vectors, sparse vectors, text) and `backend=` which index does it.
-# `BACKENDS` is the table of legal pairings, and it is exported because it is also the answer to
-# "what else could I have passed"; `default_backend` says what an omitted `backend=` becomes.
-export DenseEngine, SparseEngine, FullTextEngine
-export BACKENDS, default_backend
+# What a project holds and how it is indexed and stored (issue #2): `create_project` takes one
+# `ProjectSpec` built from these types, and `project_spec` returns it.
+export ProjectSpec, DenseVectors, SparseVectors, TextDocuments, project_spec
+export DenseIndex, Graph, Exhaustive, TextIndex, BM25, VectorSpace
+export DenseStorage, Float32Vectors, Quantized, SQ, QuantRange, GlobalRange, PerVectorRange
+export Rotation, NoRotation, QRRotation, HadamardRotation
+export PartitionBy, Runtime
 
-# The backend types themselves, re-exported from SimilaritySearch.jl and TextSearch.jl for the
-# same reason `TextConfig` is: they are values this package's own API asks for, and a caller who
-# wrote `using SimilaritySearchEngine` should be able to write `backend=BM25InvertedFile`
-# without first having to know which of the two libraries that name comes from.
-export SearchGraph, ExhaustiveSearch, ParallelExhaustiveSearch, InvertedFile
-export BM25InvertedFile, TextInvertedFile
+# The distances, re-exported from SimilaritySearch.jl: a spec names one as `Dist.NormCosine()`.
+export Dist
 
-# A dense project that stores the codes of a scalar quantizer instead of `Float32` vectors
-# (issue #1): the specification `create_project` takes, and what an open project reports.
-export ScalarQuantizer, QuantizerInfo, fit_quantizer!, quantizer_info
+# What an open quantized project reports (issue #1), and the explicit fit of its encoder.
+export QuantizerInfo, fit_quantizer!, quantizer_info
 
 # For asking an *open* project what it holds -- which a Julia caller needs, because the item
 # type it must build follows from it (`:dense` takes DenseItem, `:sparse` SparseItem, `:text`
@@ -150,7 +145,7 @@ using PrecompileTools: @setup_workload, @compile_workload
             try
                 redirect_stdout(devnull) do
                 redirect_stderr(devnull) do
-                h = create_project(workdir, "pc_dense"; engine=DenseEngine, backend=SearchGraph)
+                h = create_project(workdir, "pc_dense", DenseVectors())
                 append_items!(h, [DenseItem(v; doc_id="d$i") for (i, v) in enumerate(vectors)])
                 index!(h)
                 search(h, vectors[1], 3)
@@ -163,14 +158,13 @@ using PrecompileTools: @setup_workload, @compile_workload
                 close_project!(h)
                 close_project!(open_project(workdir, "pc_dense"))
 
-                hs = create_project(workdir, "pc_sparse"; engine=SparseEngine, dimension=dim)
+                hs = create_project(workdir, "pc_sparse", SparseVectors(dim))
                 append_items!(hs, [SparseItem(sparsevec(Int32[1, 3], Float32[1.0, 0.5], dim); doc_id="s$i")
                                    for i in 1:8])
                 search(hs, sparsevec(Int32[1, 3], Float32[1.0, 0.5], dim), 3)
                 close_project!(hs)
 
-                ht = create_project(workdir, "pc_text"; engine=FullTextEngine,
-                                    backend=BM25InvertedFile, textmodel=FitFromCorpus())
+                ht = create_project(workdir, "pc_text", TextDocuments(FitFromCorpus()))
                 append_items!(ht, [TextItem(t; doc_id="t$i") for (i, t) in enumerate(texts)])
                 index!(ht)
                 ftsearch(ht, "cat mat", 3)

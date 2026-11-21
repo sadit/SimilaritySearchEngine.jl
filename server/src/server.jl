@@ -33,7 +33,7 @@ using ..Telemetry
 import SimilaritySearchEngine as SSE
 using SparseArrays: SparseArrays
 
-export run_server, AppState, reload_datasets!, parse_index_kind, parse_distance
+export run_server, AppState, reload_datasets!, parse_index_kind, dataset_spec, parse_distance
 
 const JSON_HEADERS = ["Content-Type" => "application/json"]
 
@@ -488,11 +488,15 @@ function handle_create_dataset(req::HTTP.Request, app::AppState)
     partition_graph_min === nothing || partition_graph_min isa Integer ||
         return json_response(400, Dict("error" => "'partition_graph_min' must be an integer"))
 
-    engine_type, backend_type = try
-        parse_index_kind(index_type)
+    partition_graph_min === nothing || partition_by !== nothing ||
+        return json_response(400, Dict("error" => "'partition_graph_min' needs 'partition_by': it is the size from " *
+                                                  "which a partition has its own graph"))
+
+    spec = try
+        dataset_spec(index_type, distance, dimension)
     catch e
-        e isa SSE.UnknownBackend || rethrow()
-        return json_response(400, Dict("error" => sprint(showerror, e)))
+        e isa SSE.EngineError || rethrow()
+        return engine_error_response(e)
     end
 
     declared = try
@@ -505,12 +509,10 @@ function handle_create_dataset(req::HTTP.Request, app::AppState)
     try
         lock(app.lock) do
             haskey(app.handles, id) && return
-            app.handles[id] = SSE.create_project(datasets_root(app), id;
-                engine=engine_type, backend=backend_type, maxbatches=app.batch_cap,
-                distance=parse_distance(distance),
-                dimension=dimension === nothing ? nothing : Int(dimension),
-                textmodel=default_textmodel(engine_type), meta_schema=declared, edit_correction,
-                partition_by, partition_graph_min)
+            partitions = partition_by === nothing ? nothing : SSE.PartitionBy(partition_by; graph_min=partition_graph_min)
+            app.handles[id] = SSE.create_project(datasets_root(app), id, spec;
+                meta_schema=declared, partitions,
+                runtime=SSE.Runtime(maxbatches=app.batch_cap, edit_correction=edit_correction))
         end
     catch e
         e isa SSE.EngineError || rethrow()
@@ -553,8 +555,9 @@ function _reload_one_dataset!(app::AppState, id::String)
     # `edit_correction` is the exception: the engine does not persist it, because it is decided
     # at each open, so this sidecar is where a dataset keeps it. A descriptor written before the
     # field existed has no entry, and reads as `false`.
-    handle = SSE.open_project(datasets_root(app), id; maxbatches=app.batch_cap,
-                             edit_correction=get(descriptor, "edit_correction", false) === true)
+    handle = SSE.open_project(datasets_root(app), id;
+                             runtime=SSE.Runtime(maxbatches=app.batch_cap,
+                                                 edit_correction=get(descriptor, "edit_correction", false) === true))
     lock(app.lock) do
         app.handles[id] = handle
     end
@@ -666,13 +669,13 @@ function handle_reload_dataset(req::HTTP.Request, app::AppState, id::String)
         descriptor = JSON3.read(read(dpath), Dict{String, Any})
         # Checked here, before the loaded handle is closed: the engine would refuse it too, but
         # only on the reopen, which would leave the dataset unloaded.
-        engine_type, _ = try
+        kind = try
             parse_index_kind(get(descriptor, "index_kind", "searchgraph"))
         catch e
             e isa SSE.UnknownBackend || rethrow()
             return engine_error_response(e)
         end
-        if edit_correction && engine_type !== SSE.FullTextEngine
+        if edit_correction && kind !== :text
             return json_response(400, Dict("error" => "'edit_correction' only applies to a text dataset; " *
                                                       "'$id' is $(descriptor["index_kind"])"))
         end
@@ -1976,24 +1979,17 @@ end
 
 
 """
-    parse_index_kind(kind::AbstractString) -> (engine_type, backend_type)
+    parse_index_kind(kind::AbstractString) -> Symbol
 
-The wire's name for a kind of project, as the pair the engine actually takes.
-
-A project is two independent choices now -- what it holds (`DenseEngine`, `SparseEngine`,
-`FullTextEngine`) and what indexes it (`SearchGraph`, `BM25InvertedFile`, ...) -- while this
-API has always had a single `index_kind` string. The old names keep working and map to the
-pair they always meant; `sparse_invfile` is new, and is the one that also needs `dimension`.
-Raises [`SSE.UnknownBackend`](@ref), so a handler reports it the same way it reports any other
-invalid request.
+What a dataset of the wire's `index_kind` holds: `:dense` (`searchgraph`, `exhaustive_search`,
+`parallel_exhaustive_search`), `:text` (`bm25_invfile`, `invfile`) or `:sparse`
+(`sparse_invfile`). Raises [`SSE.UnknownBackend`](@ref) for any other name, so a handler reports
+it the same way it reports any other invalid request.
 """
 function parse_index_kind(kind::AbstractString)
-    kind == "searchgraph" && return (SSE.DenseEngine, SimilaritySearch.SearchGraph)
-    kind == "exhaustive_search" && return (SSE.DenseEngine, SimilaritySearch.ExhaustiveSearch)
-    kind == "parallel_exhaustive_search" && return (SSE.DenseEngine, SimilaritySearch.ParallelExhaustiveSearch)
-    kind == "bm25_invfile" && return (SSE.FullTextEngine, TextSearch.BM25InvertedFile)
-    kind == "invfile" && return (SSE.FullTextEngine, TextSearch.TextInvertedFile)
-    kind == "sparse_invfile" && return (SSE.SparseEngine, SimilaritySearch.InvertedFiles.InvertedFile)
+    kind in ("searchgraph", "exhaustive_search", "parallel_exhaustive_search") && return :dense
+    kind in ("bm25_invfile", "invfile") && return :text
+    kind == "sparse_invfile" && return :sparse
     throw(SSE.UnknownBackend("unknown index kind $(repr(kind)); expected searchgraph, " *
         "exhaustive_search, parallel_exhaustive_search, bm25_invfile, invfile or sparse_invfile"))
 end
@@ -2002,17 +1998,45 @@ end
 datasets_root(app::AppState) = joinpath(app.workdir, "datasets")
 
 """
-    default_textmodel(engine_type) -> Union{Nothing,AbstractTextModelSpec}
+    dataset_spec(index_kind, distance, dimension) -> SSE.ProjectSpec
 
-What a project of this kind is created with when the request does not say.
+The project specification of a dataset created with the wire's `index_kind`, `distance` (a name
+for [`parse_distance`](@ref), or `nothing`) and `dimension` (an integer, or `nothing`).
 
-A text project must state its text model explicitly -- the engine refuses to guess, because
-the ways to obtain a vocabulary are not interchangeable -- so this server picks
-`FitFromCorpus`, which is what it has always used: fit from whatever the dataset itself is
-given. Anything else needs a profile shipped to the server, which the API does not do yet.
+| `index_kind` | spec |
+|---|---|
+| `searchgraph` | `DenseVectors(distance; index=Graph())` |
+| `exhaustive_search` | `DenseVectors(distance; index=Exhaustive())` |
+| `parallel_exhaustive_search` | `DenseVectors(distance; index=Exhaustive(parallel=true))` |
+| `bm25_invfile` | `TextDocuments(FitFromCorpus(TextConfig()))`; `distance` is not used |
+| `invfile` | `TextDocuments(FitFromCorpus(TextConfig()); index=VectorSpace(distance=distance))` |
+| `sparse_invfile` | `SparseVectors(dimension, distance)` |
+
+A dense dataset without `distance` uses `SqL2`, and a sparse or a weighted text one `NormCosine`.
+A text dataset is fitted from its own corpus: the HTTP API has no way to send a profile yet.
+`dimension` is required for `sparse_invfile` and refused for the others, with
+[`SSE.InvalidOption`](@ref).
 """
-default_textmodel(engine_type) =
-    engine_type === SSE.FullTextEngine ? SSE.FitFromCorpus(TextSearch.TextConfig()) : nothing
+function dataset_spec(kind::AbstractString, distance, dimension)
+    payload = parse_index_kind(kind)
+    dist = parse_distance(distance)
+    if payload === :sparse
+        dimension isa Integer ||
+            throw(SSE.InvalidOption(:dimension, "a sparse dataset needs an integer 'dimension': an inverted file " *
+                "is a fixed array of posting lists, so it has to be sized before the first item"))
+        return SSE.SparseVectors(dimension, something(dist, SimilaritySearch.Dist.NormCosine()))
+    end
+    dimension === nothing ||
+        throw(SSE.InvalidOption(:dimension, "'dimension' only applies to a sparse dataset (sparse_invfile); " *
+            "$kind does not take one"))
+    if payload === :text
+        model = SSE.FitFromCorpus(TextSearch.TextConfig())
+        kind == "bm25_invfile" && return SSE.TextDocuments(model)
+        return SSE.TextDocuments(model; index=SSE.VectorSpace(distance=something(dist, SimilaritySearch.Dist.NormCosine())))
+    end
+    index = kind == "searchgraph" ? SSE.Graph() : SSE.Exhaustive(parallel=kind == "parallel_exhaustive_search")
+    return SSE.DenseVectors(something(dist, SimilaritySearch.Dist.SqL2()); index)
+end
 
 """
     engine_error_response(e::SSE.EngineError) -> HTTP.Response

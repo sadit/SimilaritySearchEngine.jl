@@ -3,7 +3,7 @@
 
 import SimilaritySearch
 
-const QUANT_BACKENDS = (ExhaustiveSearch, ParallelExhaustiveSearch, SearchGraph)
+const QUANT_INDEXES = (Exhaustive(), Exhaustive(parallel=true), Graph())
 
 quant_rows(n) = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:n]]
 _ids(res) = [r._id for r in res]
@@ -11,10 +11,10 @@ _ids(res) = [r._id for r in res]
 @testset "quantized project: round trip on every dense backend and quantizer" begin
     rows = quant_rows(400)
     items = dense_items(rows)
-    for back in QUANT_BACKENDS, spec in (ScalarQuantizer(:sqgu8), ScalarQuantizer(:squ4),
-                                         ScalarQuantizer(:sqgu4; rotation=:qr))
+    for index in QUANT_INDEXES, storage in (Quantized(SQ(8)), Quantized(SQ(4; range=PerVectorRange())),
+                                            Quantized(SQ(4); rotation=QRRotation()))
         mktempworkdir() do workdir
-            h = create_project(workdir, "q"; backend=back, distance=Dist.NormCosine(), quantizer=spec)
+            h = create_project(workdir, "q", DenseVectors(Dist.NormCosine(); index, storage))
             @test !quantizer_info(h).fitted
             append_items!(h, items[1:300])
             # Staged, not encoded: nothing to search yet, and the ids are already assigned.
@@ -24,9 +24,10 @@ _ids(res) = [r._id for r in res]
             append_items!(h, items[301:400])
             index!(h)
             info = quantizer_info(h)
-            @test info.fitted && info.kind == spec.kind && info.rotation == spec.rotation
+            @test info.fitted && info.storage == storage
             @test info.dimension == 128
-            @test info.bytes_per_vector == (spec.kind === :squ4 ? 64 + 8 : spec.kind === :sqgu4 ? 64 : 128)
+            perbyte = 8 ÷ storage.quantizer.bits
+            @test info.bytes_per_vector == 128 ÷ perbyte + (storage.quantizer.range isa PerVectorRange ? 8 : 0)
             # keep_vectors=false: the Float32 vectors are gone once encoded.
             @test !isfile(joinpath(workdir, "q", "dense_vectors.mmapdb"))
             @test isfile(joinpath(workdir, "q", "dense_codes.mmapdb"))
@@ -47,9 +48,9 @@ end
     rows = quant_rows(300)
     items = dense_items(rows)
     X = reduce(hcat, [it.vector for it in items])
-    for spec in (ScalarQuantizer(:sqgu8), ScalarQuantizer(:squ8), ScalarQuantizer(:sqgu4; rotation=:qr))
+    for spec in (Quantized(SQ(8)), Quantized(SQ(8; range=PerVectorRange())), Quantized(SQ(4); rotation=QRRotation()))
         mktempworkdir() do workdir
-            h = create_project(workdir, "q"; backend=ExhaustiveSearch, distance=Dist.SqL2(), quantizer=spec)
+            h = create_project(workdir, "q", DenseVectors(Dist.SqL2(); index=Exhaustive(), storage=spec))
             append_items!(h, items)
             index!(h)
             enc = h.engine.quant.encoder
@@ -68,12 +69,12 @@ end
     rows = quant_rows(700)
     items = dense_items(rows)
     overlap = Dict{Symbol,Float64}()
+    storages = Dict(:sqgu8 => Quantized(SQ(8)), :sqgu4 => Quantized(SQ(4)), :squ8 => Quantized(SQ(8; range=PerVectorRange())))
     mktempworkdir() do workdir
-        exact = create_project(workdir, "exact"; backend=ExhaustiveSearch, distance=Dist.NormCosine())
+        exact = create_project(workdir, "exact", DenseVectors(Dist.NormCosine(); index=Exhaustive()))
         append_items!(exact, items)
         for kind in (:sqgu8, :sqgu4, :squ8)
-            h = create_project(workdir, "q_$kind"; backend=ExhaustiveSearch, distance=Dist.NormCosine(),
-                               quantizer=ScalarQuantizer(kind))
+            h = create_project(workdir, "q_$kind", DenseVectors(Dist.NormCosine(); index=Exhaustive(), storage=storages[kind]))
             append_items!(h, items)
             index!(h)
             o = 0
@@ -96,7 +97,7 @@ end
     rows = quant_rows(200)
     items = dense_items(rows)
     mktempworkdir() do workdir
-        h = create_project(workdir, "keep"; backend=SearchGraph, quantizer=ScalarQuantizer(:sqgu8; keep_vectors=true))
+        h = create_project(workdir, "keep", DenseVectors(; storage=Quantized(SQ(8); keep_vectors=true)))
         append_items!(h, items[1:100])
         index!(h)
         append_items!(h, items[101:200])
@@ -118,7 +119,7 @@ end
     mktempworkdir() do workdir
         # keep_vectors=false: an append after index! starts a new file of staged vectors, whose
         # first row is item 101.
-        h = create_project(workdir, "nokeep"; backend=ExhaustiveSearch, quantizer=ScalarQuantizer(:squ8))
+        h = create_project(workdir, "nokeep", DenseVectors(; index=Exhaustive(), storage=Quantized(SQ(8; range=PerVectorRange()))))
         append_items!(h, items[1:100])
         index!(h)
         append_items!(h, items[101:200])
@@ -143,10 +144,10 @@ end
     rows = quant_rows(300)
     items = [DenseItem(Float32.(r["vector"]); doc_id=r["doc_id"], meta=Dict{String,Any}("part" => isodd(i) ? "odd" : "even"))
              for (i, r) in enumerate(rows)]
-    for back in (ExhaustiveSearch, SearchGraph)
+    for index in (Exhaustive(), Graph())
         mktempworkdir() do workdir
-            h = create_project(workdir, "p"; backend=back, quantizer=ScalarQuantizer(:sqgu8), partition_by="part",
-                               partition_graph_min=back === SearchGraph ? 50 : nothing)
+            h = create_project(workdir, "p", DenseVectors(; index, storage=Quantized(SQ(8)));
+                               partitions=PartitionBy("part"; graph_min=index isa Graph ? 50 : nothing))
             append_items!(h, items)
             index!(h)
             res = search(h, items[2].vector, 10; partition="even")
@@ -154,7 +155,11 @@ end
             res = search(h, items[3].vector, 10; filter=(rec, m) -> m !== nothing && m["part"] == "odd")
             @test all(r -> isodd(r._id), res)
             batch = search(h, [items[i].vector for i in 1:5], 3)
-            @test [first(b)._id for b in batch] == [first(search(h, items[i].vector, 1))._id for i in 1:5]
+            @test all(b -> length(b) == 3, batch)
+            # An exact index answers a batch as it answers each query. A graph search is
+            # approximate, and a search with another `k` can reach other neighbors.
+            index isa Exhaustive &&
+                @test [_ids(b) for b in batch] == [_ids(search(h, items[i].vector, 3)) for i in 1:5]
             close_project!(h)
             h = open_project(workdir, "p")
             @test all(r -> iseven(r._id), search(h, items[2].vector, 10; partition="even"))
@@ -165,32 +170,30 @@ end
 
 @testset "quantized project: what it refuses" begin
     mktempworkdir() do workdir
-        @test_throws InvalidOption ScalarQuantizer(:sq8)
-        @test_throws InvalidOption ScalarQuantizer(:sqgu8; rotation=:pca)
-        @test_throws InvalidOption ScalarQuantizer(:squ8; minmax=(-1, 1))
-        @test_throws InvalidOption ScalarQuantizer(:sqgu8; minmax=(1, -1))
-        @test_throws InvalidOption create_project(workdir, "a"; distance=Dist.Angle(), quantizer=ScalarQuantizer())
-        @test_throws InvalidOption create_project(workdir, "b"; engine=SparseEngine, dimension=10, quantizer=ScalarQuantizer())
-        @test !isdir(joinpath(workdir, "a")) && !isdir(joinpath(workdir, "b"))
+        @test_throws InvalidOption SQ(16)
+        @test_throws InvalidOption GlobalRange(minmax=(1, -1))
+        @test_throws InvalidOption GlobalRange(samplesize=0)
+        @test_throws InvalidOption PerVectorRange(samplesize=0)
+        @test_throws InvalidOption DenseVectors(Dist.Angle(); storage=Quantized(SQ(8)))
 
-        h = create_project(workdir, "c"; quantizer=ScalarQuantizer())
+        h = create_project(workdir, "c", DenseVectors(; storage=Quantized(SQ(8))))
         @test_throws NothingStaged index!(h)
         @test_throws NothingStaged fit_quantizer!(h)
         close_project!(h)
 
         # 2 bits pack 4 coordinates per byte, so a dimension of 6 cannot be stored.
-        h = create_project(workdir, "d"; backend=ExhaustiveSearch, quantizer=ScalarQuantizer(:sqgu2))
+        h = create_project(workdir, "d", DenseVectors(; index=Exhaustive(), storage=Quantized(SQ(2))))
         append_items!(h, [DenseItem(rand(Float32, 6)) for _ in 1:10])
         @test_throws InvalidOption index!(h)
         close_project!(h)
 
-        h = create_project(workdir, "e"; backend=ExhaustiveSearch)
+        h = create_project(workdir, "e", DenseVectors(; index=Exhaustive()))
         @test quantizer_info(h) === nothing
         @test_throws InvalidOption fit_quantizer!(h)
         close_project!(h)
 
         # A fixed range: nothing to fit, and the range reported is the one given.
-        h = create_project(workdir, "f"; backend=ExhaustiveSearch, quantizer=ScalarQuantizer(:sqgu8; minmax=(-1, 1)))
+        h = create_project(workdir, "f", DenseVectors(; index=Exhaustive(), storage=Quantized(SQ(8; range=GlobalRange(minmax=(-1, 1))))))
         append_items!(h, dense_items(quant_rows(20)))
         fit_quantizer!(h)
         info = quantizer_info(h)
@@ -203,7 +206,7 @@ end
 @testset "quantized project: calibrate! and the operations over the whole dataset" begin
     items = dense_items(quant_rows(300))
     mktempworkdir() do workdir
-        h = create_project(workdir, "w"; backend=SearchGraph, quantizer=ScalarQuantizer(:sqgu8))
+        h = create_project(workdir, "w", DenseVectors(; storage=Quantized(SQ(8))))
         append_items!(h, items)
         index!(h)
         report = calibrate!(h; levels=[0.9], numqueries=16)
@@ -233,11 +236,10 @@ end
             # A graph project, not indexed: opening it copies every Float32 vector into memory, as
             # opening an exact project does. An exact project is not used because its append saves
             # the whole index after each item, which takes hours at this size.
-            f = create_project(workdir, "float"; backend=SearchGraph, distance=Dist.NormCosine())
+            f = create_project(workdir, "float", DenseVectors(Dist.NormCosine()))
             append_items!(f, [DenseItem(v) for v in vecs])
             close_project!(f)
-            q = create_project(workdir, "codes"; backend=ExhaustiveSearch, distance=Dist.NormCosine(),
-                               quantizer=ScalarQuantizer(:sqgu8))
+            q = create_project(workdir, "codes", DenseVectors(Dist.NormCosine(); index=Exhaustive(), storage=Quantized(SQ(8))))
             append_items!(q, [DenseItem(v) for v in vecs])
             index!(q)
             close_project!(q)
@@ -246,9 +248,9 @@ end
                 script = """
                     using SimilaritySearchEngine
                     rss() = parse(Int, split(read("/proc/self/statm", String))[2]) * Int(ccall(:getpagesize, Cint, ()))
-                    for (n, q) in (("warm_float", nothing), ("warm_codes", ScalarQuantizer(:sqgu8)))
+                    for (n, spec) in (("warm_float", DenseVectors()), ("warm_codes", DenseVectors(; index=Exhaustive(), storage=Quantized(SQ(8)))))
                         w = mktempdir()
-                        h = create_project(w, n; backend=$(name == "float" ? "SearchGraph" : "ExhaustiveSearch"), quantizer=q)
+                        h = create_project(w, n, spec)
                         append_items!(h, [DenseItem(rand(Float32, $dim)) for _ in 1:64]); index!(h)
                         search(h, rand(Float32, $dim), 10); close_project!(h)
                     end

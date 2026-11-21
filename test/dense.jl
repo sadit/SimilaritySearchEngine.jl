@@ -2,7 +2,7 @@
     mktempworkdir() do workdir
         items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:100]]
 
-        h = create_project(workdir, "dense_ds")
+        h = create_project(workdir, "dense_ds", DenseVectors())
         inserted = append_items!(h, dense_items(items))
         @test inserted == 100
 
@@ -94,7 +94,7 @@ end
         # Since SimilaritySearch 1.6, `optimize_index!` draws `numqueries` (64 by default)
         # queries out of a larger set it is given; calibrate! passes the size of its own
         # sample. The library reports how many queries it used only on a verbose context.
-        h = create_project(workdir, "calib_pool"; engine=DenseEngine, backend=SearchGraph)
+        h = create_project(workdir, "calib_pool", DenseVectors())
         rng = Xoshiro(7)
         append_items!(h, [DenseItem(rand(rng, Float32, 8)) for _ in 1:400])
         index!(h)
@@ -119,7 +119,7 @@ end
         # advance the in-memory count and write the mapped bytes without msyncing them or
         # persisting the advanced header. `append_items!` flushing once per batch is what
         # makes this survive, and nothing else in this suite would notice if it stopped.
-        h = create_project(workdir, "dense_backlog_ds")
+        h = create_project(workdir, "dense_backlog_ds", DenseVectors())
         append_items!(h, dense_items(indexed))
         index!(h)
         append_items!(h, dense_items(backlog))   # staged, deliberately left un-indexed

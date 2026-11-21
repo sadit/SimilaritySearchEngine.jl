@@ -3,8 +3,7 @@
         items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:100]]
         sitems = sparse_items(items)
 
-        h = create_project(workdir, "sparse_ds"; engine=SparseEngine, dimension=SPARSE_DIM,
-                           distance=Dist.NormCosine())
+        h = create_project(workdir, "sparse_ds", SparseVectors(SPARSE_DIM, Dist.NormCosine()))
         @test payload_kind(h.engine) === :sparse
         @test h.engine.backend.dimension == SPARSE_DIM
         @test append_items!(h, sitems) == 100
@@ -52,8 +51,7 @@ end
 @testset "sparse project: the query is a sparse vector of the project's own dimension" begin
     mktempworkdir() do workdir
         items = sparse_items([JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:20]])
-        h = create_project(workdir, "sq_ds"; engine=SparseEngine, dimension=SPARSE_DIM,
-                           distance=Dist.NormCosine())
+        h = create_project(workdir, "sq_ds", SparseVectors(SPARSE_DIM, Dist.NormCosine()))
         append_items!(h, items)
         # A dense query would `convert` cleanly and then die inside the library on a Float32
         # used as a posting-list index, so it is refused here where the message can say why.

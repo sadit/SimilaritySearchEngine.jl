@@ -170,6 +170,10 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <a class="dropdown-item" href="../server/tutorial.html">
  <span class="dropdown-text">Tutorial</span></a>
   </li>  
+        <li>
+    <a class="dropdown-item" href="../server/julia-client.html">
+ <span class="dropdown-text">Julia client</span></a>
+  </li>  
     </ul>
   </li>
 </ul>
@@ -186,6 +190,10 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
         <li>
     <a class="dropdown-item" href="https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html">
  <span class="dropdown-text">Server API</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="https://sadit.github.io/SimilaritySearchEngine.jl/api/client.html">
+ <span class="dropdown-text">Julia client API</span></a>
   </li>  
     </ul>
   </li>
@@ -613,21 +621,19 @@ revolution     -&gt; revolutions, Enlightenment, revolutionary, monde, mentalit√
 <span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="co"># 2. Create project using a pre-computed BaseProfile</span></span>
 <span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a>workdir <span class="op">=</span> <span class="fu">mktempdir</span>()</span>
-<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a>h <span class="op">=</span> SSE.<span class="fu">create_project</span>(workdir, <span class="st">"sample_project"</span>;</span>
-<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a>        engine    <span class="op">=</span> SSE.FullTextEngine,</span>
-<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a>        backend   <span class="op">=</span> TextSearch.BM25InvertedFile,</span>
-<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a>        textmodel <span class="op">=</span> SSE.<span class="fu">BaseProfile</span>(profiles[<span class="st">"gutenberg-en"</span>]))</span>
-<span id="cb13-14"><a href="#cb13-14" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb13-15"><a href="#cb13-15" aria-hidden="true" tabindex="-1"></a><span class="co"># 3. Stage items (durable on disk, pending indexing)</span></span>
-<span id="cb13-16"><a href="#cb13-16" aria-hidden="true" tabindex="-1"></a>SSE.<span class="fu">append_items!</span>(h, slice)</span>
-<span id="cb13-17"><a href="#cb13-17" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb13-18"><a href="#cb13-18" aria-hidden="true" tabindex="-1"></a><span class="co"># 4. Construct inverted file postings over staged backlog</span></span>
-<span id="cb13-19"><a href="#cb13-19" aria-hidden="true" tabindex="-1"></a><span class="fu">quiet</span>() <span class="cf">do</span></span>
-<span id="cb13-20"><a href="#cb13-20" aria-hidden="true" tabindex="-1"></a>    SSE.<span class="fu">index!</span>(h)</span>
-<span id="cb13-21"><a href="#cb13-21" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span>
-<span id="cb13-22"><a href="#cb13-22" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb13-23"><a href="#cb13-23" aria-hidden="true" tabindex="-1"></a><span class="co"># 5. Execute full-text query</span></span>
-<span id="cb13-24"><a href="#cb13-24" aria-hidden="true" tabindex="-1"></a>results <span class="op">=</span> SSE.<span class="fu">ftsearch</span>(h, <span class="st">"the whale"</span>, <span class="fl">3</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a>h <span class="op">=</span> SSE.<span class="fu">create_project</span>(workdir, <span class="st">"sample_project"</span>,</span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a>        SSE.<span class="fu">TextDocuments</span>(SSE.<span class="fu">BaseProfile</span>(profiles[<span class="st">"gutenberg-en"</span>]); index<span class="op">=</span>SSE.<span class="fu">BM25</span>()))</span>
+<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a><span class="co"># 3. Stage items (durable on disk, pending indexing)</span></span>
+<span id="cb13-14"><a href="#cb13-14" aria-hidden="true" tabindex="-1"></a>SSE.<span class="fu">append_items!</span>(h, slice)</span>
+<span id="cb13-15"><a href="#cb13-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-16"><a href="#cb13-16" aria-hidden="true" tabindex="-1"></a><span class="co"># 4. Construct inverted file postings over staged backlog</span></span>
+<span id="cb13-17"><a href="#cb13-17" aria-hidden="true" tabindex="-1"></a><span class="fu">quiet</span>() <span class="cf">do</span></span>
+<span id="cb13-18"><a href="#cb13-18" aria-hidden="true" tabindex="-1"></a>    SSE.<span class="fu">index!</span>(h)</span>
+<span id="cb13-19"><a href="#cb13-19" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span>
+<span id="cb13-20"><a href="#cb13-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-21"><a href="#cb13-21" aria-hidden="true" tabindex="-1"></a><span class="co"># 5. Execute full-text query</span></span>
+<span id="cb13-22"><a href="#cb13-22" aria-hidden="true" tabindex="-1"></a>results <span class="op">=</span> SSE.<span class="fu">ftsearch</span>(h, <span class="st">"the whale"</span>, <span class="fl">3</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <hr>
 </section>
 <section id="empirical-benchmark-analysis" class="level2">

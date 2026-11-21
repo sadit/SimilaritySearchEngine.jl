@@ -13,13 +13,13 @@ function execute_build(cmd_args::Dict)
 
     println("Building index '$index_kind' for dataset '$project_id'")
 
-    engine_type, backend_type = Server.parse_index_kind(index_kind)
-    handle = SSE.create_project(workdir, project_id;
-        engine=engine_type, backend=backend_type,
-        distance=Server.parse_distance(distance),
-        textmodel=Server.default_textmodel(engine_type),
-        partition_by=get(cmd_args, "partition-by", nothing),
-        partition_graph_min=get(cmd_args, "partition-graph-min", nothing))
+    partition_by = get(cmd_args, "partition-by", nothing)
+    graph_min = get(cmd_args, "partition-graph-min", nothing)
+    graph_min === nothing || partition_by !== nothing ||
+        SSE.Errors.invalid_option(:partition_graph_min, "--partition-graph-min needs --partition-by: it is the " *
+                                  "size from which a partition has its own graph")
+    handle = SSE.create_project(workdir, project_id, Server.dataset_spec(index_kind, distance, nothing);
+        partitions=partition_by === nothing ? nothing : SSE.PartitionBy(partition_by; graph_min))
 
     kind = SSE.payload_kind(handle.engine)
     items = SSE.AbstractItem[]
@@ -99,7 +99,7 @@ that wrote and read it were removed on 2026-09-13, together with the `JLD2` depe
 function _open_handle(project_id::String, workdir::String; read_only::Bool=false, edit_correction::Bool=false)
     for root in (joinpath(workdir, "datasets"), workdir)
         isdir(joinpath(root, project_id)) || continue
-        return SSE.open_project(root, project_id; read_only, edit_correction)
+        return SSE.open_project(root, project_id; read_only, runtime=SSE.Runtime(; edit_correction))
     end
     println("Error: dataset '$project_id' not found under $workdir")
     return nothing
@@ -516,12 +516,13 @@ function execute_rebuild(cmd_args::Dict)
 
     kind = SSE.payload_kind(engine)
     field = kind === :text ? "text" : "vector"
-    index_kind = wire_kind(engine)
-    # The fresh project is partitioned like the old one: the field lives in the project, and the
-    # partition lists are rebuilt from the items' `meta` as they are appended again.
+    # The fresh project has the spec of the old one and is partitioned like it: the field lives
+    # in the project, and the partition lists are rebuilt from the items' `meta` as they are
+    # appended again.
+    spec = SSE.project_spec(handle)
     partition_by = SSE.partition_field(handle)
-    partition_graph_min = SSE.partition_graph_min(handle)
-    distance = kind === :text ? nothing : SimilaritySearch.distance(engine.backend.index)
+    partitions = partition_by === nothing ? nothing :
+                 SSE.PartitionBy(partition_by; graph_min=SSE.partition_graph_min(handle))
 
     all_ids, live = _live_items(handle.project, engine)
     live_valid = [(id, item) for (id, item) in live if haskey(item, field)]
@@ -547,10 +548,7 @@ function execute_rebuild(cmd_args::Dict)
     ispath(stale) && rm(stale; recursive=true)
     mv(dir, stale)
 
-    engine_type, backend_type = Server.parse_index_kind(index_kind)
-    fresh = SSE.create_project(root, name;
-        engine=engine_type, backend=backend_type, distance=distance,
-        textmodel=Server.default_textmodel(engine_type), partition_by, partition_graph_min)
+    fresh = SSE.create_project(root, name, spec; partitions)
     reindexed = isempty(items) ? 0 : SSE.append_items!(fresh, items)
     reindexed > 0 && SSE.index!(fresh)
     SSE.close_project!(fresh)

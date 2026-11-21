@@ -3,7 +3,7 @@
         items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:50]]
         first_batch, second_batch = items[1:30], items[31:50]
 
-        h = create_project(workdir, "text_ds"; engine=FullTextEngine, backend=BM25InvertedFile, textmodel=FitFromCorpus())
+        h = create_project(workdir, "text_ds", TextDocuments(FitFromCorpus()))
         inserted = append_items!(h, text_items(first_batch))
         @test inserted == 30
 
@@ -39,7 +39,7 @@ end
         items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:20]]
         first_batch, second_batch = items[1:10], items[11:20]
 
-        h = create_project(workdir, "invfile_ds"; engine=FullTextEngine, backend=InvertedFile, textmodel=FitFromCorpus())
+        h = create_project(workdir, "invfile_ds", TextDocuments(FitFromCorpus(); index=VectorSpace()))
         append_items!(h, text_items(first_batch))
         @test isempty(ftsearch(h, first_batch[2]["text"], 3))
 
@@ -63,7 +63,7 @@ end
         items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:20]]
         trained, backlog = items[1:15], items[16:20]
 
-        h = create_project(workdir, "text_backlog_ds"; engine=FullTextEngine, backend=BM25InvertedFile, textmodel=FitFromCorpus())
+        h = create_project(workdir, "text_backlog_ds", TextDocuments(FitFromCorpus()))
         append_items!(h, text_items(trained))
         index!(h)
         append_items!(h, text_items(backlog)) # staged, deliberately left un-indexed
@@ -91,7 +91,7 @@ end
         items = [TextItem(corpus[i]; doc_id="d$i") for i in eachindex(corpus)]
 
         function fitted(name, spec)
-            h = create_project(workdir, name; engine=FullTextEngine, backend=TextInvertedFile, textmodel=spec)
+            h = create_project(workdir, name, TextDocuments(spec; index=VectorSpace()))
             append_items!(h, items)
             index!(h)
             h
@@ -141,7 +141,7 @@ end
 
 @testset "text project: a custom TextConfig is fitted under, persisted, and restored" begin
     mktempworkdir() do workdir
-        h = create_project(workdir, "cfg_ds"; engine=FullTextEngine, backend=BM25InvertedFile, textmodel=FitFromCorpus(CASED_ES))
+        h = create_project(workdir, "cfg_ds", TextDocuments(FitFromCorpus(CASED_ES)))
         append_items!(h, ACCENT_ITEMS)
         index!(h)
 
@@ -212,7 +212,7 @@ end
 
 @testset "text project: QueryPolicy corrects a query, :off searches it literally" begin
     mktempworkdir() do workdir
-        h = create_project(workdir, "policy_ds"; engine=FullTextEngine, backend=BM25InvertedFile, textmodel=FitFromCorpus(CASED_ES))
+        h = create_project(workdir, "policy_ds", TextDocuments(FitFromCorpus(CASED_ES)))
         append_items!(h, ACCENT_ITEMS)
         index!(h)
 
@@ -251,8 +251,7 @@ end
         war(hits) = length(hits) == 5 && all(r -> startswith(r.doc_id, "g"), hits)
 
         # Off by default: `guerar` is not in the vocabulary, and no fold reaches `guerra`.
-        h = create_project(workdir, "edits_bm25"; engine=FullTextEngine, backend=BM25InvertedFile,
-                           textmodel=FitFromCorpus())
+        h = create_project(workdir, "edits_bm25", TextDocuments(FitFromCorpus()))
         append_items!(h, items)
         index!(h)
         @test isempty(ftsearch(h, "guerar", 5))
@@ -260,7 +259,7 @@ end
         close_project!(h)
 
         # Opening with it on assembles the persisted index with an edit index.
-        h = open_project(workdir, "edits_bm25"; edit_correction=true)
+        h = open_project(workdir, "edits_bm25"; runtime=Runtime(edit_correction=true))
         @test war(ftsearch(h, "guerar", 5))
         lines = ftexplain(h, "guerar")
         @test length(lines) == 1
@@ -278,8 +277,7 @@ end
 
         # Set at creation, it reaches the index that the first index! builds, on the weighted
         # backend too.
-        h = create_project(workdir, "edits_weighted"; engine=FullTextEngine, backend=TextInvertedFile,
-                           textmodel=FitFromCorpus(), edit_correction=true)
+        h = create_project(workdir, "edits_weighted", TextDocuments(FitFromCorpus(); index=VectorSpace()); runtime=Runtime(edit_correction=true))
         append_items!(h, items)
         index!(h)
         @test war(ftsearch(h, "guerar", 5))
@@ -287,17 +285,16 @@ end
 
         # A BaseProfile builds its index at creation, which is the third place it applies.
         profile = fit_profile(FitFromCorpus(), texts)
-        h = create_project(workdir, "edits_base"; engine=FullTextEngine, backend=BM25InvertedFile,
-                           textmodel=BaseProfile(profile), edit_correction=true)
+        h = create_project(workdir, "edits_base", TextDocuments(BaseProfile(profile)); runtime=Runtime(edit_correction=true))
         append_items!(h, items)
         index!(h)
         @test war(ftsearch(h, "guerar", 5))
         close_project!(h)
 
         # A project without text has no tokens to correct.
-        @test_throws InvalidOption create_project(workdir, "edits_dense"; edit_correction=true)
-        close_project!(create_project(workdir, "dense_ok"; engine=DenseEngine, backend=ExhaustiveSearch))
-        @test_throws InvalidOption open_project(workdir, "dense_ok"; edit_correction=true)
+        @test_throws InvalidOption create_project(workdir, "edits_dense", DenseVectors(); runtime=Runtime(edit_correction=true))
+        close_project!(create_project(workdir, "dense_ok", DenseVectors(; index=Exhaustive())))
+        @test_throws InvalidOption open_project(workdir, "dense_ok"; runtime=Runtime(edit_correction=true))
         # The refused open released the project's lock.
         close_project!(open_project(workdir, "dense_ok"))
     end
@@ -318,7 +315,7 @@ end
 
         # deferred fit: the vocabulary is frozen over the first batch, so a term that only
         # ever appears in the second is out-of-vocabulary forever after
-        h = create_project(workdir, "oov_ds"; engine=FullTextEngine, backend=BM25InvertedFile, textmodel=FitFromCorpus())
+        h = create_project(workdir, "oov_ds", TextDocuments(FitFromCorpus()))
         append_items!(h, first_batch); index!(h)
         append_items!(h, second_batch); index!(h)
         @test isempty(ftsearch(h, "zeppelin", 5))
@@ -326,7 +323,7 @@ end
 
         # same insertion sequence against the pre-fitted profile: trained before the first
         # item was staged, so the second batch's terms are searchable
-        hp = create_project(workdir, "prefit_ds"; engine=FullTextEngine, backend=BM25InvertedFile, textmodel=BaseProfile(reloaded))
+        hp = create_project(workdir, "prefit_ds", TextDocuments(BaseProfile(reloaded)))
         @test text_profile(hp) !== nothing          # trained at creation, not at first index!
         append_items!(hp, first_batch); index!(hp)
         append_items!(hp, second_batch); index!(hp)
@@ -348,7 +345,7 @@ end
         # so a query has to be encoded the same way or the two sides stop being comparable
         for dist in (Dist.Sets.Jaccard(), Dist.Sets.Dice())
             name = "sets_$(nameof(typeof(dist)))"
-            h = create_project(workdir, name; engine=FullTextEngine, backend=TextInvertedFile, distance=dist, textmodel=FitFromCorpus())
+            h = create_project(workdir, name, TextDocuments(FitFromCorpus(); index=VectorSpace(distance=dist)))
             append_items!(h, items)
             index!(h)
             hits = [r.doc_id for r in ftsearch(h, "perro patio", 3)]
@@ -380,7 +377,7 @@ end
             query_expansion_distances=Dict("perro" => Float32[0.2, 0.9]),
             applied=AppliedArtifacts(query_expansion=true))
 
-        h = create_project(workdir, "expand_ds"; engine=FullTextEngine, backend=BM25InvertedFile, textmodel=BaseProfile(withnet))
+        h = create_project(workdir, "expand_ds", TextDocuments(BaseProfile(withnet)))
         append_items!(h, items)
         index!(h)
 
@@ -403,7 +400,7 @@ end
     mktempworkdir() do workdir
         items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:20]]
 
-        h = create_project(workdir, "tif_ds"; engine=FullTextEngine, backend=TextInvertedFile, textmodel=FitFromCorpus())
+        h = create_project(workdir, "tif_ds", TextDocuments(FitFromCorpus(); index=VectorSpace()))
         append_items!(h, text_items(items))
         index!(h)
         @test h.engine isa SimilaritySearchEngine.IndexEngine.FullTextEngine
@@ -421,8 +418,7 @@ end
 
 @testset "a text project reports what its vocabulary does not cover" begin
     mktempworkdir() do workdir
-        h = create_project(workdir, "oov_ds"; engine=FullTextEngine, backend=BM25InvertedFile,
-                           textmodel=FitFromCorpus())
+        h = create_project(workdir, "oov_ds", TextDocuments(FitFromCorpus()))
         append_items!(h, [TextItem(t; doc_id="d$i") for (i, t) in enumerate([
             "el gato duerme sobre el tejado",
             "un perro ladra en la calle",
@@ -475,13 +471,12 @@ end
 
 @testset "vocabulary_report is for text projects with a vocabulary" begin
     mktempworkdir() do workdir
-        dense = create_project(workdir, "oov_dense"; engine=DenseEngine, backend=ExhaustiveSearch)
+        dense = create_project(workdir, "oov_dense", DenseVectors(; index=Exhaustive()))
         @test vocabulary_report(dense) === nothing
         close_project!(dense)
 
         # A text project that has never been indexed has no vocabulary to report on
-        fresh = create_project(workdir, "oov_fresh"; engine=FullTextEngine,
-                               backend=BM25InvertedFile, textmodel=FitFromCorpus())
+        fresh = create_project(workdir, "oov_fresh", TextDocuments(FitFromCorpus()))
         @test vocabulary_report(fresh) === nothing
         close_project!(fresh)
     end

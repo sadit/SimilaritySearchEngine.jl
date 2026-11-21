@@ -1,6 +1,6 @@
 @testset "a search borrows a context sized for one query, not for a batch" begin
     mktempworkdir() do workdir
-        h = create_project(workdir, "ctx_ds"; engine=DenseEngine, backend=SearchGraph)
+        h = create_project(workdir, "ctx_ds", DenseVectors())
         append_items!(h, [DenseItem(Float32[i, i % 5, 1, 0]; doc_id="c$i") for i in 1:64])
         index!(h)
 
@@ -22,7 +22,7 @@
 
         # The cap on batch work is a property of the process, not of the project: it is
         # passed when the project is opened, not stored in it.
-        h2 = open_project(workdir, "ctx_ds"; maxbatches=4)
+        h2 = open_project(workdir, "ctx_ds"; runtime=Runtime(maxbatches=4))
         @test h2.engine.backend.ctx.maxbatches == 4
         @test IndexEngine.checkout!(h2.engine.search_ctx_pool).maxbatches == 1
         @test length(search(h2, Float32[1, 1, 1, 0], 5)) == 5
@@ -36,7 +36,7 @@ end
 
 @testset "SearchStats reports the cost of the search it was passed to" begin
     mktempworkdir() do workdir
-        h = create_project(workdir, "stats_ds"; engine=DenseEngine, backend=ExhaustiveSearch)
+        h = create_project(workdir, "stats_ds", DenseVectors(; index=Exhaustive()))
         append_items!(h, [DenseItem(Float32[i, i % 5, 1, 0]; doc_id="s$i") for i in 1:32])
         q = Float32[3, 3, 1, 0]
 
@@ -62,7 +62,7 @@ end
 
 @testset "batch search answers exactly what one-at-a-time search answers" begin
     mktempworkdir() do workdir
-        h = create_project(workdir, "batch_ds"; engine=DenseEngine, backend=ExhaustiveSearch)
+        h = create_project(workdir, "batch_ds", DenseVectors(; index=Exhaustive()))
         vectors = [Float32[i, i % 7, i % 3, 1] for i in 1:40]
         append_items!(h, [DenseItem(v; doc_id="b$i") for (i, v) in enumerate(vectors)])
         queries = vectors[1:2:20]
@@ -92,7 +92,7 @@ end
 
 @testset "batch search is a whole-dataset operation: no backlog, no text projects" begin
     mktempworkdir() do workdir
-        h = create_project(workdir, "batchguard_ds"; engine=DenseEngine, backend=SearchGraph)
+        h = create_project(workdir, "batchguard_ds", DenseVectors())
         vectors = [Float32[i, 1, 2, 3] for i in 1:30]
         append_items!(h, [DenseItem(v; doc_id="g$i") for (i, v) in enumerate(vectors)])
         index!(h)
@@ -105,8 +105,7 @@ end
         @test size(searchbatch(h, vectors[1:3], 4)[1]) == (4, 3)
         close_project!(h)
 
-        ht = create_project(workdir, "batchtext_ds"; engine=FullTextEngine,
-                            backend=BM25InvertedFile, textmodel=FitFromCorpus())
+        ht = create_project(workdir, "batchtext_ds", TextDocuments(FitFromCorpus()))
         append_items!(ht, [TextItem("some text number $i"; doc_id="t$i") for i in 1:20])
         index!(ht)
         @test_throws UnsupportedOperation searchbatch(ht, ["some text", "other text"], 3)

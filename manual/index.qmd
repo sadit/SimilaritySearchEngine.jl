@@ -81,21 +81,23 @@ developed by path.
 ## Engine functionality
 
 - **Project lifecycle**: `create_project`, `open_project` and `close_project!` manage the on-disk RocksDB directory and the associated search engine.
-- **Separation of engine and backend**:
-  - **Payload engines**: `DenseEngine`, `SparseEngine` and `FullTextEngine` determine the type of data stored.
-  - **Index backends**: `SearchGraph`, `ExhaustiveSearch`, `InvertedFile` and `BM25InvertedFile` determine the indexing data structure.
-  - `payload_kind(engine)` reports the data type, and the `BACKENDS` registry restricts which engine-backend pairs are valid.
+- **Project specifications**: `create_project` takes one value that describes the project (issue #2):
+  - What it holds: `DenseVectors`, `SparseVectors` or `TextDocuments`.
+  - Its index: `Graph` or `Exhaustive` for dense vectors, `BM25` or `VectorSpace` for text.
+  - The storage of dense vectors: `Float32Vectors` or `Quantized`.
+  - Each type holds only its own options. For example, `minrecall` is an option of `Graph`, and the dimension is an argument of `SparseVectors`.
+  - The spec is saved with the project. `project_spec(h)` returns it, and `payload_kind(h.engine)` reports the type of data.
 - **Dense vector search**: approximate nearest neighbor search with `SearchGraph`, which tunes its beam search parameters, or exact search with `ExhaustiveSearch` and `ParallelExhaustiveSearch`. For `SearchGraph`, insertion (`append_items!`) and graph construction (`index!`) are separate operations, so the caller determines when indexing latency is incurred.
-- **Quantized dense vectors**: `create_project(...; quantizer=ScalarQuantizer(:sqgu8))` stores each vector as 8, 4 or 2 bits per coordinate instead of a `Float32`, on `SearchGraph`, `ExhaustiveSearch` and `ParallelExhaustiveSearch`. At 8 bits a vector takes a quarter of the memory and of the disk space. `quantizer_info(h)` reports the quantizer, its range and the bytes per vector.
+- **Quantized dense vectors**: `DenseVectors(distance; storage=Quantized(SQ(8)))` stores each vector as 8, 4 or 2 bits per coordinate instead of a `Float32`, with the `Graph` index and with the `Exhaustive` index. At 8 bits a vector takes a quarter of the memory and of the disk space. `quantizer_info(h)` reports the quantizer, its range and the bytes per vector.
 - **Sparse vector search**: inverted index search (`InvertedFile`) over sparse representations encoded by the caller, of fixed dimension. The available distance functions are cosine distance over the weights and set distances (`Dist.Sets.*`) over the support of the non-zero coordinates.
 - **Full-text retrieval**: lexical search with `BM25InvertedFile` or with TF-IDF weighting (`TextInvertedFile`). The first call to `index!` fits or initializes a `TextProfile` from the staged texts, which determines the vocabulary and the term weighting model.
-- **Explicit text modeling**: a text project requires an `AbstractTextModelSpec`:
+- **Explicit text modeling**: `TextDocuments` requires an `AbstractTextModelSpec`:
   - `DefaultProfile(:lang)` resolves a pre-trained language profile and refits the vocabulary frequencies against the staged corpus.
   - `BaseProfile(p)` uses an existing `TextProfile`.
   - `FitFromCorpus(cfg)` fits a profile from the staged corpus, up to `max_documents`.
   - A query accepts a `QueryPolicy`, which determines orthographic correction and query expansion.
-  - `edit_correction=true`, given to `create_project` or `open_project`, also corrects a query token that is absent from the vocabulary when exactly one vocabulary token is at edit distance 1 from it.
-- **Partitions**: a text project can declare one `meta` field as its partition field (`partition_by`). `ftsearch(h, q, k; partition=name)` then searches only the items whose field holds `name`, and returns the scores the global search gives them. `partitions(h)` lists the partitions, and `declare_partition!` partitions an existing project.
+  - `Runtime(edit_correction=true)`, given to `create_project` or `open_project`, also corrects a query token that is absent from the vocabulary when exactly one vocabulary token is at edit distance 1 from it.
+- **Partitions**: a text or dense project can declare one `meta` field as its partition field (`partitions=PartitionBy("repo")`). `ftsearch(h, q, k; partition=name)` then searches only the items whose field holds `name`, and returns the scores the global search gives them. `partitions(h)` lists the partitions, and `declare_partition!` partitions an existing project.
 - **Typed interface**: input is given in typed containers (`DenseItem`, `SparseItem`, `TextItem`), and queries return structured results (`SearchResult`, `StoredItem`, `ExistsResult`).
 - **Logical deletion**: `delete_item!` marks a document as deleted without modifying the index. Queries return such candidates with an explicit `deleted` field.
 - **Recall calibration**: `calibrate!` optimizes the beam search parameters for a set of target recall values, which `minrecall` then selects. It reports the recall each configuration reaches on queries that took no part in the tuning, with a bootstrap interval. `SearchStats` reports the number of distance computations a query performed.

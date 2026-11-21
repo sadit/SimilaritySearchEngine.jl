@@ -106,9 +106,10 @@ The same shape appeared with `verbose`: this package's `fit_profile` adapter def
 which layer you called. Neither was a bug yet. Both were a bug waiting for a reader.
 
 **How to apply:** when an internal function needs a value it does not have, the answer is to
-name it at the boundary and pass it down — not to guess. Where a default genuinely belongs to a
-*kind* rather than to a call, give it a name of its own: `IndexEngine.default_distance(index_type)`
-is a function, resolved once by `create_project`, instead of a default repeated per method.
+name it at the boundary and pass it down — not to guess. Since issue #2 (2026-11-21), the
+defaults of a project are on the constructors of its specification: `DenseVectors()` is
+`SqL2`, `Graph(minrecall=0.9)` and `Float32Vectors()`, and every function below
+`create_project` receives a complete spec.
 
 Two exemptions, both narrow:
 

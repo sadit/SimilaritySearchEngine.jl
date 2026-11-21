@@ -2,7 +2,7 @@
     mktempworkdir() do workdir
         items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:30]]
 
-        h = create_project(workdir, "roundtrip_ds")
+        h = create_project(workdir, "roundtrip_ds", DenseVectors())
         append_items!(h, dense_items(items))
         index!(h)
         before = search(h, items[1]["vector"], 5)
@@ -35,7 +35,7 @@ end
         results(h) = [[r._id for r in search(h, X[i], 10)] for i in 1:20]
         hints(h) = copy(h.engine.backend.index.hints)
 
-        h = create_project(workdir, "beam_ds"; engine=DenseEngine, backend=SearchGraph)
+        h = create_project(workdir, "beam_ds", DenseVectors())
         append_items!(h, [DenseItem(x) for x in X])
         index!(h)
         tuned = beam(h)
@@ -68,7 +68,7 @@ end
     mktempworkdir() do workdir
         items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:10]]
 
-        h = create_project(workdir, "lock_ds")
+        h = create_project(workdir, "lock_ds", DenseVectors())
         append_items!(h, dense_items(items))
         index!(h)
 
@@ -85,7 +85,7 @@ end
 @testset "a read-only handle of an exact index closes without writing" begin
     mktempworkdir() do workdir
         items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:10]]
-        h = create_project(workdir, "exact_ro"; backend=ExhaustiveSearch)
+        h = create_project(workdir, "exact_ro", DenseVectors(; index=Exhaustive()))
         append_items!(h, dense_items(items))
         index!(h)
         # A second process reads while the first one writes, as a job of the server does.
@@ -98,7 +98,7 @@ end
 
 @testset "compaction runs for a session that wrote and is skipped for one that did not" begin
     mktempworkdir() do workdir
-        h = create_project(workdir, "compact_ds"; engine=DenseEngine, backend=SearchGraph)
+        h = create_project(workdir, "compact_ds", DenseVectors())
         vectors = [Float32[i, 2, 3, 4] for i in 1:40]
         append_items!(h, [DenseItem(v; doc_id="c$i") for (i, v) in enumerate(vectors)])
         index!(h)
@@ -122,13 +122,12 @@ end
 end
 
 @testset "a text project persists its index and reopens without recomputing it" begin
-    for backend in (BM25InvertedFile, TextInvertedFile)
+    for textindex in (BM25(), VectorSpace())
         mktempworkdir() do workdir
             P = SimilaritySearchEngine.Persistence
             items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:120]]
 
-            h = create_project(workdir, "lazy_ds"; engine=FullTextEngine, backend=backend,
-                               textmodel=FitFromCorpus())
+            h = create_project(workdir, "lazy_ds", TextDocuments(FitFromCorpus(); index=textindex))
             append_items!(h, text_items(items))
             index!(h)
             before = [r.doc_id for r in ftsearch(h, items[7]["text"], 5)]
@@ -149,11 +148,10 @@ end
 end
 
 @testset "a second block reaches the persisted index, incrementally" begin
-    for backend in (BM25InvertedFile, TextInvertedFile)
+    for textindex in (BM25(), VectorSpace())
         mktempworkdir() do workdir
             items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:120]]
-            h = create_project(workdir, "incr_ds"; engine=FullTextEngine, backend=backend,
-                               textmodel=FitFromCorpus())
+            h = create_project(workdir, "incr_ds", TextDocuments(FitFromCorpus(); index=textindex))
             # Everything is staged before the first index! so the whole vocabulary is fitted;
             # what the second index! call exercises is the incremental write, not the fit.
             append_items!(h, text_items(items))
@@ -181,8 +179,7 @@ end
         P = SimilaritySearchEngine.Persistence
         items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:80]]
 
-        h = create_project(workdir, "rebuild_ds"; engine=FullTextEngine, backend=BM25InvertedFile,
-                           textmodel=FitFromCorpus())
+        h = create_project(workdir, "rebuild_ds", TextDocuments(FitFromCorpus()))
         append_items!(h, text_items(items))
         index!(h)
         before = [r.doc_id for r in ftsearch(h, items[5]["text"], 5)]
@@ -219,8 +216,7 @@ end
     mktempworkdir() do workdir
         P = SimilaritySearchEngine.Persistence
         items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:120]]
-        h = create_project(workdir, "cache_ds"; engine=FullTextEngine, backend=BM25InvertedFile,
-                           textmodel=FitFromCorpus(), postings_cache_max=8, postings_cache_base=4)
+        h = create_project(workdir, "cache_ds", TextDocuments(FitFromCorpus()); runtime=Runtime(postings_cache_max=8, postings_cache_base=4))
         append_items!(h, text_items(items))
         index!(h)
         adj = h.engine.backend.index.adj
@@ -271,8 +267,7 @@ end
         # bag of words -- which is exactly how the first version of this test failed.
         code(i) = String([Char('a' + d) for d in digits(i, base=26, pad=3)])
         texts = ["documento $(code(i)) sobre el tema comun y algun otro asunto" for i in 1:300]
-        h = create_project(workdir, "wide_ds"; engine=FullTextEngine, backend=BM25InvertedFile,
-                           textmodel=FitFromCorpus())
+        h = create_project(workdir, "wide_ds", TextDocuments(FitFromCorpus()))
         append_items!(h, [TextItem(t; doc_id="w$i") for (i, t) in enumerate(texts)])
         index!(h)
         close_project!(h)

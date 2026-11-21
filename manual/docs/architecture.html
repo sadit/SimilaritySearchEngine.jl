@@ -253,6 +253,7 @@ window.Quarto = {
   <li><a href="#uniform-metadata-contract" id="toc-uniform-metadata-contract" class="nav-link" data-scroll-target="#uniform-metadata-contract">Uniform Metadata Contract</a></li>
   <li><a href="#the-declared-shape-of-meta" id="toc-the-declared-shape-of-meta" class="nav-link" data-scroll-target="#the-declared-shape-of-meta">The Declared Shape of <code>meta</code></a></li>
   </ul></li>
+  <li><a href="#project-specifications" id="toc-project-specifications" class="nav-link" data-scroll-target="#project-specifications">Project Specifications</a></li>
   <li><a href="#engine-type-hierarchy" id="toc-engine-type-hierarchy" class="nav-link" data-scroll-target="#engine-type-hierarchy">Engine Type Hierarchy</a>
   <ul class="collapse">
   <li><a href="#properties-of-the-hierarchy" id="toc-properties-of-the-hierarchy" class="nav-link" data-scroll-target="#properties-of-the-hierarchy">Properties of the Hierarchy</a></li>
@@ -314,7 +315,7 @@ window.Quarto = {
 <ul>
 <li><strong><code>Schema</code></strong>: Defines the metadata record contract (<code>Schema.MetadataRecord</code>) and serialization interfaces.</li>
 <li><strong><code>Project</code></strong>: Implements project metadata storage (<code>ProjectManager</code>), document ID indexing, and secondary key lookups.</li>
-<li><strong><code>IndexEngine</code></strong>: Implements the <code>AbstractSearchEngine</code> hierarchy, encapsulating indexing algorithms from <code>SimilaritySearch.jl</code> and <code>TextSearch.jl</code>.</li>
+<li><strong><code>IndexEngine</code></strong>: Implements the <code>AbstractSearchEngine</code> hierarchy, encapsulating indexing algorithms from <code>SimilaritySearch.jl</code> and <code>TextSearch.jl</code>. It also defines the project specifications (<code>specs.jl</code>): <code>DenseVectors</code>, <code>SparseVectors</code>, <code>TextDocuments</code> and the types they are built from.</li>
 <li><strong><code>Persistence</code></strong>: Provides storage adapters for RocksDB column families and memory-mapped files.</li>
 <li><strong><code>embedded.jl</code></strong>: Implements <code>EmbeddedEngine</code> and exports the public API (<code>create_project</code>, <code>append_items!</code>, <code>search</code>, and others).</li>
 </ul>
@@ -369,14 +370,53 @@ window.Quarto = {
 <hr>
 </section>
 </section>
+<section id="project-specifications" class="level2">
+<h2 class="anchored" data-anchor-id="project-specifications">Project Specifications</h2>
+<p>A project is described by one value, a <code>ProjectSpec</code> (issue #2). It says what the project holds, the index that holds it and, for dense vectors, how they are stored. Each type holds only its own options:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Level</th>
+<th>Types</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>What the project holds</td>
+<td><code>DenseVectors(distance; index, storage)</code>, <code>SparseVectors(dimension, distance)</code>, <code>TextDocuments(model; index)</code></td>
+</tr>
+<tr class="even">
+<td>Dense index</td>
+<td><code>Graph(; minrecall)</code> (a <code>SearchGraph</code>), <code>Exhaustive(; parallel)</code> (<code>ExhaustiveSearch</code> or <code>ParallelExhaustiveSearch</code>)</td>
+</tr>
+<tr class="odd">
+<td>Text index</td>
+<td><code>BM25()</code> (<code>BM25InvertedFile</code>), <code>VectorSpace(; distance)</code> (<code>TextInvertedFile</code>)</td>
+</tr>
+<tr class="even">
+<td>Dense storage</td>
+<td><code>Float32Vectors()</code>, <code>Quantized(SQ(bits; range); rotation, keep_vectors)</code></td>
+</tr>
+</tbody>
+</table>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="fu">create_project</span>(w, ds)                                                    <span class="co"># DenseVectors(): SqL2, Graph(minrecall=0.9), Float32</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="fu">create_project</span>(w, ds, <span class="fu">DenseVectors</span>(Dist.<span class="fu">NormCosine</span>(); index<span class="op">=</span><span class="fu">Exhaustive</span>())) <span class="co"># exact linear scan</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="fu">create_project</span>(w, ds, <span class="fu">SparseVectors</span>(<span class="fl">50_000</span>))                             <span class="co"># sparse vectors, InvertedFile</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="fu">create_project</span>(w, ds, <span class="fu">TextDocuments</span>(<span class="fu">DefaultProfile</span>(<span class="op">:</span>es)))                <span class="co"># full text, BM25 scoring</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="fu">create_project</span>(w, ds, <span class="fu">DenseVectors</span>(Dist.<span class="fu">NormCosine</span>();</span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>                                   storage<span class="op">=</span><span class="fu">Quantized</span>(<span class="fu">SQ</span>(<span class="fl">8</span>); rotation<span class="op">=</span><span class="fu">QRRotation</span>())))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>The options that apply to every kind of project are keywords of <code>create_project</code>: <code>meta_schema</code>, <code>partitions=PartitionBy(field; graph_min)</code> and <code>runtime=Runtime(...)</code>. <code>Runtime</code> holds the options that are not saved with the project (<code>maxbatches</code>, the size of the cache of posting lists, <code>edit_correction</code>), and <code>open_project</code> takes it as well.</p>
+<p>The engine dispatches on the type of the spec. <code>IndexEngine.create_engine(spec; ...)</code> has one method for each of <code>DenseVectors</code>, <code>SparseVectors</code> and <code>TextDocuments</code>, and <code>open_project</code> chooses how to restore the engine from the type of the saved spec.</p>
+<p><strong>Saved form.</strong> <code>create_project</code> saves the spec in the engine field <code>:spec</code>, as a dictionary with the structure of the JSON form of the HTTP API: <code>{"dense": {"distance": ..., "index": {"graph": {"minrecall": 0.9}}, "storage": {"float32": {}}}}</code>. A dictionary does not depend on the names of the Julia types of the spec. The distance is stored as the <code>SimilaritySearch</code> value. The text model of a <code>DefaultProfile</code> is stored with its options. A <code>BaseProfile</code> and a <code>FitFromCorpus</code> are stored by the engine in the fields <code>:profile</code> and <code>:fitspec</code>, and the dictionary only names which one it is. <code>project_spec(h)</code> returns the spec of an open project.</p>
+<p><strong>Projects saved before specs existed.</strong> They have no <code>:spec</code>. <code>open_project</code> builds the spec from the fields they saved (<code>:kind</code>, <code>:backend</code>, <code>:distance</code>, <code>:minrecall</code>, <code>:dimension</code>, or the exact index itself), and a writable open saves it in <code>:spec</code>. A quantized project saved before specs existed cannot be opened, and has to be created again.</p>
+</section>
 <section id="engine-type-hierarchy" class="level2">
 <h2 class="anchored" data-anchor-id="engine-type-hierarchy">Engine Type Hierarchy</h2>
-<p><code>SimilaritySearchEngine.jl</code> parameterizes search collections through two distinct abstractions: 1. <strong>Engine (<code>AbstractSearchEngine</code>)</strong>: Defines the data domain of the stored payloads (<code>DenseEngine</code>, <code>SparseEngine</code>, <code>FullTextEngine</code>). 2. <strong>Backend (<code>AbstractSearchIndex</code>)</strong>: Defines the underlying search data structure (<code>SearchGraph</code>, <code>ExhaustiveSearch</code>, <code>ParallelExhaustiveSearch</code>, <code>InvertedFile</code>, <code>BM25InvertedFile</code>).</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="fu">create_project</span>(w, ds)                                               <span class="co"># Dense vectors, SearchGraph (defaults)</span></span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="fu">create_project</span>(w, ds; engine<span class="op">=</span>DenseEngine, backend<span class="op">=</span>ExhaustiveSearch) <span class="co"># Dense vectors, exact linear scan</span></span>
-<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="fu">create_project</span>(w, ds; engine<span class="op">=</span>SparseEngine, dimension<span class="op">=</span><span class="fl">50_000</span>)        <span class="co"># Sparse vectors, InvertedFile</span></span>
-<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="fu">create_project</span>(w, ds; engine<span class="op">=</span>FullTextEngine, backend<span class="op">=</span>BM25InvertedFile,</span>
-<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>                      textmodel<span class="op">=</span><span class="fu">DefaultProfile</span>(<span class="op">:</span>es))                <span class="co"># Full text, BM25 scoring</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Inside <code>IndexEngine</code>, a project is an engine (<code>AbstractSearchEngine</code>) with a backend. The engine type is the data domain of the stored payloads (<code>DenseEngine</code>, <code>SparseEngine</code>, <code>FullTextEngine</code>). The backend holds the search data structure of SimilaritySearch.jl or TextSearch.jl (<code>SearchGraph</code>, <code>ExhaustiveSearch</code>, <code>ParallelExhaustiveSearch</code>, <code>InvertedFile</code>, <code>BM25InvertedFile</code>, <code>TextInvertedFile</code>). These types are internal: a caller chooses them through the spec.</p>
 <div class="cell" data-layout-align="default">
 <div class="cell-output-display">
 <div>
@@ -553,7 +593,7 @@ window.Quarto = {
 </div>
 <p>The pool grows to the number of queries that have run concurrently, and it keeps the allocated buffers, so that later queries do not allocate them again.</p>
 <p>A context is also what decides how far an operation spreads over threads: <code>SimilaritySearch.getminbatch</code> divides the work of a <code>@BATCHES</code> loop into <code>8 * Threads.nthreads()</code> batches by default, capped by <code>ctx.maxbatches</code>, and a <code>SearchGraphContext</code> holds one set of visited vertices per batch slot. The two uses of a context therefore want opposite sizes. An operation over many elements – insertion, <code>allknn</code>, <code>searchbatch</code> – wants every slot; a single query is one element and uses one.</p>
-<p>The contexts in the pool are built with one slot. Since version 1.6.5, SimilaritySearch allocates the set of visited vertices of a slot when a search first uses the slot: 128 KB for a graph of up to <code>2^20</code> vertices. Measured on 2026-10-13 with 64 threads, over a graph of 20,000 vertices, a context of the pool holds 0.13 MB after a search. A default context has 512 slots on 64 threads. It holds 0.3 MB after one search, and 62.7 MB after a <code>searchbatch</code> that used 500 of its slots. The two contexts returned the same identifiers for each of 1,000 queries. The context the batch operations run on, <code>backend.ctx</code>, keeps the full count, and <code>create_project</code> and <code>open_project</code> accept <code>maxbatches</code> to cap it: with fewer batches than threads, the threads that are left stay available for queries. That cap belongs to the process rather than to the project, so it is passed when the project is opened and not stored in it.</p>
+<p>The contexts in the pool are built with one slot. Since version 1.6.5, SimilaritySearch allocates the set of visited vertices of a slot when a search first uses the slot: 128 KB for a graph of up to <code>2^20</code> vertices. Measured on 2026-10-13 with 64 threads, over a graph of 20,000 vertices, a context of the pool holds 0.13 MB after a search. A default context has 512 slots on 64 threads. It holds 0.3 MB after one search, and 62.7 MB after a <code>searchbatch</code> that used 500 of its slots. The two contexts returned the same identifiers for each of 1,000 queries. The context the batch operations run on, <code>backend.ctx</code>, keeps the full count, and <code>create_project</code> and <code>open_project</code> accept <code>runtime=Runtime(maxbatches=n)</code> to cap it: with fewer batches than threads, the threads that are left stay available for queries. That cap belongs to the process rather than to the project, so it is passed when the project is opened and not stored in it.</p>
 </section>
 <section id="measuring-the-cost-of-a-query" class="level3">
 <h3 class="anchored" data-anchor-id="measuring-the-cost-of-a-query">Measuring the Cost of a Query</h3>
@@ -631,7 +671,7 @@ window.Quarto = {
 </section>
 <section id="partitioned-text-indexes" class="level3">
 <h3 class="anchored" data-anchor-id="partitioned-text-indexes">Partitioned Text Indexes</h3>
-<p>A text project can declare one <code>meta</code> field as its partition field (<code>partition_by</code>, or <code>declare_partition!</code> later). Each value of the field is a partition. Three column families store the partitions:</p>
+<p>A text project can declare one <code>meta</code> field as its partition field (<code>partitions=PartitionBy(field)</code> in <code>create_project</code>, or <code>declare_partition!</code> later). Each value of the field is a partition. Three column families store the partitions:</p>
 <ul>
 <li><code>partition_table</code> maps each partition name to a number and to the number of items appended to it. Numbers start at 1, follow the order in which the names first appear, and are not reused. The table is read into memory when the project is opened.</li>
 <li><code>partition_members</code> maps the <code>_id</code> of an item to the numbers of its partitions. <code>append_items!</code> writes it before the staged text, so that an item never exists without its partitions.</li>
@@ -655,8 +695,8 @@ window.Quarto = {
 <h3 class="anchored" data-anchor-id="partitioned-dense-indexes">Partitioned Dense Indexes</h3>
 <p>A dense project declares its partition field in the same way as a text project, and uses the same <code>partition_table</code> and <code>partition_members</code>. A partition is a <code>SubDatabase</code> of the vectors of the project: a view whose <code>map</code> is the ascending list of the <code>_id</code>s of its members. No vector is copied. The distance from a member to a query is the same in the partition and in the global index.</p>
 <ul>
-<li>A partition with fewer than <code>partition_graph_min</code> members is searched with an exact scan of its members. The default is <code>DEFAULT_PARTITION_GRAPH_MIN</code>, 4,096.</li>
-<li>A partition with at least <code>partition_graph_min</code> members, on a <code>SearchGraph</code> project, has its own <code>SearchGraph</code> over its view. The ids of that graph are positions in the view, and a search maps them back to <code>_id</code>s.</li>
+<li>A partition with fewer than <code>graph_min</code> members (an option of <code>PartitionBy</code>) is searched with an exact scan of its members. The default is <code>DEFAULT_PARTITION_GRAPH_MIN</code>, 4,096.</li>
+<li>A partition with at least <code>graph_min</code> members, on a <code>SearchGraph</code> project, has its own <code>SearchGraph</code> over its view. The ids of that graph are positions in the view, and a search maps them back to <code>_id</code>s.</li>
 <li>On an exact project, every partition is scanned.</li>
 </ul>
 <p><strong>Writing.</strong> On a <code>SearchGraph</code> project, a partition holds only indexed items. After the global graph indexes its backlog, <code>index!</code> reads the partitions of the new items from <code>partition_members</code> and appends them to their partitions. Then each partition graph indexes its new members, and each partition that reached the threshold gets a graph built from all its members. Both steps run under one write lock. A partition graph is saved as the global one is: the direct neighbors of each range go to the <code>partition_graph</code> column family, under the key <code>[partition number][local id]</code>, and the number of members it holds goes to the engine field <code>partition_graph_len</code>. An item is inserted once in the global graph and once more in each of its partitions that has a graph. On an exact project, the members of a partition are added when the items are appended.</p>
@@ -715,11 +755,11 @@ window.Quarto = {
 </section>
 <section id="quantized-dense-indexes" class="level3">
 <h3 class="anchored" data-anchor-id="quantized-dense-indexes">Quantized Dense Indexes</h3>
-<p>A dense project created with <code>quantizer=ScalarQuantizer(kind)</code> stores the codes of a scalar quantizer of <code>SimilaritySearch.ScalarQuant</code> instead of <code>Float32</code> vectors (issue #1). The index is the backend the project was created with, built over a <code>QuantDatabase</code>. A query is rotated and prepared once by <code>encodequery</code>, and then evaluated against the codes with the distance of <code>ScalarQuant</code> that corresponds to the distance of the project: <code>SqL2</code>, <code>L2</code>, <code>L1</code>, <code>Cosine</code> or <code>NormCosine</code>.</p>
+<p>A dense project created with <code>storage=Quantized(SQ(bits))</code> stores the codes of a scalar quantizer of <code>SimilaritySearch.ScalarQuant</code> instead of <code>Float32</code> vectors (issue #1). The index is the one the project was created with, <code>Graph</code> or <code>Exhaustive</code>, built over a <code>QuantDatabase</code>. A query is rotated and prepared once by <code>encodequery</code>, and then evaluated against the codes with the distance of <code>ScalarQuant</code> that corresponds to the distance of the project: <code>SqL2</code>, <code>L2</code>, <code>L1</code>, <code>Cosine</code> or <code>NormCosine</code>.</p>
 <ul>
-<li><strong>Kinds.</strong> <code>:sqgu8</code>, <code>:sqgu4</code> and <code>:sqgu2</code> use one range for every coordinate of every vector. <code>:squ8</code>, <code>:squ4</code> and <code>:squ2</code> use one range per vector, which costs 8 bytes per vector.</li>
-<li><strong>Rotation.</strong> <code>rotation=:none</code> is the default. It works for the output of most modern neural embedding models, whose coordinates have similar scales. <code>rotation=:qr</code> gives every coordinate the same scale. Use it for vectors that are not normalized, for vectors of several models in one project, for features that a neural model did not produce, or when the recall on a sample of queries is clearly below the exact search.</li>
-<li><strong>Fitting.</strong> The first <code>index!</code> fits a global quantizer on <code>samplesize</code> staged vectors, chosen at random, unless <code>minmax</code> gives its range. <code>fit_quantizer!(h; rng)</code> fits it without encoding. The fitted encoder, with its rotation matrix, is saved in the engine field <code>:encoder</code>. A per-vector quantizer has no range to fit.</li>
+<li><strong>Quantizers.</strong> <code>SQ(bits)</code> has 8, 4 or 2 bits per coordinate. <code>SQ(bits; range=GlobalRange())</code>, the default, uses one range for every coordinate of every vector. <code>SQ(bits; range=PerVectorRange())</code> uses one range per vector, which costs 8 bytes per vector.</li>
+<li><strong>Rotation.</strong> <code>rotation=NoRotation()</code> is the default. It works for the output of most modern neural embedding models, whose coordinates have similar scales. <code>rotation=QRRotation()</code> gives every coordinate the same scale. Use it for vectors that are not normalized, for vectors of several models in one project, for features that a neural model did not produce, or when the recall on a sample of queries is clearly below the exact search.</li>
+<li><strong>Fitting.</strong> The first <code>index!</code> fits the encoder on <code>samplesize</code> staged vectors, chosen at random. A global quantizer estimates its range from them, unless <code>GlobalRange(minmax=(lo, hi))</code> gives it. A per-vector quantizer calibrates how it rounds each range. <code>fit_quantizer!(h; rng)</code> fits the encoder without encoding. The fitted encoder, with its rotation matrix, is saved in the engine field <code>:encoder</code>.</li>
 <li><strong>Storage.</strong> The codes are in <code>dense_codes.mmapdb</code>, a memory-mapped file with one row of bytes per vector. The ranges of a per-vector quantizer are in <code>dense_code_ranges.mmapdb</code>, two <code>Float32</code> per vector. <code>index!</code> reads, encodes and inserts the staged vectors in blocks of <code>QUANT_ENCODE_BLOCK</code> (16,384). With <code>keep_vectors=false</code>, the default, <code>index!</code> then removes <code>dense_vectors.mmapdb</code>, and the next <code>append_items!</code> starts a new one. The engine field <code>:raw_offset</code> holds the number of items before its first row.</li>
 <li><strong>Reading back.</strong> <code>fetch_items</code> returns the vector of an item whose <code>Float32</code> vector is still on disk: every item with <code>keep_vectors=true</code>, and an item not yet encoded otherwise. It returns <code>nothing</code> as the payload of any other item, because the codes do not give back the vector that was appended.</li>
 <li><strong>Opening.</strong> <code>open_project</code> reads the encoder, maps the codes file, and on <code>SearchGraph</code> restores the graph from the adjacency store. The staged vectors not yet encoded are the rows of <code>dense_vectors.mmapdb</code> after <code>:raw_offset</code> plus the number of codes. A file whose rows are all encoded, in a project that does not keep them, is what an interrupted <code>index!</code> leaves, and it is removed.</li>
@@ -740,7 +780,7 @@ window.Quarto = {
 <ol type="1">
 <li><strong><code>EngineStore</code> (Engine Field State)</strong>:
 <ul>
-<li>Stores engine-level configuration as individual key-value entries (<code>:minrecall</code>, <code>:opt_beamsearch</code>, <code>:beamsearch</code>, <code>:deleted_ids</code>, <code>:profile</code>).</li>
+<li>Stores the spec of the project (<code>:spec</code>) and the engine state as individual key-value entries (<code>:opt_beamsearch</code>, <code>:beamsearch</code>, <code>:deleted_ids</code>, <code>:profile</code>).</li>
 <li><code>:beamsearch</code> is the <code>BeamSearch</code> of a graph: the parameters of the beam search that a query without <code>minrecall</code> uses. <code>index!</code> tunes it while the graph grows, and <code>calibrate!</code> leaves the last level it tuned. Both calls save it.</li>
 <li><code>:hints</code> are the starting points of a search in the graph. <code>index!</code> picks them and saves them.</li>
 <li>Mutations (e.g., updating deleted IDs or storing calibration results) rewrite only their specific keys.</li>

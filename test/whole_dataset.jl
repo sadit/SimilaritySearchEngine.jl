@@ -1,7 +1,7 @@
 @heavy "whole-dataset operations: fft, dnet, neardup, closestpairs, bichromatic_kclosestpairs" begin
     mktempworkdir() do workdir
         items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:60]]
-        h = create_project(workdir, "dense_ops")
+        h = create_project(workdir, "dense_ops", DenseVectors())
         append_items!(h, dense_items(items))
         index!(h)
 
@@ -52,7 +52,7 @@ end
     mktempworkdir() do workdir
         items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:60]]
         more_items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[61:80]]
-        h = create_project(workdir, "dense_concurrent")
+        h = create_project(workdir, "dense_concurrent", DenseVectors())
         append_items!(h, dense_items(items))
         index!(h)
 
@@ -131,7 +131,7 @@ end
         items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:400]]
 
         function project(name)
-            h = create_project(workdir, name)
+            h = create_project(workdir, name, DenseVectors())
             append_items!(h, dense_items(items))
             h
         end

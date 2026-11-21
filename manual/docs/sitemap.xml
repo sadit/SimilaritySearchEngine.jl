@@ -2,11 +2,11 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
     <loc>https://sadit.github.io/SimilaritySearchEngine.jl/index.html</loc>
-    <lastmod>2026-11-21T00:30:59.670Z</lastmod>
+    <lastmod>2026-11-21T12:45:05.645Z</lastmod>
   </url>
   <url>
     <loc>https://sadit.github.io/SimilaritySearchEngine.jl/architecture.html</loc>
-    <lastmod>2026-11-21T00:51:30.796Z</lastmod>
+    <lastmod>2026-11-21T12:45:40.690Z</lastmod>
   </url>
   <url>
     <loc>https://sadit.github.io/SimilaritySearchEngine.jl/tutorials/index.html</loc>
@@ -14,7 +14,7 @@
   </url>
   <url>
     <loc>https://sadit.github.io/SimilaritySearchEngine.jl/tutorials/getting-started.html</loc>
-    <lastmod>2026-11-10T17:04:17.460Z</lastmod>
+    <lastmod>2026-11-21T12:44:38.548Z</lastmod>
   </url>
   <url>
     <loc>https://sadit.github.io/SimilaritySearchEngine.jl/server/manual.html</loc>
@@ -26,7 +26,7 @@
   </url>
   <url>
     <loc>https://sadit.github.io/SimilaritySearchEngine.jl/tutorials/paragraph-search.html</loc>
-    <lastmod>2026-11-07T17:30:44.693Z</lastmod>
+    <lastmod>2026-11-21T12:44:48.719Z</lastmod>
   </url>
   <url>
     <loc>https://sadit.github.io/SimilaritySearchEngine.jl/server/julia-client.html</loc>

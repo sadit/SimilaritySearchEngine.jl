@@ -27,11 +27,11 @@ function partition_mismatches(h, rows, nitems)
 end
 
 @testset "a partition search equals the global search restricted to the partition" begin
-    for backend in (BM25InvertedFile, TextInvertedFile)
+    for textindex in (BM25(), VectorSpace())
         mktempworkdir() do workdir
             rows = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:160]]
-            h = create_project(workdir, "part_ds"; engine=FullTextEngine, backend,
-                               textmodel=FitFromCorpus(), partition_by="repo")
+            h = create_project(workdir, "part_ds", TextDocuments(FitFromCorpus(); index=textindex);
+                               partitions=PartitionBy("repo"))
             @test partition_field(h) == "repo"
             # Two blocks: the second appends to partition lists the first one wrote.
             append_items!(h, partitioned_items(rows)[1:100])
@@ -67,8 +67,7 @@ end
 @testset "declaring a partition field on an indexed project" begin
     mktempworkdir() do workdir
         rows = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:160]]
-        h = create_project(workdir, "late_ds"; engine=FullTextEngine, backend=BM25InvertedFile,
-                           textmodel=FitFromCorpus())
+        h = create_project(workdir, "late_ds", TextDocuments(FitFromCorpus()))
         @test partition_field(h) === nothing
         @test_throws InvalidOption ftsearch(h, "x", 3; partition="a")
         @test_throws InvalidOption partitions(h)
@@ -93,8 +92,7 @@ end
 @testset "partition errors are raised, not returned as empty results" begin
     mktempworkdir() do workdir
         rows = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:40]]
-        h = create_project(workdir, "err_ds"; engine=FullTextEngine, backend=BM25InvertedFile,
-                           textmodel=FitFromCorpus(), partition_by="repo")
+        h = create_project(workdir, "err_ds", TextDocuments(FitFromCorpus()); partitions=PartitionBy("repo"))
         append_items!(h, partitioned_items(rows))
         index!(h)
         err = try ftsearch(h, rows[1]["text"], 3; partition="tny"); nothing catch e; e end
@@ -119,18 +117,15 @@ end
         close_project!(h)
 
         # A dense project can be partitioned since PLAN.md §5.10; a sparse one cannot yet.
-        @test_throws InvalidOption create_project(workdir, "sparse_part_ds"; engine=SparseEngine, dimension=8,
-                                                  partition_by="repo")
-        @test_throws InvalidOption create_project(workdir, "int_ds"; engine=FullTextEngine,
-            textmodel=FitFromCorpus(), meta_schema=["repo" => :int64], partition_by="repo")
+        @test_throws InvalidOption create_project(workdir, "sparse_part_ds", SparseVectors(8); partitions=PartitionBy("repo"))
+        @test_throws InvalidOption create_project(workdir, "int_ds", TextDocuments(FitFromCorpus()); partitions=PartitionBy("repo"), meta_schema=["repo" => :int64])
     end
 end
 
 @testset "a project written before partitions existed opens read-only" begin
     mktempworkdir() do workdir
         rows = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:40]]
-        h = create_project(workdir, "old_ds"; engine=FullTextEngine, backend=BM25InvertedFile,
-                           textmodel=FitFromCorpus())
+        h = create_project(workdir, "old_ds", TextDocuments(FitFromCorpus()))
         append_items!(h, text_items(rows))
         index!(h)
         before = [r._id for r in ftsearch(h, rows[5]["text"], 5)]
@@ -168,15 +163,15 @@ end
 end
 
 @testset "ftsearch with a filter, a candidate budget and a list of tokens" begin
-    for backend in (BM25InvertedFile, TextInvertedFile)
+    for textindex in (BM25(), VectorSpace())
         mktempworkdir() do workdir
             rows = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:160]]
             items = partitioned_items(rows)
             for (i, it) in enumerate(items)
                 it.meta["n"] = i
             end
-            h = create_project(workdir, "filt_ds"; engine=FullTextEngine, backend,
-                               textmodel=FitFromCorpus(), partition_by="repo")
+            h = create_project(workdir, "filt_ds", TextDocuments(FitFromCorpus(); index=textindex);
+                               partitions=PartitionBy("repo"))
             append_items!(h, items)
             index!(h)
             third(rec, meta) = meta["n"] % 3 == 0

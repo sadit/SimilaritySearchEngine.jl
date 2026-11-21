@@ -11,7 +11,7 @@ The library executes directly within the host Julia process without requiring ex
 ## Core Capabilities
 
 - **Project Lifecycle Management**: Structured management of project storage via `create_project`, `open_project`, and `close_project!`.
-- **Decoupled Architecture**: Clear distinction between the stored payload type (`DenseEngine`, `SparseEngine`, `FullTextEngine`) and the underlying indexing backend (`SearchGraph`, `ExhaustiveSearch`, `InvertedFile`, `BM25InvertedFile`).
+- **Project Specifications**: A project is described by one value: what it holds (`DenseVectors`, `SparseVectors`, `TextDocuments`), the index that holds it (`Graph`, `Exhaustive`, `BM25`, `VectorSpace`), and, for dense vectors, how they are stored (`Float32Vectors`, `Quantized`). `create_project` saves it, and `project_spec` returns it.
 - **Dense Vector Search**: Approximate nearest neighbor search via `SearchGraph` (supporting automatic hyperparameter recall tuning) or exact linear scanning via `ExhaustiveSearch` and `ParallelExhaustiveSearch`.
 - **Sparse Vector Search**: Native inverted index retrieval (`InvertedFile`) over user-provided sparse representations, evaluated under cosine similarity or set distance metrics (`Dist.Sets.*`).
 - **Full-Text Retrieval**: Integrated text preprocessing, BM25 scoring, and TF-IDF inverted files configured via linguistic profiles (`TextProfile`).

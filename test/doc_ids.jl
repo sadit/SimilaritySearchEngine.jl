@@ -2,7 +2,7 @@
     mktempworkdir() do workdir
         # `doc_id` is optional on every item type; the doc_id index used to call
         # `isempty(nothing)` on such an item and fail the whole append.
-        h = create_project(workdir, "no_docid_ds"; engine=DenseEngine, backend=ExhaustiveSearch)
+        h = create_project(workdir, "no_docid_ds", DenseVectors(; index=Exhaustive()))
         @test append_items!(h, [DenseItem(Float32[i, 0, 0, 0]) for i in 1:5]) == 5
         hits = search(h, Float32[3, 0, 0, 0], 1)
         @test hits[1]._id == 3 && hits[1].doc_id === nothing
@@ -16,7 +16,7 @@ end
 @testset "doc_id resolves through an index, and a shared doc_id returns every item" begin
     mktempworkdir() do workdir
         items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:30]]
-        h = create_project(workdir, "docid_ds"; engine=DenseEngine, backend=SearchGraph)
+        h = create_project(workdir, "docid_ds", DenseVectors())
         append_items!(h, dense_items(items))
         index!(h)
 
@@ -52,7 +52,7 @@ end
     mktempworkdir() do workdir
         P = SimilaritySearchEngine.Project
         items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:10]]
-        h = create_project(workdir, "backfill_ds"; engine=DenseEngine, backend=SearchGraph)
+        h = create_project(workdir, "backfill_ds", DenseVectors())
         append_items!(h, dense_items(items))
         index!(h)
 

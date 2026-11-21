@@ -1,75 +1,117 @@
-@testset "project creation: the engine says what it holds, the backend says what holds it" begin
+@testset "project creation: the spec says what the project holds and what indexes it" begin
     mktempworkdir() do workdir
         # defaults: a dense project on a SearchGraph, which is what `create_project(w, ds)` means
-        @test default_backend(DenseEngine) === SearchGraph
-        @test default_backend(SparseEngine) === InvertedFile
-        @test default_backend(FullTextEngine) === BM25InvertedFile
         h = create_project(workdir, "defaults")
         @test payload_kind(h.engine) === :dense
         @test h.engine.backend isa SimilaritySearchEngine.IndexEngine.GraphBackend
+        @test project_spec(h) == DenseVectors()
+        @test project_spec(h) == DenseVectors(Dist.SqL2(); index=Graph(minrecall=0.9), storage=Float32Vectors())
         close_project!(h)
 
         # an exact dense backend is the same engine with a different index under it
-        he = create_project(workdir, "exact"; engine=DenseEngine, backend=ExhaustiveSearch)
+        he = create_project(workdir, "exact", DenseVectors(; index=Exhaustive()))
         @test payload_kind(he.engine) === :dense
         @test he.engine.backend.index isa ExhaustiveSearch
         close_project!(he)
+        hp = create_project(workdir, "pexact", DenseVectors(; index=Exhaustive(parallel=true)))
+        @test hp.engine.backend.index isa SimilaritySearchEngine.ParallelExhaustiveSearch
+        close_project!(hp)
 
-        # every legal pairing is in BACKENDS, and only those
-        @test Set(keys(BACKENDS)) == Set([DenseEngine, SparseEngine, FullTextEngine])
-        for (engine, backends) in BACKENDS, b in backends
-            @test SimilaritySearchEngine.IndexEngine.validate_backend(engine, b) === b
-        end
-        @test_throws UnknownBackend SimilaritySearchEngine.IndexEngine.validate_backend(SparseEngine, SearchGraph)
-        @test_throws UnknownBackend SimilaritySearchEngine.IndexEngine.validate_backend(DenseEngine, BM25InvertedFile)
+        # what a spec still refuses: values out of range, and pairs no type can exclude
+        @test_throws InvalidOption SparseVectors(0)
+        @test_throws InvalidOption Graph(minrecall=1.5)
+        @test_throws InvalidOption Graph(minrecall=0)
+        @test_throws InvalidOption SQ(3)
+        @test_throws InvalidOption GlobalRange(minmax=(1, -1))
+        @test_throws InvalidOption PartitionBy("")
+        @test_throws InvalidOption PartitionBy("f"; graph_min=0)
+        @test_throws InvalidOption Runtime(maxbatches=0)
+        @test_throws InvalidOption DenseVectors(Dist.Angle(); storage=Quantized())
 
-        # a sparse project has to be sized; nothing else may be
-        @test_throws InvalidOption create_project(workdir, "nodim"; engine=SparseEngine)
-        @test_throws InvalidOption create_project(workdir, "dim_on_dense"; dimension=16)
-        @test_throws InvalidOption create_project(workdir, "dim_on_text"; engine=FullTextEngine,
-                                                   textmodel=FitFromCorpus(), dimension=16)
-        @test_throws ArgumentError create_project(workdir, "zerodim"; engine=SparseEngine, dimension=0)
+        # a sparse project cannot be partitioned yet, and the refusal leaves nothing behind
+        @test_throws InvalidOption create_project(workdir, "sparse_part", SparseVectors(16); partitions=PartitionBy("f"))
+        @test !isdir(joinpath(workdir, "sparse_part"))
 
-        # a text model belongs to a text project only -- and the check is the engine's, not
-        # the backend's, because InvertedFile is a legal backend for both kinds
-        @test_throws InvalidOption create_project(workdir, "sparse_model"; engine=SparseEngine,
-                                                   dimension=16, textmodel=FitFromCorpus())
-        @test !isdir(joinpath(workdir, "sparse_model"))
+        # `graph_min` is the size from which a dense partition has its own graph; a text partition
+        # is posting lists
+        @test_throws InvalidOption create_project(workdir, "text_gmin", TextDocuments(FitFromCorpus());
+                                                  partitions=PartitionBy("f"; graph_min=10))
+        @test !isdir(joinpath(workdir, "text_gmin"))
 
-        # the pre-restructuring keyword names its replacement instead of being ignored
-        err = try; create_project(workdir, "old"; index_type=SearchGraph); catch e; e end
-        @test err isa InvalidOption
-        @test err.option === :index_type
-        @test occursin("engine=", err.msg) && occursin("backend=", err.msg)
-        @test !isdir(joinpath(workdir, "old"))
-
-        @test_throws UnknownBackend create_project(workdir, "bad_engine"; engine=Int)
+        # edit correction applies to the tokens of a text project only
+        @test_throws InvalidOption create_project(workdir, "dense_edits"; runtime=Runtime(edit_correction=true))
+        @test !isdir(joinpath(workdir, "dense_edits"))
     end
 end
 
-@testset "project creation: the text model is stated explicitly, or not at all" begin
+@testset "project spec: saved, returned and read from the legacy fields" begin
     mktempworkdir() do workdir
-        # omitting it on a text project is an error rather than a silent default, because
-        # the default it would have to pick freezes the vocabulary at the first index! call
-        @test_throws InvalidOption create_project(workdir, "no_model"; engine=FullTextEngine, backend=BM25InvertedFile)
-
-        msg = try
-            create_project(workdir, "no_model"; engine=FullTextEngine, backend=BM25InvertedFile)
-            ""
-        catch e
-            sprint(showerror, e)
+        specs = [
+            "graph" => DenseVectors(Dist.NormCosine(); index=Graph(minrecall=0.95)),
+            "graph_nomr" => DenseVectors(; index=Graph(minrecall=nothing)),
+            "exact" => DenseVectors(Dist.SqL2(); index=Exhaustive(parallel=true)),
+            "quant" => DenseVectors(Dist.NormCosine(); index=Exhaustive(),
+                                    storage=Quantized(SQ(4; range=PerVectorRange(samplesize=100));
+                                                      rotation=QRRotation(), keep_vectors=true)),
+            "quant_g" => DenseVectors(Dist.SqL2(); storage=Quantized(SQ(8; range=GlobalRange(minmax=(-1, 1))))),
+            "sparse" => SparseVectors(64, Dist.NormCosine()),
+            "bm25" => TextDocuments(FitFromCorpus()),
+            "vs" => TextDocuments(FitFromCorpus(min_ndocs=2); index=VectorSpace(distance=Dist.NormCosine())),
+            "default_profile" => TextDocuments(DefaultProfile(:es; nickname="whatever", refit=false, max_documents=10)),
+        ]
+        for (name, spec) in specs
+            h = create_project(workdir, name, spec)
+            @test project_spec(h) == spec
+            close_project!(h)
+            h = open_project(workdir, name; read_only=true)
+            got = project_spec(h)
+            if spec isa TextDocuments && spec.model isa FitFromCorpus
+                # a FitFromCorpus is read back from `:fitspec`, a value without `==`
+                @test got isa TextDocuments && got.index == spec.index && got.model isa FitFromCorpus
+                @test got.model.min_ndocs == spec.model.min_ndocs
+            else
+                @test got == spec
+            end
+            close_project!(h)
         end
-        @test occursin("BaseProfile", msg) && occursin("FitFromCorpus", msg)
 
-        # ... and the failed call left nothing behind: no directory, no held write lock,
-        # so the same name is still free to create properly
-        @test !isdir(joinpath(workdir, "no_model"))
-        h = create_project(workdir, "no_model"; engine=FullTextEngine, backend=BM25InvertedFile, textmodel=FitFromCorpus())
+        # A project saved before issue #2 has no `:spec`: it is built from the old fields, and a
+        # writable open saves it.
+        legacy = [
+            "lg" => (DenseVectors(Dist.NormCosine(); index=Graph(minrecall=0.8)),
+                     (kind=:dense, backend=:graph, distance=Dist.NormCosine(), minrecall=0.8f0)),
+            "lx" => (DenseVectors(Dist.SqL2(); index=Exhaustive(parallel=true)),
+                     (kind=:dense, backend=:parallel_exhaustive)),
+            "ls" => (SparseVectors(32, Dist.NormCosine()),
+                     (kind=:sparse, backend=:inverted_file, distance=Dist.NormCosine(), dimension=32)),
+            "lt" => (TextDocuments(FitFromCorpus(); index=VectorSpace(distance=Dist.NormCosine())),
+                     (kind=:text, backend=:text_inverted_file, distance=Dist.NormCosine())),
+        ]
+        for (name, (spec, fields)) in legacy
+            h = create_project(workdir, name, spec)
+            delete!(h.store.dict, "spec")
+            SimilaritySearchEngine.Persistence.save_fields!(h.store, fields)
+            close_project!(h)
+            h = open_project(workdir, name)
+            got = project_spec(h)
+            if spec isa TextDocuments
+                @test got isa TextDocuments && got.index == spec.index && got.model isa FitFromCorpus
+            else
+                @test got == spec
+            end
+            @test SimilaritySearchEngine.Persistence.has_field(h.store, :spec)
+            close_project!(h)
+        end
+    end
+end
+
+@testset "project creation: the text model is stated explicitly" begin
+    mktempworkdir() do workdir
+        # a text spec has no default model: the default it would have to pick freezes the
+        # vocabulary at the first index! call, so the constructor requires one
+        @test_throws MethodError TextDocuments()
+        h = create_project(workdir, "with_model", TextDocuments(FitFromCorpus()))
+        @test payload_kind(h.engine) === :text
         close_project!(h)
-
-        # handing a text model to a dense project is an error too, not an ignored keyword
-        @test_throws InvalidOption create_project(workdir, "dense_model"; engine=DenseEngine, backend=SearchGraph,
-                                                   textmodel=FitFromCorpus())
-        @test !isdir(joinpath(workdir, "dense_model"))
     end
 end

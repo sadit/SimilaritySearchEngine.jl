@@ -227,6 +227,8 @@ mutable struct EmbeddedEngine
     # `postings_cache_max` and `postings_cache_base`, kept for a partition store opened after
     # the project (`declare_partition!`).
     postings_cache::Tuple{Int,Int}
+    # What the project holds and how it is indexed (issue #2), as saved in `:spec`.
+    spec::IndexEngine.ProjectSpec
 end
 
 """
@@ -370,196 +372,137 @@ const _PROJECT_CFS = [Persistence.ENGINE_CF, Persistence.ADJACENCY_CF, Persisten
                       Persistence.PARTITION_POSTINGS_CF, Persistence.PARTITION_GRAPH_CF]
 
 """
-    create_project(workdir, dataset; engine=DenseEngine, backend=nothing, distance=nothing,
-                   minrecall=0.9, dimension=nothing, textmodel=nothing, schema_version=1,
-                   edit_correction=false, partition_by=nothing, partition_graph_min=nothing,
-                   quantizer=nothing) -> EmbeddedEngine
+    PartitionBy(field; graph_min=nothing)
 
-Creates a brand-new project directly on disk at `<workdir>/<dataset>`, with no HTTP server or
-CLI subprocess involved -- the same on-disk layout `similarity-search build` already produces,
-so a project created this way can later be inspected/rebuilt/dumped by the CLI, or reopened by
-[`open_project`](@ref).
+Partitions a text or a dense project by the `meta` field `field` (PLAN.md §5.9, §5.10). Given to
+`create_project(...; partitions=PartitionBy("repo"))` or to [`declare_partition!`](@ref).
 
-Two keywords say what the project *is*, and they are separate on purpose:
-
-- `engine` is what it holds -- `DenseEngine` (dense vectors, the default), `SparseEngine`
-  (sparse vectors you encoded) or `FullTextEngine` (text this package encodes). It also fixes
-  the item type [`append_items!`](@ref) will accept: `DenseItem`, `SparseItem`, `TextItem`.
-- `backend` is the index that holds it, defaulting to that engine's own
-  (`IndexEngine.default_backend`): a `SearchGraph`, an `InvertedFile`, a `BM25InvertedFile`.
-  `IndexEngine.BACKENDS` is the table of legal pairings, and an illegal one is refused here
-  with a message naming the alternatives rather than failing later on a `MethodError`.
-
-So `create_project(workdir, "ds")` is a dense project on a self-tuning `SearchGraph`, and every
-other shape is one or two keywords away:
-
-```julia
-create_project(w, ds; engine=DenseEngine,    backend=ExhaustiveSearch)
-create_project(w, ds; engine=SparseEngine,   dimension=50_000)
-create_project(w, ds; engine=FullTextEngine, backend=TextInvertedFile,
-                      textmodel=DefaultProfile(:es))
-```
-
-`dimension` is required for a sparse project and refused for any other. An `InvertedFile` is a
-fixed array of posting lists, so its size is structural rather than descriptive: it has to be
-known before the first item, and every `SparseItem` appended has to agree with it.
-
-`distance`, left at its default `nothing`, defers to whichever default
-`IndexEngine.default_distance` names for the chosen backend (`SqL2()` for the dense ones,
-`NormCosine()` for an `InvertedFile`) instead of this function imposing one blanket default
-across every index kind. `minrecall` is the target recall a `DenseEngine{GraphBackend}` autotunes
-`BeamSearch` toward as it grows (see `IndexEngine.DenseEngine{GraphBackend}`); it must be given here,
-at creation, since it's carried on the engine and restored verbatim by [`open_project`](@ref)
-rather than re-derived later -- `calibrate!` remains available afterwards as a separate,
-explicit re-optimization pass. Ignored for index types with no `BeamSearch` to autotune.
-`minrecall` is a target and not a floor: since SimilaritySearch 1.6 the tuning goal accepts a
-configuration slightly below it when the saving in cost is large enough (see
-`IndexEngine.calibrate!`). [`calibrate!`](@ref) reports the recall each configuration reaches.
-`textmodel` says where a *text* project's vocabulary comes from, and a text project cannot be
-created without it (see `IndexEngine.AbstractTextModelSpec` for why it has no default). Three
-forms, in the order worth preferring them:
-
-- `textmodel=DefaultProfile(:es)` — **recommended.** The published profile for a language,
-  refitted to this project's own corpus at the first [`index!`](@ref index!(::EmbeddedEngine))
-  call: a vocabulary fitted over a whole Wikipedia edition, with its stopword set, lemma map and
-  expansion network, adapted without fitting an embedding. Resolved from the profile library
-  `textsearch install` maintains; `IndexEngine.default_profile_path` says so, and how to install
-  it, when the one you asked for is not there.
-- `textmodel=BaseProfile(load_profile("path/to/profile.zip"))` — a profile you already have,
-  used as it is. The project is trained before its first item is staged.
-- `textmodel=FitFromCorpus(TextConfig(language=:es); min_ndocs=3)` — deliberately no base
-  profile: fit one at the first `index!` call from at most `max_documents` of this project's own
-  corpus, delegated whole to `TextSearch.fit_profile`. Bounded in cost and thin in vocabulary,
-  so terms appended later that the sample never held are dropped from then on.
-
-Passing a `textmodel` to a *dense or sparse* project is an error rather than an ignored keyword:
-there is no reading under which it does anything, and swallowing it silently is how a project
-ends up not being the kind its author thought it was. That check is the engine's rather than the
-backend's, because `InvertedFile` is a legal backend for both a sparse and a text project, so the
-backend alone cannot answer it. The spec is persisted with the project and restored verbatim by
-[`open_project`](@ref).
-
-`edit_correction=true` lets a text project's queries correct a token that is absent from the
-vocabulary to the only vocabulary token at Damerau-Levenshtein distance 1 from it, for example
-`guerar` -> `guerra`. [`ftexplain`](@ref) reports such a correction with the reason `:edit`.
-The correction runs only when `policy.correction` is not `:off`, only for a token the vocabulary
-does not hold, and only when the other corrections found nothing for it. It is `false` by
-default because of its cost, which `IndexEngine._query_pipeline` gives with measurements: the
-edit index is derived from the vocabulary each time the text index is assembled, and a query
-with a token absent from the vocabulary takes milliseconds instead of microseconds to resolve.
-The value is not persisted. [`open_project`](@ref) takes the same keyword, and each open
-decides it again. It is an error on a dense or sparse project.
-
-`partition_by="repo"` partitions a text project by the `meta` field `repo` (PLAN.md §5.9).
-The engine then keeps, next to the global posting lists, one set of posting lists per value of
-that field, and `ftsearch(h, q, k; partition="unicach")` searches only the items whose `repo`
-is `"unicach"`. Such a search returns the ids, order and scores of the global search restricted
-to those items, because the vocabulary, the scorer and the document vectors are shared. The
-value of the field is a non-empty string or a list of them; a list puts the item in several
+The value of the field is a non-empty string or a list of them; a list puts the item in several
 partitions. An item without the field belongs to no partition. If the field is declared in
 `meta_schema`, it must be declared `:string`, which also restricts it to one value per item. A
-project has at most one partition field, and it cannot be changed. See
-[`declare_partition!`](@ref) to partition a project that already exists, and
-[`partitions`](@ref) for the names and sizes. It is an error on a sparse project.
+project has at most one partition field, and it cannot be changed. A sparse project cannot be
+partitioned yet.
 
-On a dense project, `partition_by` partitions the vectors (PLAN.md §5.10), and
-`search(h, v, k; partition="unicach")` searches only the items of that partition. A partition
-shares the vectors of the project and copies none. A partition with fewer than
-`partition_graph_min` indexed members (by default [`DEFAULT_PARTITION_GRAPH_MIN`](@ref)) is
-searched with an exact scan of its members. A larger one, on a `SearchGraph` project, has its
-own graph, which `index!` builds and extends. On an exact project every partition is scanned.
-`partition_graph_min` is saved with the project, and it is an error without `partition_by` or
-on a project that is not dense.
+- On a text project, the engine keeps one set of posting lists per value of the field, next to
+  the global ones. `ftsearch(h, q, k; partition="unicach")` searches only the items whose
+  field is `"unicach"`, and returns the ids, order and scores of the global search restricted to
+  those items.
+- On a dense project, `search(h, v, k; partition="unicach")` searches only the items of that
+  partition. A partition shares the vectors of the project and copies none. A partition with
+  fewer than `graph_min` indexed members is searched with an exact scan of its members. A larger
+  one, on a [`Graph`](@ref) project, has its own graph, which `index!` builds and extends. On an
+  exact project every partition is scanned. `graph_min` is
+  [`DEFAULT_PARTITION_GRAPH_MIN`](@ref) when it is `nothing`, and it is saved with the project.
 
-`quantizer=ScalarQuantizer(:sqgu8)` makes a dense project store each vector as the codes of a
-scalar quantizer instead of `Float32` values (issue #1). At 8 bits a vector takes a quarter of
-the memory and of the disk space. It works with every dense backend: `SearchGraph`,
-`ExhaustiveSearch` and `ParallelExhaustiveSearch`. The distance must be `SqL2`, `L2`, `L1`,
-`Cosine` or `NormCosine`. [`append_items!`](@ref) stages the vectors on every backend, and
-[`index!`](@ref index!(::EmbeddedEngine)) encodes them. The first `index!` also fits the range of
-a global quantizer on a sample of the staged vectors. See [`ScalarQuantizer`](@ref) for the
-kinds, the rotation and `keep_vectors`, and [`quantizer_info`](@ref) for what a project reports.
-
-`schema_version` is stamped onto every `Schema.MetadataRecord` [`append_items!`](@ref)
-writes for this project's lifetime (not persisted/restored itself -- like `minrecall`
-before it was carried on the engine, a caller reopening this same project later must pass
-the same `schema_version` again to keep tagging new records consistently with old ones);
-it's never validated against `meta`'s actual shape, purely a version tag for the caller's
-own interpretation of it.
-
-The engine's index itself is persisted incrementally as it grows, not rewritten wholesale
-on every `append_items!` call: for a `SearchGraph`, every [`index!`](@ref index!(::EmbeddedEngine))
-call saves just the direct-links-only block it just built (see
-[`_searchgraph_on_change`](@ref)); for the inverted-file backends -- a text project's and a
-sparse project's alike -- every insertion likewise saves just the newly-encoded objects it just
-indexed (see [`_invertedfile_on_change`](@ref)). Only an exact dense backend
-(`ExhaustiveSearch`/`ParallelExhaustiveSearch`) instead flags a pending whole-index save that
-happens right after each `add_item!` call returns (see [`_maybe_flush_index!`](@ref));
-[`close_project!`](@ref) forces one final flush of that so nothing recent is lost -- every other
-backend never has anything left to flush there, since each block is already durable the instant
-it is saved.
+`graph_min` is an error on a text project.
 """
-function create_project(workdir::String, dataset::String;
-                        engine::Type=DenseEngine, backend::Union{Nothing,Type}=nothing,
-                        distance=nothing, minrecall::Union{Nothing,Real}=0.9,
-                        dimension::Union{Nothing,Integer}=nothing,
-                        textmodel::Union{Nothing,IndexEngine.AbstractTextModelSpec}=nothing,
-                        index_type=nothing, schema_version::Int=1, meta_schema=nothing,
-                        maxbatches::Union{Nothing,Integer}=nothing,
-                        postings_cache_max::Int=4096, postings_cache_base::Int=2048,
-                        edit_correction::Bool=false, partition_by::Union{Nothing,AbstractString}=nothing,
-                        partition_graph_min::Union{Nothing,Integer}=nothing,
-                        quantizer::Union{Nothing,IndexEngine.ScalarQuantizer}=nothing)
-    index_type === nothing || invalid_option(:index_type, """
-        `index_type` is gone: a project now names the kind of data it holds and, separately, the
-        index that holds it.
-            create_project(w, ds; engine=DenseEngine,    backend=SearchGraph, distance=SqL2())
-            create_project(w, ds; engine=SparseEngine,   backend=InvertedFile, dimension=50_000)
-            create_project(w, ds; engine=FullTextEngine, backend=BM25InvertedFile, textmodel=...)
-        `engine` defaults to DenseEngine and `backend` to that engine's own default.""")
+struct PartitionBy
+    field::String
+    graph_min::Union{Nothing,Int}
 
-    # Everything checkable is checked before anything exists on disk. `create_engine` repeats
-    # some of it, but only after the project directory has been made and RocksDB's write lock
-    # taken, so a call that fails there leaves both behind.
-    kind = IndexEngine.engine_kind(engine)
-    back = backend === nothing ? IndexEngine.default_backend(engine) :
-                                 IndexEngine.validate_backend(engine, backend)
-    if kind === :text
-        IndexEngine.validate_textmodel(back, textmodel)
-    elseif textmodel !== nothing
-        # Not delegated to `validate_textmodel`, which checks a *backend*: `InvertedFile` is a
-        # legal backend for both a sparse and a text project, so the backend alone cannot answer
-        # whether a text model belongs here. The engine can, and it is the thing the caller named.
-        invalid_option(:textmodel, "`textmodel` only applies to a text project; $(nameof(engine)) indexes $kind " *
-              "vectors, which have no text to tokenize and no vocabulary to fit")
+    function PartitionBy(field::AbstractString, graph_min::Union{Nothing,Integer})
+        isempty(field) && invalid_option(:partitions, "the partition field must be a non-empty name")
+        graph_min === nothing || graph_min >= 1 ||
+            invalid_option(:partitions, "graph_min must be at least 1; got $graph_min")
+        new(String(field), graph_min === nothing ? nothing : Int(graph_min))
     end
-    kind === :text || !edit_correction ||
-        invalid_option(:edit_correction, "`edit_correction` only applies to a text project; $(nameof(engine)) " *
-              "indexes $kind vectors, and its queries have no tokens to correct")
+end
+
+PartitionBy(field::AbstractString; graph_min::Union{Nothing,Integer}=nothing) = PartitionBy(field, graph_min)
+
+"""
+    Runtime(; maxbatches=nothing, postings_cache_max=4096, postings_cache_base=2048, edit_correction=false)
+
+The options of an open project that are not saved with it. [`create_project`](@ref) and
+[`open_project`](@ref) take them, and each open decides them again.
+
+- `maxbatches` caps the number of batches of a parallel insertion and of a batch of searches.
+  `nothing` lets the engine choose (see `IndexEngine.SEARCH_CONTEXT_MAXBATCHES`). A server that
+  runs several projects in one process sets it to share the threads.
+- `postings_cache_max` and `postings_cache_base` bound the number of posting lists of a text
+  project that stay in memory (see `Persistence.LazyPostings`).
+- `edit_correction=true` lets the queries of a text project correct a token that is absent from
+  the vocabulary to the only vocabulary token at Damerau-Levenshtein distance 1 from it, for
+  example `guerar` -> `guerra`. [`ftexplain`](@ref) reports such a correction with the reason
+  `:edit`. The correction runs only when `policy.correction` is not `:off`, only for a token the
+  vocabulary does not hold, and only when the other corrections found nothing for it. It is
+  `false` by default because of its cost, which `IndexEngine._query_pipeline` gives with
+  measurements. It is an error on a dense or sparse project.
+"""
+struct Runtime
+    maxbatches::Union{Nothing,Int}
+    postings_cache_max::Int
+    postings_cache_base::Int
+    edit_correction::Bool
+
+    function Runtime(maxbatches::Union{Nothing,Integer}, postings_cache_max::Integer,
+                     postings_cache_base::Integer, edit_correction::Bool)
+        maxbatches === nothing || maxbatches >= 1 ||
+            invalid_option(:maxbatches, "maxbatches must be at least 1, or nothing; got $maxbatches")
+        new(maxbatches === nothing ? nothing : Int(maxbatches), Int(postings_cache_max),
+            Int(postings_cache_base), edit_correction)
+    end
+end
+
+Runtime(; maxbatches::Union{Nothing,Integer}=nothing, postings_cache_max::Integer=4096,
+        postings_cache_base::Integer=2048, edit_correction::Bool=false) =
+    Runtime(maxbatches, postings_cache_max, postings_cache_base, edit_correction)
+
+"""
+    create_project(workdir, dataset, spec=DenseVectors(); meta_schema=nothing, partitions=nothing,
+                   runtime=Runtime(), schema_version=1) -> EmbeddedEngine
+
+Creates a new project at `<workdir>/<dataset>`. The directory has the layout that
+`similarity-search build` produces, so the CLI can inspect, rebuild or dump a project created
+this way, and [`open_project`](@ref) can reopen it.
+
+`spec` says what the project holds, the index that holds it and, for dense vectors, how they are
+stored (see [`ProjectSpec`](@ref)):
+
+```julia
+create_project(w, "emb")                                              # SqL2, a SearchGraph, Float32
+create_project(w, "emb", DenseVectors(Dist.NormCosine(); index=Exhaustive()))
+create_project(w, "emb", DenseVectors(Dist.NormCosine(); index=Graph(minrecall=0.95),
+                                      storage=Quantized(SQ(8); rotation=QRRotation())))
+create_project(w, "sp",  SparseVectors(50_000))
+create_project(w, "txt", TextDocuments(DefaultProfile(:es); index=BM25()))
+```
+
+The spec is saved in the field `:spec`, and [`project_spec`](@ref) returns it. It fixes the item
+type [`append_items!`](@ref) accepts: `DenseItem`, `SparseItem` or `TextItem`.
+
+The keywords apply to every kind of project:
+
+- `meta_schema` declares the fields of `meta` (see [`declare_meta_schema!`](@ref)).
+- `partitions=PartitionBy("repo")` partitions the project by a field of `meta` (see
+  [`PartitionBy`](@ref) and [`partitions`](@ref)).
+- `runtime` holds the options that are not saved (see [`Runtime`](@ref)).
+- `schema_version` is written in every `Schema.MetadataRecord` that [`append_items!`](@ref)
+  writes. It is not saved, and it is not checked against `meta`: a caller that reopens the
+  project passes it again.
+
+The index is saved as it grows. A `SearchGraph` saves the links of each block that
+[`index!`](@ref index!(::EmbeddedEngine)) builds (see [`_searchgraph_on_change`](@ref)). An
+inverted file saves the objects of each insertion (see [`_invertedfile_on_change`](@ref)). An
+exact index of `Float32` vectors is saved whole after each `add_item!` (see
+[`_maybe_flush_index!`](@ref) and issue #3), and [`close_project!`](@ref) saves it once more.
+"""
+function create_project(workdir::String, dataset::String, spec::ProjectSpec=DenseVectors();
+                        meta_schema=nothing, partitions::Union{Nothing,PartitionBy}=nothing,
+                        runtime::Runtime=Runtime(), schema_version::Int=1)
+    # Everything checkable is checked before anything exists on disk: a call that fails after the
+    # project directory is made and RocksDB's write lock is taken leaves both behind.
+    kind = IndexEngine.spec_kind(spec)
+    _check_edit_correction(kind, runtime)
     schema = _as_meta_schema(meta_schema)
-    if partition_by !== nothing
+    partition_by = partitions === nothing ? nothing : partitions.field
+    if partitions !== nothing
         kind === :sparse &&
-            invalid_option(:partition_by, "`partition_by` applies to a text or a dense project; a sparse project " *
-                  "cannot be partitioned yet (PLAN.md §5.10)")
+            invalid_option(:partitions, "a text or a dense project can be partitioned; a sparse project cannot " *
+                  "be partitioned yet (PLAN.md §5.10)")
         _check_partition_field(schema, partition_by)
     end
-    graph_min = _check_partition_graph_min(kind, partition_by, partition_graph_min)
-    if kind === :sparse
-        dimension === nothing &&
-            invalid_option(:dimension, "a sparse project needs `dimension`: an InvertedFile is a fixed array of " *
-                  "posting lists, so it has to be sized before the first item, and every " *
-                  "SparseItem appended has to agree with it")
-    elseif dimension !== nothing
-        invalid_option(:dimension, "`dimension` only applies to a sparse project; $(nameof(engine)) does not take one")
-    end
-    # The sentinel is resolved here, once, and everything below this line receives a real
-    # value -- the whole of the no-defaults-below-the-surface policy in one statement.
-    dist = distance === nothing ? IndexEngine.default_distance(back) : distance
-    if quantizer !== nothing
-        kind === :dense ||
-            invalid_option(:quantizer, "`quantizer` applies to a dense project; $(nameof(engine)) indexes $kind items")
-        IndexEngine.quantized_distance(dist)
-    end
+    graph_min = _check_partition_graph_min(kind, partitions)
 
     dir = joinpath(workdir, dataset)
     mkpath(dir)
@@ -569,49 +512,113 @@ function create_project(workdir::String, dataset::String;
     dense_vectors = Ref{Union{Nothing,MMapMatrixDatabase}}(nothing)
     partitions_ref = Ref{Union{Nothing,Persistence.PartitionStore}}(nothing)
     if partition_by !== nothing
-        partitions_ref[] = Persistence.open_partition_store(project.db, String(partition_by),
-                                                        postings_cache_max, postings_cache_base)
-    end
-
-    # Which storage a project persists incrementally into follows from what its backend
-    # produces per insertion: a graph reports link blocks, an inverted file reports encoded
-    # objects, and an exact index has nothing to report so its whole index is flushed instead.
-    on_change = if kind === :dense && back === SearchGraph
-        _searchgraph_on_change(store, Persistence.open_adjacency_store(project.db))
-    elseif quantizer !== nothing
-        # A quantized exact index keeps its codes in their own file (see `_index_quantized!`),
-        # so there is no whole index to flush.
-        nothing
-    elseif kind === :text
-        # A text project persists its *index* (see `Persistence.InvertedIndexStore`), written a
-        # block at a time by `IndexEngine.index!` itself, so there is nothing for an observer to
-        # save on its behalf and no reason to keep a second copy of every object as well.
-        nothing
-    elseif kind === :sparse
-        _invertedfile_on_change(Persistence.open_invertedfile_object_store(project.db))
-    else
-        (_, __, ___) -> (pending_flush[] = true)
+        partitions_ref[] = Persistence.open_partition_store(project.db, partition_by,
+                                                            runtime.postings_cache_max, runtime.postings_cache_base)
     end
     adj_factory = kind === :text ?
-        _invfile_adj_factory(_invfile_store(project), partitions_ref; maxlists=postings_cache_max,
-                             baselists=postings_cache_base) :
+        _invfile_adj_factory(_invfile_store(project), partitions_ref; maxlists=runtime.postings_cache_max,
+                             baselists=runtime.postings_cache_base) :
         nothing
-
-    eng = kind === :sparse ?
-        IndexEngine.create_sparse_engine(; distance=dist, dimension, on_change, log_io=nothing, maxbatches) :
-        IndexEngine.create_engine(back; distance=dist, minrecall, textmodel, on_change, log_io=nothing, adj_factory, maxbatches, edit_correction)
-    quantizer === nothing || (eng = IndexEngine.enable_quantization!(eng, quantizer, dist))
+    eng = IndexEngine.create_engine(spec; on_change=_on_change(spec, store, project, pending_flush), log_io=nothing,
+                                    maxbatches=runtime.maxbatches, adj_factory, edit_correction=runtime.edit_correction)
+    Persistence.save_field!(store, :spec, IndexEngine.spec_to_dict(spec))
     Persistence.save_fields!(store, IndexEngine.snapshot_state(eng))
     isempty(schema) || Persistence.save_field!(store, :meta_schema, schema)
-    partition_by === nothing || Persistence.save_field!(store, :partition_by, String(partition_by))
+    partition_by === nothing || Persistence.save_field!(store, :partition_by, partition_by)
     handle = EmbeddedEngine(workdir, dataset, dir, project, eng, store, pending_flush, schema_version,
                             schema, OOVCounters(), dense_vectors, false, Ref(true), partitions_ref,
-                            (postings_cache_max, postings_cache_base))
+                            (runtime.postings_cache_max, runtime.postings_cache_base), spec)
     if kind === :dense && partition_by !== nothing
         Persistence.save_field!(store, :partition_graph_min, graph_min)
         _enable_dense_partitions!(handle, graph_min, Dict{UInt32,Int}())
     end
     return handle
+end
+
+# What a project saves as its index grows, by what its index reports per insertion: a graph
+# reports link blocks, an inverted file of sparse vectors reports encoded objects, and an exact
+# index of `Float32` vectors reports nothing useful, so its whole index is flushed instead. A
+# quantized exact index keeps its codes in their own file (see `_index_quantized!`), and a text
+# index is written a block at a time by `IndexEngine.index!` itself (see
+# `Persistence.InvertedIndexStore`).
+_on_change(::DenseVectors{Graph}, store, project, pending_flush) =
+    _searchgraph_on_change(store, Persistence.open_adjacency_store(project.db))
+_on_change(::DenseVectors{Exhaustive,Quantized}, store, project, pending_flush) = nothing
+_on_change(::DenseVectors{Exhaustive,Float32Vectors}, store, project, pending_flush) =
+    (_, __, ___) -> (pending_flush[] = true)
+_on_change(::SparseVectors, store, project, pending_flush) =
+    _invertedfile_on_change(Persistence.open_invertedfile_object_store(project.db))
+_on_change(::TextDocuments, store, project, pending_flush) = nothing
+
+function _check_edit_correction(kind::Symbol, runtime::Runtime)
+    kind === :text || !runtime.edit_correction ||
+        invalid_option(:edit_correction, "`edit_correction` only applies to a text project; this one holds " *
+              "$kind vectors, and its queries have no tokens to correct")
+    return nothing
+end
+
+"""
+    project_spec(handle::EmbeddedEngine) -> ProjectSpec
+
+The specification the project was created with (see [`create_project`](@ref)).
+"""
+project_spec(handle::EmbeddedEngine) = handle.spec
+
+"""
+    _load_spec(store, read_only) -> Union{Nothing,ProjectSpec}
+
+The spec a project saved in `:spec`, or `nothing` for a project that was never saved. A project
+saved before issue #2 has no `:spec`, and its spec is built from the fields it saved then
+(`:kind`, `:backend`, `:distance`, `:minrecall`, `:dimension`, or the exact index itself). A
+writable open saves the result in `:spec`.
+"""
+function _load_spec(store, read_only::Bool)
+    saved = Persistence.load_field(store, :spec, nothing)
+    saved === nothing || return IndexEngine.spec_from_dict(saved; textmodel=_saved_textmodel(store))
+    spec = _legacy_spec(store)
+    spec === nothing || read_only || Persistence.save_field!(store, :spec, IndexEngine.spec_to_dict(spec))
+    return spec
+end
+
+# The text model of a text project whose spec names a `BaseProfile` or a `FitFromCorpus`: the
+# deferred fit when there is one, and the profile otherwise.
+function _saved_textmodel(store)
+    fitspec = Persistence.load_field(store, :fitspec, nothing)
+    fitspec === nothing || return fitspec
+    profile = Persistence.load_field(store, :profile, nothing)
+    return profile === nothing ? nothing : BaseProfile(profile)
+end
+
+function _legacy_spec(store)
+    kind = Persistence.load_field(store, :kind, nothing)
+    kind === nothing && return nothing
+    backend = Persistence.load_field(store, :backend, nothing)
+    if kind === :dense
+        Persistence.has_field(store, :quantizer) &&
+            corrupted_storage("this quantized project was saved before project specs existed (issue #2); create it again")
+        backend === :graph &&
+            return DenseVectors(Persistence.load_field(store, :distance, nothing),
+                                Graph(Persistence.load_field(store, :minrecall, nothing)), Float32Vectors())
+        backend in (:exhaustive, :parallel_exhaustive) ||
+            corrupted_storage("unknown dense backend $(repr(backend)); expected :graph, :exhaustive or :parallel_exhaustive")
+        index = Persistence.load_field(store, :index, nothing)
+        index === nothing && corrupted_storage("this exact dense project has no saved index")
+        return DenseVectors(SimilaritySearch.distance(index), Exhaustive(backend === :parallel_exhaustive), Float32Vectors())
+    elseif kind === :sparse
+        return SparseVectors(Persistence.load_field(store, :dimension, nothing), Persistence.load_field(store, :distance, nothing))
+    elseif kind === :text
+        model = _saved_textmodel(store)
+        model === nothing && corrupted_storage("this text project has neither a profile nor a deferred fit")
+        index = backend === :bm25 ? BM25() :
+                backend === :text_inverted_file ? VectorSpace(Persistence.load_field(store, :distance, nothing)) :
+                corrupted_storage("unknown text backend $(repr(backend)); expected :bm25 or :text_inverted_file")
+        return TextDocuments(model, index)
+    end
+    corrupted_storage("""
+        this project records kind $(repr(kind)), which this version does not know how to \
+        restore -- it reads :dense, :sparse and :text. A project written before the engine \
+        kinds were restructured stored a Julia type there instead of a symbol, and has to be \
+        rebuilt rather than reopened.""")
 end
 
 """
@@ -627,20 +634,15 @@ scan took 0.12 ms for 2,000 members and 3.7 ms for 20,000, and a graph search 0.
 const DEFAULT_PARTITION_GRAPH_MIN = 4096
 
 # The threshold of a dense partitioned project, or `nothing` for any other. Raises
-# `InvalidOption` when `partition_graph_min` is given where it does not apply.
-function _check_partition_graph_min(kind::Symbol, partition_by, partition_graph_min)
-    if partition_graph_min !== nothing
-        kind === :dense ||
-            invalid_option(:partition_graph_min, "`partition_graph_min` only applies to a dense project; this one " *
-                  "indexes $kind items, whose partitions are posting lists")
-        partition_by === nothing &&
-            invalid_option(:partition_graph_min, "`partition_graph_min` needs `partition_by`: it is the size from " *
-                  "which a partition has its own graph")
-        partition_graph_min >= 1 ||
-            invalid_option(:partition_graph_min, "partition_graph_min must be at least 1; got $partition_graph_min")
+# `InvalidOption` when `graph_min` is given to a project that is not dense.
+function _check_partition_graph_min(kind::Symbol, partitions::Union{Nothing,PartitionBy})
+    partitions === nothing && return nothing
+    if partitions.graph_min !== nothing && kind !== :dense
+        invalid_option(:partitions, "`graph_min` only applies to a dense project; this one indexes $kind " *
+              "items, whose partitions are posting lists")
     end
-    (kind === :dense && partition_by !== nothing) || return nothing
-    return Int(something(partition_graph_min, DEFAULT_PARTITION_GRAPH_MIN))
+    kind === :dense || return nothing
+    return something(partitions.graph_min, DEFAULT_PARTITION_GRAPH_MIN)
 end
 
 """
@@ -708,170 +710,142 @@ function _save_partition_state!(handle::EmbeddedEngine)
 end
 
 """
-    open_project(workdir, dataset; read_only=false, edit_correction=false) -> EmbeddedEngine
+    open_project(workdir, dataset; read_only=false, runtime=Runtime(), schema_version=1) -> EmbeddedEngine
 
-Reopens a project previously created by [`create_project`](@ref), restoring its search
-engine -- including the `minrecall` target and any calibrated `opt_beamsearch` it was
-created/calibrated with -- field-by-field from its `Persistence.EngineStore` (a
-`DenseEngine{GraphBackend}`'s index specifically via `IndexEngine.build_searchgraph` replaying its
-saved insertion blocks, see [`_searchgraph_on_change`](@ref)). Falls back to a fresh,
-empty `SearchGraph`/`SqL2`/`minrecall=0.9` engine if this project has never been saved
-yet, mirroring `Server._reload_one_dataset!`'s own "create if nothing persisted yet"
-fallback.
+Reopens a project created by [`create_project`](@ref). The engine is rebuilt from the
+[`ProjectSpec`](@ref) saved in `:spec` and from the state saved as the project grew: the
+`BeamSearch`, the hints and the calibrated levels of a graph, the graph links (replayed by
+`IndexEngine.build_searchgraph`), the codes of a quantized project, the posting lists of an
+inverted file. A directory with no saved project gets the default project of
+`create_project(workdir, dataset)`, which is saved.
 
-Pass `read_only=true` to inspect a project a live `similarity-search-serve` process (or
-another script) still has open for writing (mirrors `Project.open_project`'s own
-`read_only` kwarg, used the same way by the CLI's `describe` command) -- a plain
-(non-`read_only`) open against a directory something else already has open for writing
-raises RocksDB's own real lock error, not a friendly one this function invents.
+`read_only=true` opens a project that another process, such as a running
+`similarity-search-serve`, has open for writing. A writable open of such a directory raises the
+lock error of RocksDB.
 
-`edit_correction=true` derives an edit index from a text project's vocabulary, so that its
-queries can correct a token the vocabulary does not hold (see [`create_project`](@ref)). It is
-`false` by default, and it is an error on a project that does not hold text.
+`runtime` holds the options that are not saved with the project (see [`Runtime`](@ref)).
+`schema_version` is as in [`create_project`](@ref).
 """
 function open_project(workdir::String, dataset::String; read_only::Bool=false, schema_version::Int=1,
-                      maxbatches::Union{Nothing,Integer}=nothing,
-                      postings_cache_max::Int=4096, postings_cache_base::Int=2048,
-                      edit_correction::Bool=false)
+                      runtime::Runtime=Runtime())
     dir = joinpath(workdir, dataset)
     project = Project.open_project(dir, dataset; read_only, extra_cf_names=_PROJECT_CFS)
     store = Persistence.open_engine_store(project.db)
     pending_flush = Ref(false)
     dense_vectors = Ref{Union{Nothing,MMapMatrixDatabase}}(nothing)
     partitions_ref = Ref{Union{Nothing,Persistence.PartitionStore}}(nothing)
+    maxbatches = runtime.maxbatches
+    spec = try
+        s = _load_spec(store, read_only)
+        _check_edit_correction(s === nothing ? :dense : IndexEngine.spec_kind(s), runtime)
+        s
+    catch
+        Project.close_project(project)
+        rethrow()
+    end
     partition_by = Persistence.load_field(store, :partition_by, nothing)
     if partition_by !== nothing
         partitions_ref[] = Persistence.open_partition_store(project.db, partition_by,
-                                                        postings_cache_max, postings_cache_base)
+                                                            runtime.postings_cache_max, runtime.postings_cache_base)
     end
 
-    # `kind` and `backend` are symbols, not Julia types (see `IndexEngine.backend_tag`): the
-    # on-disk format no longer names the types in `index_engine.jl`, so renaming one is a rename
-    # rather than a migration.
-    kind = Persistence.load_field(store, :kind, nothing)
-    backend = Persistence.load_field(store, :backend, nothing)
-    if edit_correction && kind !== :text
-        Project.close_project(project)
-        invalid_option(:edit_correction, "`edit_correction` only applies to a text project; this one holds " *
-              "$(something(kind, :dense)) vectors, and its queries have no tokens to correct")
-    end
-    engine = if kind === nothing
-        # Never saved: create the same default project `create_project` would have, and save it,
-        # mirroring `Server._reload_one_dataset!`'s own create-if-absent fallback.
-        on_change = _searchgraph_on_change(store, Persistence.open_adjacency_store(project.db))
-        engine = IndexEngine.create_engine(SearchGraph;
-            distance=IndexEngine.default_distance(SearchGraph), minrecall=0.9,
-            textmodel=nothing, on_change, log_io=nothing, adj_factory=nothing, maxbatches,
-            edit_correction=false)
+    engine = if spec === nothing
+        # Never saved: create the default project `create_project` would have, and save it.
+        spec = DenseVectors()
+        engine = IndexEngine.create_engine(spec; on_change=_on_change(spec, store, project, pending_flush),
+                                           log_io=nothing, maxbatches, adj_factory=nothing, edit_correction=false)
+        Persistence.save_field!(store, :spec, IndexEngine.spec_to_dict(spec))
         Persistence.save_fields!(store, IndexEngine.snapshot_state(engine))
         engine
-    elseif kind === :dense && Persistence.load_field(store, :quantizer, nothing) !== nothing
+    elseif IndexEngine.isquantized(spec)
         dense_vectors[] = Persistence.open_dense_vectors(dir; read_only)
-        _open_quantized_engine(dir, store, project, backend, dense_vectors; read_only, maxbatches)
-    elseif kind === :dense && backend === :graph
+        _open_quantized_engine(dir, store, project, spec, dense_vectors; read_only, maxbatches)
+    elseif spec isa DenseVectors{Graph}
         dense_vectors[] = Persistence.open_dense_vectors(dir; read_only)
         adj_store = Persistence.open_adjacency_store(project.db)
         state = (
-            kind=kind, backend=backend,
-            distance=Persistence.load_field(store, :distance, nothing),
+            kind=:dense, backend=:graph,
+            distance=spec.distance,
             vector_blocks=Persistence.load_dense_vector_blocks(dense_vectors[]),
             load_neighbors=(i -> Persistence.load_neighbors(adj_store, i)),
             graph_len=Persistence.load_field(store, :graph_len, 0),
-            minrecall=Persistence.load_field(store, :minrecall, nothing),
+            minrecall=spec.index.minrecall,
             opt_beamsearch=Persistence.load_field(store, :opt_beamsearch, nothing),
             beamsearch=Persistence.load_field(store, :beamsearch, nothing),
             hints=Persistence.load_field(store, :hints, nothing),
             deleted_ids=Persistence.load_field(store, :deleted_ids, nothing),
         )
         IndexEngine.restore_engine(state; on_change=_searchgraph_on_change(store, adj_store), log_io=nothing, maxbatches)
-    elseif kind === :dense
+    elseif spec isa DenseVectors
         # The exact backends are the one kind whose whole index is a single saved value, so they
         # are also the one kind that still needs `pending_flush` (see `_maybe_flush_index!`).
-        on_change = (_, __, ___) -> (pending_flush[] = true)
         state = (
-            kind=kind, backend=backend,
+            kind=:dense, backend=IndexEngine.backend_symbol(spec),
             index=Persistence.load_field(store, :index, nothing),
             deleted_ids=Persistence.load_field(store, :deleted_ids, nothing),
         )
-        IndexEngine.restore_engine(state; on_change, log_io=nothing, maxbatches)
-    elseif kind === :sparse
+        IndexEngine.restore_engine(state; on_change=_on_change(spec, store, project, pending_flush), log_io=nothing, maxbatches)
+    elseif spec isa SparseVectors
         obj_store = Persistence.open_invertedfile_object_store(project.db)
         state = (
-            kind=kind, backend=backend,
-            distance=Persistence.load_field(store, :distance, nothing),
-            dimension=Persistence.load_field(store, :dimension, nothing),
+            kind=:sparse, backend=:inverted_file,
+            distance=spec.distance,
+            dimension=spec.dimension,
             object_blocks=Persistence.load_object_blocks(obj_store),
             deleted_ids=Persistence.load_field(store, :deleted_ids, nothing),
         )
         IndexEngine.restore_engine(state; on_change=_invertedfile_on_change(obj_store), log_io=nothing, maxbatches)
-    elseif kind === :text
-        # One branch for both text backends: which inverted file to rebuild is `state.backend`'s
-        # to say, and `restore_engine` says it. That is the same collapse `FullTextEngine` is.
-        # One branch for both text backends: which inverted file to assemble is `state.backend`'s
-        # to say, and `restore_engine` says it. That is the same collapse `FullTextEngine` is.
+    else
+        # One branch for both text indexes: which inverted file to assemble is the spec's to say.
         staged_store = Persistence.open_staged_text_store(project.db)
         profile = Persistence.load_field(store, :profile, nothing)
         invfile_store = _invfile_store(project)
-        distance = Persistence.load_field(store, :distance, nothing)
-        adj_factory = _invfile_adj_factory(invfile_store, partitions_ref; maxlists=postings_cache_max,
-                                           baselists=postings_cache_base)
-        kindtype = backend === :bm25 ? BM25InvertedFile : TextInvertedFile
+        distance = IndexEngine.text_distance(spec)
+        adj_factory = _invfile_adj_factory(invfile_store, partitions_ref; maxlists=runtime.postings_cache_max,
+                                           baselists=runtime.postings_cache_base)
         # No index on disk means no index: a text project is assembled from what was persisted or
-        # it has none, and `index!` is what builds one out of the staged text. Nothing here
-        # reconstructs an index from the raw objects a pre-persistence project saved -- see
-        # `index!`'s own docstring for what to do with one of those.
+        # it has none, and `index!` is what builds one out of the staged text.
         prebuilt = profile !== nothing && Persistence.has_inverted_index(invfile_store) ?
-            _assemble_text_index(profile, kindtype, distance, invfile_store, adj_factory, edit_correction) : nothing
+            _assemble_text_index(profile, IndexEngine.index_type(spec), distance, invfile_store, adj_factory,
+                                 runtime.edit_correction) : nothing
         state = (
-            kind=kind, backend=backend,
+            kind=:text, backend=IndexEngine.backend_symbol(spec),
             profile=profile,
             fitspec=Persistence.load_field(store, :fitspec, nothing),
             distance=distance,
             prebuilt_index=prebuilt,
             adj_factory=adj_factory,
-            edit_correction=edit_correction,
+            edit_correction=runtime.edit_correction,
             staged=vcat(String[], Persistence.load_staged_text_blocks(staged_store)...),
             deleted_ids=Persistence.load_field(store, :deleted_ids, nothing),
         )
         IndexEngine.restore_engine(state; on_change=nothing, log_io=nothing, maxbatches)
-    else
-        corrupted_storage("""
-            this project records kind $(repr(kind)), which this version does not know how to \
-            restore -- it reads :dense, :sparse and :text. A project written before the engine \
-            kinds were restructured stored a Julia type there instead of a symbol, and has to be \
-            rebuilt rather than reopened.""")
     end
     handle = EmbeddedEngine(workdir, dataset, dir, project, engine, store, pending_flush, schema_version,
                             Persistence.load_field(store, :meta_schema, Schema.MetaSchema()),
                             Persistence.load_field(store, :oov_counters, OOVCounters()),
                             dense_vectors, read_only, Ref(false), partitions_ref,
-                            (postings_cache_max, postings_cache_base))
-    kind === :dense && partition_by !== nothing && _restore_dense_partitions!(handle)
+                            (runtime.postings_cache_max, runtime.postings_cache_base), spec)
+    spec isa DenseVectors && partition_by !== nothing && _restore_dense_partitions!(handle)
     return handle
 end
 
 """
-    _open_quantized_engine(dir, store, project, backend, dense_vectors; read_only, maxbatches) -> DenseEngine
+    _open_quantized_engine(dir, store, project, spec, dense_vectors; read_only, maxbatches) -> DenseEngine
 
-Rebuilds the engine of a quantized dense project (issue #1): an empty engine of the saved
-backend and distance, its quantizer, and, once the encoder exists, the index over the codes file
-with the saved graph. The staged vectors not yet encoded are counted from the dense-vector file
-and `:raw_offset`. A file that holds only encoded vectors of a project that does not keep them is
-what an `index!` interrupted before removing it leaves, and it is removed here.
+Rebuilds the engine of a quantized dense project (issue #1): an empty engine of `spec` with its
+quantizer, and, once the encoder exists, the index over the codes file with the saved graph. The
+staged vectors not yet encoded are counted from the dense-vector file and `:raw_offset`. A file
+that holds only encoded vectors of a project that does not keep them is what an `index!`
+interrupted before removing it leaves, and it is removed here.
 """
-function _open_quantized_engine(dir::String, store, project, backend::Symbol, dense_vectors;
+function _open_quantized_engine(dir::String, store, project, spec::DenseVectors, dense_vectors;
                                 read_only::Bool, maxbatches)
-    spec = Persistence.load_field(store, :quantizer, nothing)
-    distance = Persistence.load_field(store, :distance, nothing)
-    is_graph = backend === :graph
-    back = is_graph ? SearchGraph : backend === :exhaustive ? ExhaustiveSearch :
-           backend === :parallel_exhaustive ? ParallelExhaustiveSearch :
-           corrupted_storage("unknown dense backend $(repr(backend)); expected :graph, :exhaustive or :parallel_exhaustive")
+    is_graph = spec.index isa Graph
     adj_store = is_graph ? Persistence.open_adjacency_store(project.db) : nothing
     on_change = is_graph ? _searchgraph_on_change(store, adj_store) : nothing
-    minrecall = is_graph ? Persistence.load_field(store, :minrecall, nothing) : nothing
-    engine = IndexEngine.create_engine(back; distance, minrecall, textmodel=nothing, on_change, log_io=nothing,
-                                       adj_factory=nothing, maxbatches, edit_correction=false)
+    engine = IndexEngine.create_engine(spec; on_change, log_io=nothing, maxbatches, adj_factory=nothing,
+                                       edit_correction=false)
     engine.deleted_ids = something(Persistence.load_field(store, :deleted_ids, nothing), Set{UInt32}())
     if is_graph
         opt = Persistence.load_field(store, :opt_beamsearch, nothing)
@@ -881,7 +855,6 @@ function _open_quantized_engine(dir::String, store, project, backend::Symbol, de
         hints = Persistence.load_field(store, :hints, nothing)
         hints === nothing || append!(engine.backend.index.hints, hints)
     end
-    engine = IndexEngine.enable_quantization!(engine, spec, distance)
     q = engine.quant
     encoder = Persistence.load_field(store, :encoder, nothing)
     if encoder !== nothing
@@ -903,7 +876,7 @@ function _open_quantized_engine(dir::String, store, project, backend::Symbol, de
         pending = Persistence.load_field(store, :raw_offset, 0) + length(raw) - IndexEngine.quantized_length(q)
         pending >= 0 || corrupted_storage("the staged vectors of this quantized project end before its codes do")
         q.npending = pending
-        if pending == 0 && !spec.keep_vectors && !read_only
+        if pending == 0 && !spec.storage.keep_vectors && !read_only
             close(raw)
             dense_vectors[] = nothing
             rm(Persistence.dense_vectors_path(dir); force=true)
@@ -1114,7 +1087,7 @@ function _fit_quantizer!(handle::EmbeddedEngine, rng::AbstractRNG)
         nothing_staged("this quantized project has nothing staged yet -- append_items! at least one vector " *
                        "before index!; the quantizer is fitted on a sample of the staged vectors")
     n = length(raw)
-    s = min(q.spec.samplesize, n)
+    s = min(q.spec.quantizer.range.samplesize, n)
     rows = s == n ? (1:n) : sort!(Random.shuffle(rng, collect(1:n))[1:s])
     sample = reduce(hcat, (Vector{Float32}(raw[i]) for i in rows))
     encoder = IndexEngine.fit_encoder(q.spec, q.distance, sample, rng)
@@ -1161,7 +1134,7 @@ nothing is staged, and `InvalidOption` for a project that is not quantized.
 """
 function fit_quantizer!(handle::EmbeddedEngine; rng::AbstractRNG=Random.default_rng())
     IndexEngine.isquantized(handle.engine) ||
-        invalid_option(:quantizer, "fit_quantizer! applies to a quantized project; this one was created without `quantizer`")
+        invalid_option(:quantizer, "fit_quantizer! applies to a project with Quantized storage; this one stores Float32 vectors")
     handle.wrote[] = true
     _fit_quantizer!(handle, rng)
     return handle
@@ -1749,7 +1722,7 @@ end
 
 The number of indexed members from which a partition of this dense project has its own graph
 (PLAN.md §5.10), or `nothing` for a project that is not a partitioned dense project. See
-[`create_project`](@ref)'s `partition_graph_min`.
+`graph_min` of [`PartitionBy`](@ref).
 """
 function partition_graph_min(handle::EmbeddedEngine)
     (handle.engine isa IndexEngine.DenseEngine && handle.partitions[] !== nothing) || return nothing
@@ -1765,7 +1738,8 @@ still members of the partition. An item in several partitions is counted in each
 `InvalidOption` on a project without a partition field.
 
 `graph` says whether the partition has its own graph (PLAN.md §5.10). It is `true` only for a
-partition of a dense `SearchGraph` project with at least `partition_graph_min` indexed members.
+partition of a dense `SearchGraph` project with at least `graph_min` indexed members (see
+[`PartitionBy`](@ref)).
 A text partition has posting lists, and `graph` is `false`.
 """
 function partitions(handle::EmbeddedEngine)
@@ -1779,11 +1753,13 @@ function partitions(handle::EmbeddedEngine)
 end
 
 """
-    declare_partition!(handle::EmbeddedEngine, field::AbstractString; partition_graph_min=nothing)
+    declare_partition!(handle::EmbeddedEngine, partitions::PartitionBy)
+    declare_partition!(handle::EmbeddedEngine, field::AbstractString)
         -> Vector{@NamedTuple{name::String, items::Int, graph::Bool}}
 
-Partitions an existing text or dense project by the `meta` field `field`, as `create_project`'s
-`partition_by` does for a new one (PLAN.md §5.9 and §5.10), and returns [`partitions`](@ref).
+Partitions an existing text or dense project by a `meta` field, as `create_project`'s
+`partitions` does for a new one (PLAN.md §5.9 and §5.10), and returns [`partitions`](@ref).
+A field name is `PartitionBy(field)`.
 
 On a text project, it reads the `meta` of every item once, and builds the partition lists by
 splitting the global lists already on disk. It does not read or tokenize any text. Items
@@ -1792,7 +1768,7 @@ appended but not indexed yet get their partition lists from the next
 so searches wait for it.
 
 On a dense project, it reads the `meta` of every item once, and builds the graph of each
-partition with at least `partition_graph_min` indexed members (by default
+partition with at least `graph_min` indexed members (by default
 [`DEFAULT_PARTITION_GRAPH_MIN`](@ref)). Building a graph inserts its members again, so this
 costs about as much as indexing those members once. Items appended but not indexed yet join
 their partitions in the next `index!`.
@@ -1802,22 +1778,25 @@ raises `PayloadMismatch` before the declaration is recorded. The declaration is 
 so an interrupted call leaves the project unpartitioned, and calling it again starts over.
 
 Raises `InvalidOption` on a sparse project, on a project that already has a partition field,
-and for a `partition_graph_min` on a project that is not dense. Raises `UnsupportedOperation` on
-a read-only handle.
+and for a `graph_min` on a project that is not dense. Raises `UnsupportedOperation` on a read-only
+handle.
 """
-function declare_partition!(handle::EmbeddedEngine, field::AbstractString; partition_graph_min::Union{Nothing,Integer}=nothing)
+declare_partition!(handle::EmbeddedEngine, field::AbstractString) = declare_partition!(handle, PartitionBy(field))
+
+function declare_partition!(handle::EmbeddedEngine, by::PartitionBy)
+    field = by.field
     handle.read_only && unsupported_operation(:declare_partition!, "this project is open read-only")
     engine = handle.engine
     kind = IndexEngine.payload_kind(engine)
     kind === :sparse &&
-        invalid_option(:partition_by, "a text or a dense project can be partitioned; a sparse project cannot " *
+        invalid_option(:partitions, "a text or a dense project can be partitioned; a sparse project cannot " *
               "be partitioned yet (PLAN.md §5.10)")
     current = partition_field(handle)
     current === nothing ||
-        invalid_option(:partition_by, "this project is already partitioned by $(repr(current)); a project has " *
+        invalid_option(:partitions, "this project is already partitioned by $(repr(current)); a project has " *
               "one partition field, and it cannot be changed")
     _check_partition_field(handle.meta_schema, field)
-    graph_min = _check_partition_graph_min(kind, field, partition_graph_min)
+    graph_min = _check_partition_graph_min(kind, by)
     handle.wrote[] = true
     parts = Persistence.open_partition_store(handle.project.db, String(field), handle.postings_cache...)
     kind === :dense && return _declare_dense_partition!(handle, parts, String(field), graph_min)
@@ -2070,7 +2049,7 @@ one its first [`index!`](@ref index!(::EmbeddedEngine)) call fitted from the sta
 
 Worth reaching for after a `FitFromCorpus`: `save_profile(dir, text_profile(h))` writes the
 fitted vocabulary and weights out as a portable profile, so a sibling project can be created
-against the same model (`textmodel=BaseProfile(load_profile(dir))`) instead of fitting its own
+against the same model (`TextDocuments(BaseProfile(load_profile(dir)))`) instead of fitting its own
 and ending up with a different vocabulary over the same language.
 
 Written as an explicit extension of `IndexEngine.text_profile` rather than as a bare

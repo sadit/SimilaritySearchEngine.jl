@@ -5,7 +5,7 @@
 
 using SimilaritySearchEngine
 import SimilaritySearchEngine as SSE
-using SimilaritySearchServer.Server: parse_index_kind, parse_distance, default_textmodel,
+using SimilaritySearchServer.Server: parse_index_kind, parse_distance, dataset_spec,
                                      engine_error_response, _typed_item, AppState, _guard,
                                      json_response, parse_meta_schema, serialize_meta_schema,
                                      _filter_predicate, query_slot_count, _with_query_slot,
@@ -19,20 +19,30 @@ using SimilaritySearchServer: resolve_batch_threads_pct
 using HTTP
 using JSON3
 
-@testset "the wire's index kinds map onto engine/backend pairs" begin
-    @test parse_index_kind("searchgraph") == (DenseEngine, SearchGraph)
-    @test parse_index_kind("exhaustive_search") == (DenseEngine, ExhaustiveSearch)
-    @test parse_index_kind("bm25_invfile") == (FullTextEngine, BM25InvertedFile)
-    @test parse_index_kind("invfile") == (FullTextEngine, TextInvertedFile)
-    @test parse_index_kind("sparse_invfile") == (SparseEngine, InvertedFile)
+@testset "the wire's index kinds map onto project specs" begin
+    @test parse_index_kind("searchgraph") === :dense
+    @test parse_index_kind("parallel_exhaustive_search") === :dense
+    @test parse_index_kind("invfile") === :text
+    @test parse_index_kind("sparse_invfile") === :sparse
     # An unknown name is an invalid request, not an opaque failure: the handler turns this
     # very type into a 400.
     @test_throws SSE.UnknownBackend parse_index_kind("nope")
+    @test_throws SSE.UnknownBackend dataset_spec("nope", nothing, nothing)
 
-    # Text projects must state a text model; nothing else may carry one.
-    @test default_textmodel(FullTextEngine) isa FitFromCorpus
-    @test default_textmodel(DenseEngine) === nothing
-    @test default_textmodel(SparseEngine) === nothing
+    @test dataset_spec("searchgraph", nothing, nothing) == DenseVectors(Dist.SqL2(); index=Graph())
+    @test dataset_spec("exhaustive_search", "cosine", nothing) == DenseVectors(Dist.Cosine(); index=Exhaustive())
+    @test dataset_spec("parallel_exhaustive_search", "L2", nothing) ==
+          DenseVectors(Dist.SqL2(); index=Exhaustive(parallel=true))
+    @test dataset_spec("sparse_invfile", nothing, 64) == SparseVectors(64, Dist.NormCosine())
+    # A text dataset is fitted from its own corpus: the HTTP API cannot send a profile.
+    bm25 = dataset_spec("bm25_invfile", "L2", nothing)
+    @test bm25 isa TextDocuments{BM25} && bm25.model isa FitFromCorpus
+    weighted = dataset_spec("invfile", "normcosine", nothing)
+    @test weighted.index == VectorSpace(distance=Dist.NormCosine())
+
+    # `dimension` belongs to a sparse dataset, and a sparse dataset needs it.
+    @test_throws SSE.InvalidOption dataset_spec("sparse_invfile", nothing, nothing)
+    @test_throws SSE.InvalidOption dataset_spec("searchgraph", nothing, 16)
 end
 
 @testset "engine errors become status codes by category, not by message" begin

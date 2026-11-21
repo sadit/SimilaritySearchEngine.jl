@@ -15,6 +15,7 @@ The package is structured into four core submodules and an embedded orchestratio
 - **`Schema`**: Defines the metadata record contract (`Schema.MetadataRecord`) and serialization interfaces.
 - **`Project`**: Implements project metadata storage (`ProjectManager`), document ID indexing, and secondary key lookups.
 - **`IndexEngine`**: Implements the `AbstractSearchEngine` hierarchy, encapsulating indexing algorithms from `SimilaritySearch.jl` and `TextSearch.jl`.
+  It also defines the project specifications (`specs.jl`): `DenseVectors`, `SparseVectors`, `TextDocuments` and the types they are built from.
 - **`Persistence`**: Provides storage adapters for RocksDB column families and memory-mapped files.
 - **`embedded.jl`**: Implements `EmbeddedEngine` and exports the public API (`create_project`, `append_items!`, `search`, and others).
 
@@ -93,19 +94,37 @@ record to the declaration it was written under.
 
 ---
 
-## Engine Type Hierarchy
+## Project Specifications
 
-`SimilaritySearchEngine.jl` parameterizes search collections through two distinct abstractions:
-1. **Engine (`AbstractSearchEngine`)**: Defines the data domain of the stored payloads (`DenseEngine`, `SparseEngine`, `FullTextEngine`).
-2. **Backend (`AbstractSearchIndex`)**: Defines the underlying search data structure (`SearchGraph`, `ExhaustiveSearch`, `ParallelExhaustiveSearch`, `InvertedFile`, `BM25InvertedFile`).
+A project is described by one value, a `ProjectSpec` (issue #2). It says what the project holds, the index that holds it and, for dense vectors, how they are stored. Each type holds only its own options:
+
+| Level | Types |
+|---|---|
+| What the project holds | `DenseVectors(distance; index, storage)`, `SparseVectors(dimension, distance)`, `TextDocuments(model; index)` |
+| Dense index | `Graph(; minrecall)` (a `SearchGraph`), `Exhaustive(; parallel)` (`ExhaustiveSearch` or `ParallelExhaustiveSearch`) |
+| Text index | `BM25()` (`BM25InvertedFile`), `VectorSpace(; distance)` (`TextInvertedFile`) |
+| Dense storage | `Float32Vectors()`, `Quantized(SQ(bits; range); rotation, keep_vectors)` |
 
 ```julia
-create_project(w, ds)                                               # Dense vectors, SearchGraph (defaults)
-create_project(w, ds; engine=DenseEngine, backend=ExhaustiveSearch) # Dense vectors, exact linear scan
-create_project(w, ds; engine=SparseEngine, dimension=50_000)        # Sparse vectors, InvertedFile
-create_project(w, ds; engine=FullTextEngine, backend=BM25InvertedFile,
-                      textmodel=DefaultProfile(:es))                # Full text, BM25 scoring
+create_project(w, ds)                                                    # DenseVectors(): SqL2, Graph(minrecall=0.9), Float32
+create_project(w, ds, DenseVectors(Dist.NormCosine(); index=Exhaustive())) # exact linear scan
+create_project(w, ds, SparseVectors(50_000))                             # sparse vectors, InvertedFile
+create_project(w, ds, TextDocuments(DefaultProfile(:es)))                # full text, BM25 scoring
+create_project(w, ds, DenseVectors(Dist.NormCosine();
+                                   storage=Quantized(SQ(8); rotation=QRRotation())))
 ```
+
+The options that apply to every kind of project are keywords of `create_project`: `meta_schema`, `partitions=PartitionBy(field; graph_min)` and `runtime=Runtime(...)`. `Runtime` holds the options that are not saved with the project (`maxbatches`, the size of the cache of posting lists, `edit_correction`), and `open_project` takes it as well.
+
+The engine dispatches on the type of the spec. `IndexEngine.create_engine(spec; ...)` has one method for each of `DenseVectors`, `SparseVectors` and `TextDocuments`, and `open_project` chooses how to restore the engine from the type of the saved spec.
+
+**Saved form.** `create_project` saves the spec in the engine field `:spec`, as a dictionary with the structure of the JSON form of the HTTP API: `{"dense": {"distance": ..., "index": {"graph": {"minrecall": 0.9}}, "storage": {"float32": {}}}}`. A dictionary does not depend on the names of the Julia types of the spec. The distance is stored as the `SimilaritySearch` value. The text model of a `DefaultProfile` is stored with its options. A `BaseProfile` and a `FitFromCorpus` are stored by the engine in the fields `:profile` and `:fitspec`, and the dictionary only names which one it is. `project_spec(h)` returns the spec of an open project.
+
+**Projects saved before specs existed.** They have no `:spec`. `open_project` builds the spec from the fields they saved (`:kind`, `:backend`, `:distance`, `:minrecall`, `:dimension`, or the exact index itself), and a writable open saves it in `:spec`. A quantized project saved before specs existed cannot be opened, and has to be created again.
+
+## Engine Type Hierarchy
+
+Inside `IndexEngine`, a project is an engine (`AbstractSearchEngine`) with a backend. The engine type is the data domain of the stored payloads (`DenseEngine`, `SparseEngine`, `FullTextEngine`). The backend holds the search data structure of SimilaritySearch.jl or TextSearch.jl (`SearchGraph`, `ExhaustiveSearch`, `ParallelExhaustiveSearch`, `InvertedFile`, `BM25InvertedFile`, `TextInvertedFile`). These types are internal: a caller chooses them through the spec.
 
 ```{mermaid}
 classDiagram
@@ -267,7 +286,7 @@ context of the pool holds 0.13 MB after a search. A default context has 512 slot
 threads. It holds 0.3 MB after one search, and 62.7 MB after a `searchbatch` that used 500 of
 its slots. The two contexts returned the same identifiers for each of 1,000 queries. The
 context the batch operations run on, `backend.ctx`, keeps the full count, and
-`create_project` and `open_project` accept `maxbatches` to cap it: with fewer batches than
+`create_project` and `open_project` accept `runtime=Runtime(maxbatches=n)` to cap it: with fewer batches than
 threads, the threads that are left stay available for queries. That cap belongs to the
 process rather than to the project, so it is passed when the project is opened and not stored
 in it.
@@ -356,7 +375,7 @@ index!(h)
 
 ### Partitioned Text Indexes
 
-A text project can declare one `meta` field as its partition field (`partition_by`, or `declare_partition!` later). Each value of the field is a partition. Three column families store the partitions:
+A text project can declare one `meta` field as its partition field (`partitions=PartitionBy(field)` in `create_project`, or `declare_partition!` later). Each value of the field is a partition. Three column families store the partitions:
 
 - `partition_table` maps each partition name to a number and to the number of items appended to it. Numbers start at 1, follow the order in which the names first appear, and are not reused. The table is read into memory when the project is opened.
 - `partition_members` maps the `_id` of an item to the numbers of its partitions. `append_items!` writes it before the staged text, so that an item never exists without its partitions.
@@ -383,8 +402,8 @@ The global posting lists in `invfile_postings` do not change. A document identif
 
 A dense project declares its partition field in the same way as a text project, and uses the same `partition_table` and `partition_members`. A partition is a `SubDatabase` of the vectors of the project: a view whose `map` is the ascending list of the `_id`s of its members. No vector is copied. The distance from a member to a query is the same in the partition and in the global index.
 
-- A partition with fewer than `partition_graph_min` members is searched with an exact scan of its members. The default is `DEFAULT_PARTITION_GRAPH_MIN`, 4,096.
-- A partition with at least `partition_graph_min` members, on a `SearchGraph` project, has its own `SearchGraph` over its view. The ids of that graph are positions in the view, and a search maps them back to `_id`s.
+- A partition with fewer than `graph_min` members (an option of `PartitionBy`) is searched with an exact scan of its members. The default is `DEFAULT_PARTITION_GRAPH_MIN`, 4,096.
+- A partition with at least `graph_min` members, on a `SearchGraph` project, has its own `SearchGraph` over its view. The ids of that graph are positions in the view, and a search maps them back to `_id`s.
 - On an exact project, every partition is scanned.
 
 **Writing.** On a `SearchGraph` project, a partition holds only indexed items. After the global graph indexes its backlog, `index!` reads the partitions of the new items from `partition_members` and appends them to their partitions. Then each partition graph indexes its new members, and each partition that reached the threshold gets a graph built from all its members. Both steps run under one write lock. A partition graph is saved as the global one is: the direct neighbors of each range go to the `partition_graph` column family, under the key `[partition number][local id]`, and the number of members it holds goes to the engine field `partition_graph_len`. An item is inserted once in the global graph and once more in each of its partitions that has a graph. On an exact project, the members of a partition are added when the items are appended.
@@ -406,11 +425,11 @@ The own graphs were tuned with `MinRecall(0.9)`. The global graph was not tuned,
 
 ### Quantized Dense Indexes
 
-A dense project created with `quantizer=ScalarQuantizer(kind)` stores the codes of a scalar quantizer of `SimilaritySearch.ScalarQuant` instead of `Float32` vectors (issue #1). The index is the backend the project was created with, built over a `QuantDatabase`. A query is rotated and prepared once by `encodequery`, and then evaluated against the codes with the distance of `ScalarQuant` that corresponds to the distance of the project: `SqL2`, `L2`, `L1`, `Cosine` or `NormCosine`.
+A dense project created with `storage=Quantized(SQ(bits))` stores the codes of a scalar quantizer of `SimilaritySearch.ScalarQuant` instead of `Float32` vectors (issue #1). The index is the one the project was created with, `Graph` or `Exhaustive`, built over a `QuantDatabase`. A query is rotated and prepared once by `encodequery`, and then evaluated against the codes with the distance of `ScalarQuant` that corresponds to the distance of the project: `SqL2`, `L2`, `L1`, `Cosine` or `NormCosine`.
 
-- **Kinds.** `:sqgu8`, `:sqgu4` and `:sqgu2` use one range for every coordinate of every vector. `:squ8`, `:squ4` and `:squ2` use one range per vector, which costs 8 bytes per vector.
-- **Rotation.** `rotation=:none` is the default. It works for the output of most modern neural embedding models, whose coordinates have similar scales. `rotation=:qr` gives every coordinate the same scale. Use it for vectors that are not normalized, for vectors of several models in one project, for features that a neural model did not produce, or when the recall on a sample of queries is clearly below the exact search.
-- **Fitting.** The first `index!` fits a global quantizer on `samplesize` staged vectors, chosen at random, unless `minmax` gives its range. `fit_quantizer!(h; rng)` fits it without encoding. The fitted encoder, with its rotation matrix, is saved in the engine field `:encoder`. A per-vector quantizer has no range to fit.
+- **Quantizers.** `SQ(bits)` has 8, 4 or 2 bits per coordinate. `SQ(bits; range=GlobalRange())`, the default, uses one range for every coordinate of every vector. `SQ(bits; range=PerVectorRange())` uses one range per vector, which costs 8 bytes per vector.
+- **Rotation.** `rotation=NoRotation()` is the default. It works for the output of most modern neural embedding models, whose coordinates have similar scales. `rotation=QRRotation()` gives every coordinate the same scale. Use it for vectors that are not normalized, for vectors of several models in one project, for features that a neural model did not produce, or when the recall on a sample of queries is clearly below the exact search.
+- **Fitting.** The first `index!` fits the encoder on `samplesize` staged vectors, chosen at random. A global quantizer estimates its range from them, unless `GlobalRange(minmax=(lo, hi))` gives it. A per-vector quantizer calibrates how it rounds each range. `fit_quantizer!(h; rng)` fits the encoder without encoding. The fitted encoder, with its rotation matrix, is saved in the engine field `:encoder`.
 - **Storage.** The codes are in `dense_codes.mmapdb`, a memory-mapped file with one row of bytes per vector. The ranges of a per-vector quantizer are in `dense_code_ranges.mmapdb`, two `Float32` per vector. `index!` reads, encodes and inserts the staged vectors in blocks of `QUANT_ENCODE_BLOCK` (16,384). With `keep_vectors=false`, the default, `index!` then removes `dense_vectors.mmapdb`, and the next `append_items!` starts a new one. The engine field `:raw_offset` holds the number of items before its first row.
 - **Reading back.** `fetch_items` returns the vector of an item whose `Float32` vector is still on disk: every item with `keep_vectors=true`, and an item not yet encoded otherwise. It returns `nothing` as the payload of any other item, because the codes do not give back the vector that was appended.
 - **Opening.** `open_project` reads the encoder, maps the codes file, and on `SearchGraph` restores the graph from the adjacency store. The staged vectors not yet encoded are the rows of `dense_vectors.mmapdb` after `:raw_offset` plus the number of codes. A file whose rows are all encoded, in a project that does not keep them, is what an interrupted `index!` leaves, and it is removed.
@@ -429,7 +448,7 @@ Bulk writes leave a write-ahead log, and the next open must replay it. Compactio
 ### Storage Subsystems
 
 1. **`EngineStore` (Engine Field State)**:
-   - Stores engine-level configuration as individual key-value entries (`:minrecall`, `:opt_beamsearch`, `:beamsearch`, `:deleted_ids`, `:profile`).
+   - Stores the spec of the project (`:spec`) and the engine state as individual key-value entries (`:opt_beamsearch`, `:beamsearch`, `:deleted_ids`, `:profile`).
    - `:beamsearch` is the `BeamSearch` of a graph: the parameters of the beam search that a query without `minrecall` uses. `index!` tunes it while the graph grows, and `calibrate!` leaves the last level it tuned. Both calls save it.
    - `:hints` are the starting points of a search in the graph. `index!` picks them and saves them.
    - Mutations (e.g., updating deleted IDs or storing calibration results) rewrite only their specific keys.

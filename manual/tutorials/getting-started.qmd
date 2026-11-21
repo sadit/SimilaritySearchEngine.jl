@@ -72,10 +72,10 @@ To initialize a project on disk, call `create_project`:
 using SimilaritySearchEngine
 
 workdir = mktempdir()
-h = create_project(workdir, "frankenstein_dense"; engine=DenseEngine, backend=SearchGraph, minrecall=0.9)
+h = create_project(workdir, "frankenstein_dense", DenseVectors(Dist.SqL2(); index=Graph(minrecall=0.9)))
 ```
 
-The `engine` keyword specifies the payload domain (`DenseEngine`), while `backend` defines the indexing algorithm (`SearchGraph`).
+The third argument is the project specification. `DenseVectors` says that the project holds dense vectors, compared with `Dist.SqL2()`. `index=Graph(minrecall=0.9)` says that a `SearchGraph` indexes them, and that its search is tuned to reach a recall of 0.9. `create_project(workdir, "frankenstein_dense")` creates the same project, because these values are the defaults.
 
 ### 2. Generating Semantic Embeddings via LSI
 
@@ -150,7 +150,7 @@ enough = search(h, query, 10; filter = (record, meta) -> meta["year"] == 2005, c
 A project may declare the fields of `meta` it expects, and the type of each one:
 
 ```julia
-h = create_project(workdir, "frankenstein_typed"; engine=DenseEngine, backend=SearchGraph,
+h = create_project(workdir, "frankenstein_typed", DenseVectors();
                    meta_schema = ["word_count" => :int64, "published" => :timestamp])
 ```
 
@@ -270,14 +270,13 @@ close_project!(h2)
 
 ---
 
-## Sparse Vector Search (`SparseEngine`)
+## Sparse Vector Search (`SparseVectors`)
 
-[`SparseEngine`](https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html#SimilaritySearchEngine.IndexEngine.SparseEngine) indexes user-provided sparse representations (`SparseItem`) of fixed dimensionality using an [`InvertedFile`](https://sadit.github.io/SimilaritySearch.jl/dev/api/) backend.
+A project created with [`SparseVectors`](https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html#SimilaritySearchEngine.IndexEngine.SparseVectors) indexes user-provided sparse representations (`SparseItem`) of fixed dimensionality using an [`InvertedFile`](https://sadit.github.io/SimilaritySearch.jl/dev/api/) backend.
 
 ### Indexing Pre-Encoded Sparse Vectors
 
 ```julia
-using SimilaritySearch: Dist
 using SparseArrays: sparsevec
 
 const DIM = 1 << 16  # 65,536 dimensions
@@ -295,8 +294,7 @@ function bag_of_words_hash(text::AbstractString)
 end
 
 # Create sparse project
-hs = create_project(workdir, "frankenstein_sparse";
-                    engine=SparseEngine, dimension=DIM, distance=Dist.NormCosine())
+hs = create_project(workdir, "frankenstein_sparse", SparseVectors(DIM, Dist.NormCosine()))
 
 # Append sparse items
 append_items!(hs, [SparseItem(bag_of_words_hash(it["text"]); doc_id=it["doc_id"], keywords=it["keywords"])
@@ -309,24 +307,20 @@ for r in hits
 end
 ```
 
-### Key Properties of `SparseEngine`
+### Key Properties of a Sparse Project
 
-- **Fixed Dimension Requirement**: The `dimension` parameter must be specified at project creation and must match the coordinate dimension of all appended `SparseVector` objects.
+- **Fixed Dimension Requirement**: The dimension is the first argument of `SparseVectors`. Every appended `SparseVector` must have this dimension.
 - **Strict Query Typing**: Queries must be provided as `SparseVector{Float32, Int32}` matching the configured dimension.
 - **Supported Distance Metrics**: Supports [`Dist.NormCosine`](https://sadit.github.io/SimilaritySearch.jl/dev/api/) over vector weights or discrete set distances ([`Dist.Sets.Jaccard`](https://sadit.github.io/SimilaritySearch.jl/dev/api/), [`Dist.Sets.Dice`](https://sadit.github.io/SimilaritySearch.jl/dev/api/)) over non-zero coordinate supports.
 
 ---
 
-## Full-Text Retrieval with BM25 (`FullTextEngine`)
+## Full-Text Retrieval with BM25 (`TextDocuments`)
 
-For text retrieval without manual vector encoding, [`FullTextEngine`](https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html#SimilaritySearchEngine.IndexEngine.FullTextEngine) integrates text normalization, vocabulary management, and inverted file scoring.
+For text retrieval without manual vector encoding, a project created with [`TextDocuments`](https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html#SimilaritySearchEngine.IndexEngine.TextDocuments) integrates text normalization, vocabulary management, and inverted file scoring. Its default index is `BM25()`.
 
 ```julia
-using TextSearch: BM25InvertedFile
-
-hb = create_project(workdir, "frankenstein_bm25"; 
-                    engine=FullTextEngine, backend=BM25InvertedFile,
-                    textmodel=FitFromCorpus())
+hb = create_project(workdir, "frankenstein_bm25", TextDocuments(FitFromCorpus()))
 
 # Stage raw text paragraphs
 append_items!(hb, [
@@ -397,9 +391,8 @@ This is for a caller that builds a query from the tokens of a long text, for exa
 Some searches are restricted to a group of documents that is known before the query: one repository, one customer, one collection. A text project can declare one `meta` field as its *partition field*. Each value of that field is a *partition*. The engine then keeps one set of posting lists per partition, next to the global posting lists.
 
 ```julia
-hp = create_project(workdir, "frankenstein_parts";
-                    engine=FullTextEngine, backend=BM25InvertedFile,
-                    textmodel=FitFromCorpus(), partition_by="volume")
+hp = create_project(workdir, "frankenstein_parts", TextDocuments(FitFromCorpus());
+                    partitions=PartitionBy("volume"))
 
 append_items!(hp, [
     TextItem(it["text"]; doc_id = it["doc_id"],
@@ -464,15 +457,14 @@ The two answer different questions, and the difference decides what to do:
 
 ## Configuring Linguistic Models (`AbstractTextModelSpec`)
 
-Text projects require an explicit linguistic model specification passed via the `textmodel` keyword:
+A text project requires an explicit linguistic model. It is the first argument of `TextDocuments`, and it has no default:
 
 ### 1. `DefaultProfile`
 
 Loads a published language profile, for example Spanish or English, and refits its vocabulary statistics against the staged corpus during the first call to `index!`. This is the recommended option when a profile for the language is installed:
 
 ```julia
-hes = create_project(workdir, "news_es"; engine=FullTextEngine, backend=BM25InvertedFile,
-                     textmodel=DefaultProfile(:es))
+hes = create_project(workdir, "news_es", TextDocuments(DefaultProfile(:es)))
 ```
 
 The project then uses the stopword lists, lemma clusters and query-expansion networks derived from a reference corpus, with term frequencies adjusted to the dataset of the project.
@@ -488,10 +480,9 @@ Fits a `TextProfile` directly from the staged corpus without an external referen
 ```julia
 using TextSearch: NormalizationConfig
 
-hf = create_project(workdir, "custom_corpus"; engine=FullTextEngine, backend=BM25InvertedFile,
-    textmodel=FitFromCorpus(TextConfig(normalization=NormalizationConfig(lc=false, del_diac=false),
-                                       language=:es);
-                            min_ndocs=3, stopwords=0.9))
+hf = create_project(workdir, "custom_corpus", TextDocuments(
+    FitFromCorpus(TextConfig(normalization=NormalizationConfig(lc=false, del_diac=false), language=:es);
+                  min_ndocs=3, stopwords=0.9)))
 ```
 
 The number of documents used for fitting is limited by `max_documents`, whose default value is 1,000.
@@ -501,8 +492,7 @@ The number of documents used for fitting is limited by `max_documents`, whose de
 Creates a text project from a `TextProfile` that was computed earlier and read from disk:
 
 ```julia
-hp = create_project(workdir, "wiki_base"; engine=FullTextEngine, backend=BM25InvertedFile,
-                    textmodel=BaseProfile(load_profile("wiki-es.zip")))
+hp = create_project(workdir, "wiki_base", TextDocuments(BaseProfile(load_profile("wiki-es.zip"))))
 ```
 
 ---
@@ -529,14 +519,14 @@ ftexplain(hes, "musica clasica")
 
 ### Correcting Misspelled Tokens: `edit_correction`
 
-The default correction folds case and diacritics, so it maps `musica` to `música`. It does not map `guerar` to `guerra`, because that correction exchanges two letters. The keyword `edit_correction=true` adds this kind of correction. A query token that is absent from the vocabulary is replaced by the only vocabulary token at Damerau-Levenshtein distance 1 from it. The Damerau-Levenshtein distance counts insertions, deletions, substitutions and exchanges of two adjacent letters. If there are two or more such tokens, the query token is not replaced.
+The default correction folds case and diacritics, so it maps `musica` to `música`. It does not map `guerar` to `guerra`, because that correction exchanges two letters. The option `edit_correction=true` of `Runtime` adds this kind of correction. A query token that is absent from the vocabulary is replaced by the only vocabulary token at Damerau-Levenshtein distance 1 from it. The Damerau-Levenshtein distance counts insertions, deletions, substitutions and exchanges of two adjacent letters. If there are two or more such tokens, the query token is not replaced.
 
 ```julia
-hes = open_project(workdir, "news_es"; edit_correction=true)
+hes = open_project(workdir, "news_es"; runtime=Runtime(edit_correction=true))
 ftexplain(hes, "guerar civil")    # ["guerar not found, searched as guerra (edit) instead"]
 ```
 
-The keyword is `false` by default, and the value is not stored with the project. Each call to `open_project` or `create_project` sets it again. `QueryPolicy(correction=:off)` disables it for one query.
+The option is `false` by default, and the value is not stored with the project. Each call to `open_project` or `create_project` sets it again with its keyword `runtime`. `QueryPolicy(correction=:off)` disables it for one query.
 
 It is disabled by default because it has a cost. The engine builds the edit index from the vocabulary each time it opens the project. Measured on 2026-09-24 over the Spanish profile (730,320 tokens):
 
@@ -550,15 +540,12 @@ It is disabled by default because it has a cost. The engine builds the edit inde
 
 ---
 
-## Full-Text Retrieval with TF-IDF (`TextInvertedFile`)
+## Full-Text Retrieval with TF-IDF (`VectorSpace`)
 
-To index text using classic TF-IDF weights and cosine distance:
+To index text using classic TF-IDF weights and cosine distance, use the index `VectorSpace()`. It builds a `TextInvertedFile`:
 
 ```julia
-using TextSearch: TextInvertedFile
-
-ht = create_project(workdir, "frankenstein_tfidf"; engine=FullTextEngine, backend=TextInvertedFile,
-                    textmodel=FitFromCorpus())
+ht = create_project(workdir, "frankenstein_tfidf", TextDocuments(FitFromCorpus(); index=VectorSpace()))
 
 append_items!(ht, [
     TextItem(it["text"]; doc_id = it["doc_id"], keywords = it["keywords"])
@@ -695,7 +682,7 @@ A test against a category matches every concrete type under it. Code written thi
 ## Summary
 
 This tutorial covered the following operations:
-1. Creation of a project with an explicit payload engine and index backend.
+1. Creation of a project from a specification of its payload and its index.
 2. Insertion with `append_items!` and construction of the graph or the vocabulary with `index!`.
 3. Nearest-neighbor queries with metadata filtering, an explicit number of candidates, and deleted records.
 5. A declared schema for `meta`, which states what a field holds and how a filter compares it.

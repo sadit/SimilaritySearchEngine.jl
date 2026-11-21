@@ -258,12 +258,12 @@ window.Quarto = {
   <li><a href="#calibrating-search-hyperparameters-calibrate" id="toc-calibrating-search-hyperparameters-calibrate" class="nav-link" data-scroll-target="#calibrating-search-hyperparameters-calibrate">9. Calibrating Search Hyperparameters: <code>calibrate!</code></a></li>
   <li><a href="#project-closure-and-reopening" id="toc-project-closure-and-reopening" class="nav-link" data-scroll-target="#project-closure-and-reopening">10. Project Closure and Reopening</a></li>
   </ul></li>
-  <li><a href="#sparse-vector-search-sparseengine" id="toc-sparse-vector-search-sparseengine" class="nav-link" data-scroll-target="#sparse-vector-search-sparseengine">Sparse Vector Search (<code>SparseEngine</code>)</a>
+  <li><a href="#sparse-vector-search-sparsevectors" id="toc-sparse-vector-search-sparsevectors" class="nav-link" data-scroll-target="#sparse-vector-search-sparsevectors">Sparse Vector Search (<code>SparseVectors</code>)</a>
   <ul class="collapse">
   <li><a href="#indexing-pre-encoded-sparse-vectors" id="toc-indexing-pre-encoded-sparse-vectors" class="nav-link" data-scroll-target="#indexing-pre-encoded-sparse-vectors">Indexing Pre-Encoded Sparse Vectors</a></li>
-  <li><a href="#key-properties-of-sparseengine" id="toc-key-properties-of-sparseengine" class="nav-link" data-scroll-target="#key-properties-of-sparseengine">Key Properties of <code>SparseEngine</code></a></li>
+  <li><a href="#key-properties-of-a-sparse-project" id="toc-key-properties-of-a-sparse-project" class="nav-link" data-scroll-target="#key-properties-of-a-sparse-project">Key Properties of a Sparse Project</a></li>
   </ul></li>
-  <li><a href="#full-text-retrieval-with-bm25-fulltextengine" id="toc-full-text-retrieval-with-bm25-fulltextengine" class="nav-link" data-scroll-target="#full-text-retrieval-with-bm25-fulltextengine">Full-Text Retrieval with BM25 (<code>FullTextEngine</code>)</a>
+  <li><a href="#full-text-retrieval-with-bm25-textdocuments" id="toc-full-text-retrieval-with-bm25-textdocuments" class="nav-link" data-scroll-target="#full-text-retrieval-with-bm25-textdocuments">Full-Text Retrieval with BM25 (<code>TextDocuments</code>)</a>
   <ul class="collapse">
   <li><a href="#filtering-text-results" id="toc-filtering-text-results" class="nav-link" data-scroll-target="#filtering-text-results">Filtering Text Results</a></li>
   <li><a href="#searching-a-list-of-tokens" id="toc-searching-a-list-of-tokens" class="nav-link" data-scroll-target="#searching-a-list-of-tokens">Searching a List of Tokens</a></li>
@@ -281,7 +281,7 @@ window.Quarto = {
   <li><a href="#explaining-corrections-ftexplain" id="toc-explaining-corrections-ftexplain" class="nav-link" data-scroll-target="#explaining-corrections-ftexplain">Explaining Corrections: <code>ftexplain</code></a></li>
   <li><a href="#correcting-misspelled-tokens-edit_correction" id="toc-correcting-misspelled-tokens-edit_correction" class="nav-link" data-scroll-target="#correcting-misspelled-tokens-edit_correction">Correcting Misspelled Tokens: <code>edit_correction</code></a></li>
   </ul></li>
-  <li><a href="#full-text-retrieval-with-tf-idf-textinvertedfile" id="toc-full-text-retrieval-with-tf-idf-textinvertedfile" class="nav-link" data-scroll-target="#full-text-retrieval-with-tf-idf-textinvertedfile">Full-Text Retrieval with TF-IDF (<code>TextInvertedFile</code>)</a></li>
+  <li><a href="#full-text-retrieval-with-tf-idf-vectorspace" id="toc-full-text-retrieval-with-tf-idf-vectorspace" class="nav-link" data-scroll-target="#full-text-retrieval-with-tf-idf-vectorspace">Full-Text Retrieval with TF-IDF (<code>VectorSpace</code>)</a></li>
   <li><a href="#whole-dataset-metric-operations" id="toc-whole-dataset-metric-operations" class="nav-link" data-scroll-target="#whole-dataset-metric-operations">Whole-Dataset Metric Operations</a>
   <ul class="collapse">
   <li><a href="#all-pairs-k-nearest-neighbors-allknn" id="toc-all-pairs-k-nearest-neighbors-allknn" class="nav-link" data-scroll-target="#all-pairs-k-nearest-neighbors-allknn">1. All-Pairs <span class="math inline">\(k\)</span>-Nearest Neighbors: <code>allknn</code></a></li>
@@ -349,8 +349,8 @@ window.Quarto = {
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="im">using</span> <span class="bu">SimilaritySearchEngine</span></span>
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>workdir <span class="op">=</span> <span class="fu">mktempdir</span>()</span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>h <span class="op">=</span> <span class="fu">create_project</span>(workdir, <span class="st">"frankenstein_dense"</span>; engine<span class="op">=</span>DenseEngine, backend<span class="op">=</span>SearchGraph, minrecall<span class="op">=</span><span class="fl">0.9</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>The <code>engine</code> keyword specifies the payload domain (<code>DenseEngine</code>), while <code>backend</code> defines the indexing algorithm (<code>SearchGraph</code>).</p>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>h <span class="op">=</span> <span class="fu">create_project</span>(workdir, <span class="st">"frankenstein_dense"</span>, <span class="fu">DenseVectors</span>(Dist.<span class="fu">SqL2</span>(); index<span class="op">=</span><span class="fu">Graph</span>(minrecall<span class="op">=</span><span class="fl">0.9</span>)))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>The third argument is the project specification. <code>DenseVectors</code> says that the project holds dense vectors, compared with <code>Dist.SqL2()</code>. <code>index=Graph(minrecall=0.9)</code> says that a <code>SearchGraph</code> indexes them, and that its search is tuned to reach a recall of 0.9. <code>create_project(workdir, "frankenstein_dense")</code> creates the same project, because these values are the defaults.</p>
 </section>
 <section id="generating-semantic-embeddings-via-lsi" class="level3">
 <h3 class="anchored" data-anchor-id="generating-semantic-embeddings-via-lsi">2. Generating Semantic Embeddings via LSI</h3>
@@ -402,7 +402,7 @@ window.Quarto = {
 <section id="declaring-what-meta-holds" class="level3">
 <h3 class="anchored" data-anchor-id="declaring-what-meta-holds">6. Declaring What <code>meta</code> Holds</h3>
 <p>A project may declare the fields of <code>meta</code> it expects, and the type of each one:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb11"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>h <span class="op">=</span> <span class="fu">create_project</span>(workdir, <span class="st">"frankenstein_typed"</span>; engine<span class="op">=</span>DenseEngine, backend<span class="op">=</span>SearchGraph,</span>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb11"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>h <span class="op">=</span> <span class="fu">create_project</span>(workdir, <span class="st">"frankenstein_typed"</span>, <span class="fu">DenseVectors</span>();</span>
 <span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>                   meta_schema <span class="op">=</span> [<span class="st">"word_count"</span> <span class="op">=&gt;</span> <span class="op">:</span>int64, <span class="st">"published"</span> <span class="op">=&gt;</span> <span class="op">:</span>timestamp])</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p><code>append_items!</code> then checks those fields. A value that is not the declared type is rejected with <code>PayloadMismatch</code>; a value that converts without changing is converted, which is what turns the <code>2024.0</code> of a JSON document into the integer <code>2024</code>. Fields that were not declared are stored as they arrive, so declaring is a decision about a few fields rather than about the whole of <code>meta</code>.</p>
 <p>What this buys, since the declared fields are not indexed, is that a comparison happens in the declared type. A field declared <code>:timestamp</code> is compared as an instant:</p>
@@ -472,77 +472,71 @@ window.Quarto = {
 <hr>
 </section>
 </section>
-<section id="sparse-vector-search-sparseengine" class="level2">
-<h2 class="anchored" data-anchor-id="sparse-vector-search-sparseengine">Sparse Vector Search (<code>SparseEngine</code>)</h2>
-<p><a href="https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html#SimilaritySearchEngine.IndexEngine.SparseEngine"><code>SparseEngine</code></a> indexes user-provided sparse representations (<code>SparseItem</code>) of fixed dimensionality using an <a href="https://sadit.github.io/SimilaritySearch.jl/dev/api/"><code>InvertedFile</code></a> backend.</p>
+<section id="sparse-vector-search-sparsevectors" class="level2">
+<h2 class="anchored" data-anchor-id="sparse-vector-search-sparsevectors">Sparse Vector Search (<code>SparseVectors</code>)</h2>
+<p>A project created with <a href="https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html#SimilaritySearchEngine.IndexEngine.SparseVectors"><code>SparseVectors</code></a> indexes user-provided sparse representations (<code>SparseItem</code>) of fixed dimensionality using an <a href="https://sadit.github.io/SimilaritySearch.jl/dev/api/"><code>InvertedFile</code></a> backend.</p>
 <section id="indexing-pre-encoded-sparse-vectors" class="level3">
 <h3 class="anchored" data-anchor-id="indexing-pre-encoded-sparse-vectors">Indexing Pre-Encoded Sparse Vectors</h3>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb21"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="im">using</span> <span class="bu">SimilaritySearch</span>: Dist</span>
-<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a><span class="im">using</span> <span class="bu">SparseArrays</span>: sparsevec</span>
-<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> DIM <span class="op">=</span> <span class="fl">1</span> <span class="op">&lt;&lt;</span> <span class="fl">16</span>  <span class="co"># 65,536 dimensions</span></span>
-<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a><span class="co"># Example sparse feature encoder (hashed token frequencies)</span></span>
-<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">bag_of_words_hash</span>(text<span class="op">::</span><span class="dt">AbstractString</span>)</span>
-<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>    counts <span class="op">=</span> <span class="fu">Dict</span><span class="dt">{Int32, Float32}</span>()</span>
-<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> w <span class="kw">in</span> <span class="fu">split</span>(<span class="fu">lowercase</span>(text), <span class="st">r"</span><span class="ch">[^</span><span class="sc">\p</span><span class="st">{L}</span><span class="sc">\p</span><span class="st">{N}</span><span class="ch">]</span><span class="sc">+</span><span class="st">"</span>; keepempty<span class="op">=</span><span class="cn">false</span>)</span>
-<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a>        k <span class="op">=</span> <span class="fu">Int32</span>(<span class="fu">mod</span>(<span class="fu">hash</span>(w), DIM) <span class="op">+</span> <span class="fl">1</span>)</span>
-<span id="cb21-11"><a href="#cb21-11" aria-hidden="true" tabindex="-1"></a>        counts[k] <span class="op">=</span> <span class="fu">get</span>(counts, k, <span class="fl">0.0f0</span>) <span class="op">+</span> <span class="fl">1.0f0</span></span>
-<span id="cb21-12"><a href="#cb21-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">end</span></span>
-<span id="cb21-13"><a href="#cb21-13" aria-hidden="true" tabindex="-1"></a>    ind <span class="op">=</span> <span class="fu">sort!</span>(<span class="fu">collect</span>(<span class="fu">keys</span>(counts)))</span>
-<span id="cb21-14"><a href="#cb21-14" aria-hidden="true" tabindex="-1"></a>    val <span class="op">=</span> <span class="dt">Float32</span>[counts[i] for i <span class="kw">in</span> ind]</span>
-<span id="cb21-15"><a href="#cb21-15" aria-hidden="true" tabindex="-1"></a>    <span class="fu">sparsevec</span>(ind, val <span class="op">./</span> <span class="fu">sqrt</span>(<span class="fu">sum</span>(abs2, val)), DIM)  <span class="co"># Unit normalization for NormCosine</span></span>
-<span id="cb21-16"><a href="#cb21-16" aria-hidden="true" tabindex="-1"></a><span class="kw">end</span></span>
-<span id="cb21-17"><a href="#cb21-17" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-18"><a href="#cb21-18" aria-hidden="true" tabindex="-1"></a><span class="co"># Create sparse project</span></span>
-<span id="cb21-19"><a href="#cb21-19" aria-hidden="true" tabindex="-1"></a>hs <span class="op">=</span> <span class="fu">create_project</span>(workdir, <span class="st">"frankenstein_sparse"</span>;</span>
-<span id="cb21-20"><a href="#cb21-20" aria-hidden="true" tabindex="-1"></a>                    engine<span class="op">=</span>SparseEngine, dimension<span class="op">=</span>DIM, distance<span class="op">=</span>Dist.<span class="fu">NormCosine</span>())</span>
-<span id="cb21-21"><a href="#cb21-21" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-22"><a href="#cb21-22" aria-hidden="true" tabindex="-1"></a><span class="co"># Append sparse items</span></span>
-<span id="cb21-23"><a href="#cb21-23" aria-hidden="true" tabindex="-1"></a><span class="fu">append_items!</span>(hs, [<span class="fu">SparseItem</span>(<span class="fu">bag_of_words_hash</span>(it[<span class="st">"text"</span>]); doc_id<span class="op">=</span>it[<span class="st">"doc_id"</span>], keywords<span class="op">=</span>it[<span class="st">"keywords"</span>])</span>
-<span id="cb21-24"><a href="#cb21-24" aria-hidden="true" tabindex="-1"></a>                   for it <span class="kw">in</span> items])</span>
-<span id="cb21-25"><a href="#cb21-25" aria-hidden="true" tabindex="-1"></a><span class="fu">index!</span>(hs)  <span class="co"># Idempotent no-op for InvertedFile; items are indexed during append</span></span>
-<span id="cb21-26"><a href="#cb21-26" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-27"><a href="#cb21-27" aria-hidden="true" tabindex="-1"></a>hits <span class="op">=</span> <span class="fu">search</span>(hs, <span class="fu">bag_of_words_hash</span>(<span class="st">"the monster and its creator"</span>), <span class="fl">5</span>)</span>
-<span id="cb21-28"><a href="#cb21-28" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> r <span class="kw">in</span> hits</span>
-<span id="cb21-29"><a href="#cb21-29" aria-hidden="true" tabindex="-1"></a>    <span class="fu">println</span>(r.doc_id, <span class="st">" =&gt; Distance: "</span>, <span class="fu">round</span>(r.distance; digits<span class="op">=</span><span class="fl">4</span>))</span>
-<span id="cb21-30"><a href="#cb21-30" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb21"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="im">using</span> <span class="bu">SparseArrays</span>: sparsevec</span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> DIM <span class="op">=</span> <span class="fl">1</span> <span class="op">&lt;&lt;</span> <span class="fl">16</span>  <span class="co"># 65,536 dimensions</span></span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Example sparse feature encoder (hashed token frequencies)</span></span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">bag_of_words_hash</span>(text<span class="op">::</span><span class="dt">AbstractString</span>)</span>
+<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a>    counts <span class="op">=</span> <span class="fu">Dict</span><span class="dt">{Int32, Float32}</span>()</span>
+<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> w <span class="kw">in</span> <span class="fu">split</span>(<span class="fu">lowercase</span>(text), <span class="st">r"</span><span class="ch">[^</span><span class="sc">\p</span><span class="st">{L}</span><span class="sc">\p</span><span class="st">{N}</span><span class="ch">]</span><span class="sc">+</span><span class="st">"</span>; keepempty<span class="op">=</span><span class="cn">false</span>)</span>
+<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a>        k <span class="op">=</span> <span class="fu">Int32</span>(<span class="fu">mod</span>(<span class="fu">hash</span>(w), DIM) <span class="op">+</span> <span class="fl">1</span>)</span>
+<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a>        counts[k] <span class="op">=</span> <span class="fu">get</span>(counts, k, <span class="fl">0.0f0</span>) <span class="op">+</span> <span class="fl">1.0f0</span></span>
+<span id="cb21-11"><a href="#cb21-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">end</span></span>
+<span id="cb21-12"><a href="#cb21-12" aria-hidden="true" tabindex="-1"></a>    ind <span class="op">=</span> <span class="fu">sort!</span>(<span class="fu">collect</span>(<span class="fu">keys</span>(counts)))</span>
+<span id="cb21-13"><a href="#cb21-13" aria-hidden="true" tabindex="-1"></a>    val <span class="op">=</span> <span class="dt">Float32</span>[counts[i] for i <span class="kw">in</span> ind]</span>
+<span id="cb21-14"><a href="#cb21-14" aria-hidden="true" tabindex="-1"></a>    <span class="fu">sparsevec</span>(ind, val <span class="op">./</span> <span class="fu">sqrt</span>(<span class="fu">sum</span>(abs2, val)), DIM)  <span class="co"># Unit normalization for NormCosine</span></span>
+<span id="cb21-15"><a href="#cb21-15" aria-hidden="true" tabindex="-1"></a><span class="kw">end</span></span>
+<span id="cb21-16"><a href="#cb21-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-17"><a href="#cb21-17" aria-hidden="true" tabindex="-1"></a><span class="co"># Create sparse project</span></span>
+<span id="cb21-18"><a href="#cb21-18" aria-hidden="true" tabindex="-1"></a>hs <span class="op">=</span> <span class="fu">create_project</span>(workdir, <span class="st">"frankenstein_sparse"</span>, <span class="fu">SparseVectors</span>(DIM, Dist.<span class="fu">NormCosine</span>()))</span>
+<span id="cb21-19"><a href="#cb21-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-20"><a href="#cb21-20" aria-hidden="true" tabindex="-1"></a><span class="co"># Append sparse items</span></span>
+<span id="cb21-21"><a href="#cb21-21" aria-hidden="true" tabindex="-1"></a><span class="fu">append_items!</span>(hs, [<span class="fu">SparseItem</span>(<span class="fu">bag_of_words_hash</span>(it[<span class="st">"text"</span>]); doc_id<span class="op">=</span>it[<span class="st">"doc_id"</span>], keywords<span class="op">=</span>it[<span class="st">"keywords"</span>])</span>
+<span id="cb21-22"><a href="#cb21-22" aria-hidden="true" tabindex="-1"></a>                   for it <span class="kw">in</span> items])</span>
+<span id="cb21-23"><a href="#cb21-23" aria-hidden="true" tabindex="-1"></a><span class="fu">index!</span>(hs)  <span class="co"># Idempotent no-op for InvertedFile; items are indexed during append</span></span>
+<span id="cb21-24"><a href="#cb21-24" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-25"><a href="#cb21-25" aria-hidden="true" tabindex="-1"></a>hits <span class="op">=</span> <span class="fu">search</span>(hs, <span class="fu">bag_of_words_hash</span>(<span class="st">"the monster and its creator"</span>), <span class="fl">5</span>)</span>
+<span id="cb21-26"><a href="#cb21-26" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> r <span class="kw">in</span> hits</span>
+<span id="cb21-27"><a href="#cb21-27" aria-hidden="true" tabindex="-1"></a>    <span class="fu">println</span>(r.doc_id, <span class="st">" =&gt; Distance: "</span>, <span class="fu">round</span>(r.distance; digits<span class="op">=</span><span class="fl">4</span>))</span>
+<span id="cb21-28"><a href="#cb21-28" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </section>
-<section id="key-properties-of-sparseengine" class="level3">
-<h3 class="anchored" data-anchor-id="key-properties-of-sparseengine">Key Properties of <code>SparseEngine</code></h3>
+<section id="key-properties-of-a-sparse-project" class="level3">
+<h3 class="anchored" data-anchor-id="key-properties-of-a-sparse-project">Key Properties of a Sparse Project</h3>
 <ul>
-<li><strong>Fixed Dimension Requirement</strong>: The <code>dimension</code> parameter must be specified at project creation and must match the coordinate dimension of all appended <code>SparseVector</code> objects.</li>
+<li><strong>Fixed Dimension Requirement</strong>: The dimension is the first argument of <code>SparseVectors</code>. Every appended <code>SparseVector</code> must have this dimension.</li>
 <li><strong>Strict Query Typing</strong>: Queries must be provided as <code>SparseVector{Float32, Int32}</code> matching the configured dimension.</li>
 <li><strong>Supported Distance Metrics</strong>: Supports <a href="https://sadit.github.io/SimilaritySearch.jl/dev/api/"><code>Dist.NormCosine</code></a> over vector weights or discrete set distances (<a href="https://sadit.github.io/SimilaritySearch.jl/dev/api/"><code>Dist.Sets.Jaccard</code></a>, <a href="https://sadit.github.io/SimilaritySearch.jl/dev/api/"><code>Dist.Sets.Dice</code></a>) over non-zero coordinate supports.</li>
 </ul>
 <hr>
 </section>
 </section>
-<section id="full-text-retrieval-with-bm25-fulltextengine" class="level2">
-<h2 class="anchored" data-anchor-id="full-text-retrieval-with-bm25-fulltextengine">Full-Text Retrieval with BM25 (<code>FullTextEngine</code>)</h2>
-<p>For text retrieval without manual vector encoding, <a href="https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html#SimilaritySearchEngine.IndexEngine.FullTextEngine"><code>FullTextEngine</code></a> integrates text normalization, vocabulary management, and inverted file scoring.</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb22"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="im">using</span> <span class="bu">TextSearch</span>: BM25InvertedFile</span>
+<section id="full-text-retrieval-with-bm25-textdocuments" class="level2">
+<h2 class="anchored" data-anchor-id="full-text-retrieval-with-bm25-textdocuments">Full-Text Retrieval with BM25 (<code>TextDocuments</code>)</h2>
+<p>For text retrieval without manual vector encoding, a project created with <a href="https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html#SimilaritySearchEngine.IndexEngine.TextDocuments"><code>TextDocuments</code></a> integrates text normalization, vocabulary management, and inverted file scoring. Its default index is <code>BM25()</code>.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb22"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a>hb <span class="op">=</span> <span class="fu">create_project</span>(workdir, <span class="st">"frankenstein_bm25"</span>, <span class="fu">TextDocuments</span>(<span class="fu">FitFromCorpus</span>()))</span>
 <span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a>hb <span class="op">=</span> <span class="fu">create_project</span>(workdir, <span class="st">"frankenstein_bm25"</span>; </span>
-<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a>                    engine<span class="op">=</span>FullTextEngine, backend<span class="op">=</span>BM25InvertedFile,</span>
-<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a>                    textmodel<span class="op">=</span><span class="fu">FitFromCorpus</span>())</span>
-<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a><span class="co"># Stage raw text paragraphs</span></span>
-<span id="cb22-8"><a href="#cb22-8" aria-hidden="true" tabindex="-1"></a><span class="fu">append_items!</span>(hb, [</span>
-<span id="cb22-9"><a href="#cb22-9" aria-hidden="true" tabindex="-1"></a>    <span class="fu">TextItem</span>(it[<span class="st">"text"</span>]; doc_id <span class="op">=</span> it[<span class="st">"doc_id"</span>], keywords <span class="op">=</span> it[<span class="st">"keywords"</span>])</span>
-<span id="cb22-10"><a href="#cb22-10" aria-hidden="true" tabindex="-1"></a>    for it <span class="kw">in</span> items[<span class="fl">1</span><span class="op">:</span><span class="fl">200</span>]</span>
-<span id="cb22-11"><a href="#cb22-11" aria-hidden="true" tabindex="-1"></a>])</span>
-<span id="cb22-12"><a href="#cb22-12" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb22-13"><a href="#cb22-13" aria-hidden="true" tabindex="-1"></a><span class="co"># First invocation fits the TextProfile and builds the BM25 inverted index</span></span>
-<span id="cb22-14"><a href="#cb22-14" aria-hidden="true" tabindex="-1"></a><span class="fu">index!</span>(hb)</span>
-<span id="cb22-15"><a href="#cb22-15" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb22-16"><a href="#cb22-16" aria-hidden="true" tabindex="-1"></a><span class="co"># Search using natural language queries</span></span>
-<span id="cb22-17"><a href="#cb22-17" aria-hidden="true" tabindex="-1"></a>hits <span class="op">=</span> <span class="fu">ftsearch</span>(hb, <span class="st">"monster creature fear"</span>, <span class="fl">5</span>)</span>
-<span id="cb22-18"><a href="#cb22-18" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> r <span class="kw">in</span> hits</span>
-<span id="cb22-19"><a href="#cb22-19" aria-hidden="true" tabindex="-1"></a>    <span class="fu">println</span>(r.doc_id, <span class="st">" =&gt; Score: "</span>, r.distance)</span>
-<span id="cb22-20"><a href="#cb22-20" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span>
-<span id="cb22-21"><a href="#cb22-21" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb22-22"><a href="#cb22-22" aria-hidden="true" tabindex="-1"></a><span class="fu">close_project!</span>(hb)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a><span class="co"># Stage raw text paragraphs</span></span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a><span class="fu">append_items!</span>(hb, [</span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a>    <span class="fu">TextItem</span>(it[<span class="st">"text"</span>]; doc_id <span class="op">=</span> it[<span class="st">"doc_id"</span>], keywords <span class="op">=</span> it[<span class="st">"keywords"</span>])</span>
+<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a>    for it <span class="kw">in</span> items[<span class="fl">1</span><span class="op">:</span><span class="fl">200</span>]</span>
+<span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a>])</span>
+<span id="cb22-8"><a href="#cb22-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-9"><a href="#cb22-9" aria-hidden="true" tabindex="-1"></a><span class="co"># First invocation fits the TextProfile and builds the BM25 inverted index</span></span>
+<span id="cb22-10"><a href="#cb22-10" aria-hidden="true" tabindex="-1"></a><span class="fu">index!</span>(hb)</span>
+<span id="cb22-11"><a href="#cb22-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-12"><a href="#cb22-12" aria-hidden="true" tabindex="-1"></a><span class="co"># Search using natural language queries</span></span>
+<span id="cb22-13"><a href="#cb22-13" aria-hidden="true" tabindex="-1"></a>hits <span class="op">=</span> <span class="fu">ftsearch</span>(hb, <span class="st">"monster creature fear"</span>, <span class="fl">5</span>)</span>
+<span id="cb22-14"><a href="#cb22-14" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> r <span class="kw">in</span> hits</span>
+<span id="cb22-15"><a href="#cb22-15" aria-hidden="true" tabindex="-1"></a>    <span class="fu">println</span>(r.doc_id, <span class="st">" =&gt; Score: "</span>, r.distance)</span>
+<span id="cb22-16"><a href="#cb22-16" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span>
+<span id="cb22-17"><a href="#cb22-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-18"><a href="#cb22-18" aria-hidden="true" tabindex="-1"></a><span class="fu">close_project!</span>(hb)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p>A text project stores the inverted index, not the objects that were indexed, so opening it assembles the index instead of computing it again: 1.4 s against 20.4 s over 265,000 Project Gutenberg paragraphs. This applies to both text backends, BM25 and the weighted <code>TextInvertedFile</code>:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb23"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a>hb2 <span class="op">=</span> <span class="fu">open_project</span>(workdir, <span class="st">"frankenstein_bm25"</span>)</span>
 <span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a><span class="fu">ftsearch</span>(hb2, <span class="st">"monster creature fear"</span>, <span class="fl">5</span>)     <span class="co"># same answers, no reindexing</span></span>
@@ -577,20 +571,19 @@ window.Quarto = {
 <section id="searching-one-partition" class="level2">
 <h2 class="anchored" data-anchor-id="searching-one-partition">Searching One Partition</h2>
 <p>Some searches are restricted to a group of documents that is known before the query: one repository, one customer, one collection. A text project can declare one <code>meta</code> field as its <em>partition field</em>. Each value of that field is a <em>partition</em>. The engine then keeps one set of posting lists per partition, next to the global posting lists.</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb26"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a>hp <span class="op">=</span> <span class="fu">create_project</span>(workdir, <span class="st">"frankenstein_parts"</span>;</span>
-<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a>                    engine<span class="op">=</span>FullTextEngine, backend<span class="op">=</span>BM25InvertedFile,</span>
-<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a>                    textmodel<span class="op">=</span><span class="fu">FitFromCorpus</span>(), partition_by<span class="op">=</span><span class="st">"volume"</span>)</span>
-<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a><span class="fu">append_items!</span>(hp, [</span>
-<span id="cb26-6"><a href="#cb26-6" aria-hidden="true" tabindex="-1"></a>    <span class="fu">TextItem</span>(it[<span class="st">"text"</span>]; doc_id <span class="op">=</span> it[<span class="st">"doc_id"</span>],</span>
-<span id="cb26-7"><a href="#cb26-7" aria-hidden="true" tabindex="-1"></a>             meta <span class="op">=</span> <span class="fu">Dict</span><span class="dt">{String,Any}</span>(<span class="st">"volume"</span> <span class="op">=&gt;</span> i <span class="op">&lt;=</span> <span class="fl">100</span> ? <span class="st">"first"</span> <span class="op">:</span> <span class="st">"second"</span>))</span>
-<span id="cb26-8"><a href="#cb26-8" aria-hidden="true" tabindex="-1"></a>    for (i, it) <span class="kw">in</span> <span class="fu">enumerate</span>(items[<span class="fl">1</span><span class="op">:</span><span class="fl">200</span>])</span>
-<span id="cb26-9"><a href="#cb26-9" aria-hidden="true" tabindex="-1"></a>])</span>
-<span id="cb26-10"><a href="#cb26-10" aria-hidden="true" tabindex="-1"></a><span class="fu">index!</span>(hp)</span>
-<span id="cb26-11"><a href="#cb26-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb26-12"><a href="#cb26-12" aria-hidden="true" tabindex="-1"></a><span class="fu">ftsearch</span>(hp, <span class="st">"monster creature fear"</span>, <span class="fl">5</span>)                       <span class="co"># all 200 paragraphs</span></span>
-<span id="cb26-13"><a href="#cb26-13" aria-hidden="true" tabindex="-1"></a><span class="fu">ftsearch</span>(hp, <span class="st">"monster creature fear"</span>, <span class="fl">5</span>; partition<span class="op">=</span><span class="st">"second"</span>)   <span class="co"># paragraphs 101 to 200</span></span>
-<span id="cb26-14"><a href="#cb26-14" aria-hidden="true" tabindex="-1"></a><span class="fu">partitions</span>(hp)    <span class="co"># [(name = "first", items = 100), (name = "second", items = 100)]</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb26"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a>hp <span class="op">=</span> <span class="fu">create_project</span>(workdir, <span class="st">"frankenstein_parts"</span>, <span class="fu">TextDocuments</span>(<span class="fu">FitFromCorpus</span>());</span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a>                    partitions<span class="op">=</span><span class="fu">PartitionBy</span>(<span class="st">"volume"</span>))</span>
+<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a><span class="fu">append_items!</span>(hp, [</span>
+<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a>    <span class="fu">TextItem</span>(it[<span class="st">"text"</span>]; doc_id <span class="op">=</span> it[<span class="st">"doc_id"</span>],</span>
+<span id="cb26-6"><a href="#cb26-6" aria-hidden="true" tabindex="-1"></a>             meta <span class="op">=</span> <span class="fu">Dict</span><span class="dt">{String,Any}</span>(<span class="st">"volume"</span> <span class="op">=&gt;</span> i <span class="op">&lt;=</span> <span class="fl">100</span> ? <span class="st">"first"</span> <span class="op">:</span> <span class="st">"second"</span>))</span>
+<span id="cb26-7"><a href="#cb26-7" aria-hidden="true" tabindex="-1"></a>    for (i, it) <span class="kw">in</span> <span class="fu">enumerate</span>(items[<span class="fl">1</span><span class="op">:</span><span class="fl">200</span>])</span>
+<span id="cb26-8"><a href="#cb26-8" aria-hidden="true" tabindex="-1"></a>])</span>
+<span id="cb26-9"><a href="#cb26-9" aria-hidden="true" tabindex="-1"></a><span class="fu">index!</span>(hp)</span>
+<span id="cb26-10"><a href="#cb26-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb26-11"><a href="#cb26-11" aria-hidden="true" tabindex="-1"></a><span class="fu">ftsearch</span>(hp, <span class="st">"monster creature fear"</span>, <span class="fl">5</span>)                       <span class="co"># all 200 paragraphs</span></span>
+<span id="cb26-12"><a href="#cb26-12" aria-hidden="true" tabindex="-1"></a><span class="fu">ftsearch</span>(hp, <span class="st">"monster creature fear"</span>, <span class="fl">5</span>; partition<span class="op">=</span><span class="st">"second"</span>)   <span class="co"># paragraphs 101 to 200</span></span>
+<span id="cb26-13"><a href="#cb26-13" aria-hidden="true" tabindex="-1"></a><span class="fu">partitions</span>(hp)    <span class="co"># [(name = "first", items = 100), (name = "second", items = 100)]</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p>A search with <code>partition</code> reads only the posting lists of that partition, so it evaluates only the documents of that partition. It returns the same identifiers, in the same order and with the same scores, as the global search restricted to the partition. The scores do not change because the partition lists share the vocabulary, the scoring statistics and the document vectors of the global index. The profile fixes those values when it is fitted, and documents indexed later do not change them.</p>
 <p>The value of the partition field is a non-empty string or a list of non-empty strings. A list puts the item in each partition it names. An item without the field belongs to no partition, and only the global search finds it. If <code>meta_schema</code> declares the field, it must declare it <code>:string</code>, which allows one value per item.</p>
 <p>Errors are raised, not returned as empty results:</p>
@@ -622,12 +615,11 @@ window.Quarto = {
 </section>
 <section id="configuring-linguistic-models-abstracttextmodelspec" class="level2">
 <h2 class="anchored" data-anchor-id="configuring-linguistic-models-abstracttextmodelspec">Configuring Linguistic Models (<code>AbstractTextModelSpec</code>)</h2>
-<p>Text projects require an explicit linguistic model specification passed via the <code>textmodel</code> keyword:</p>
+<p>A text project requires an explicit linguistic model. It is the first argument of <code>TextDocuments</code>, and it has no default:</p>
 <section id="defaultprofile" class="level3">
 <h3 class="anchored" data-anchor-id="defaultprofile">1. <code>DefaultProfile</code></h3>
 <p>Loads a published language profile, for example Spanish or English, and refits its vocabulary statistics against the staged corpus during the first call to <code>index!</code>. This is the recommended option when a profile for the language is installed:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb29"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a>hes <span class="op">=</span> <span class="fu">create_project</span>(workdir, <span class="st">"news_es"</span>; engine<span class="op">=</span>FullTextEngine, backend<span class="op">=</span>BM25InvertedFile,</span>
-<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a>                     textmodel<span class="op">=</span><span class="fu">DefaultProfile</span>(<span class="op">:</span>es))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb29"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a>hes <span class="op">=</span> <span class="fu">create_project</span>(workdir, <span class="st">"news_es"</span>, <span class="fu">TextDocuments</span>(<span class="fu">DefaultProfile</span>(<span class="op">:</span>es)))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p>The project then uses the stopword lists, lemma clusters and query-expansion networks derived from a reference corpus, with term frequencies adjusted to the dataset of the project.</p>
 <p>The refit keeps most of the vocabulary of the profile. Measured on 2026-09-24 with TextSearch 1.2.1, the Spanish profile holds 730,320 tokens. A refit against 962 paragraphs of Spanish books kept 591,494 of them, and 9,382 of those occur in the paragraphs. A term that the project has not stored yet is therefore usually searchable when a later batch adds it.</p>
 <p>The profiles are installed under <code>~/.textsearch/profiles</code>. TextSearch 1.2 reads profile format 1.1 only. A profile installed with an earlier version of TextSearch is in format 1.0 and does not load. Install it again with <code>download_profile("es"; force=true)</code>.</p>
@@ -637,17 +629,15 @@ window.Quarto = {
 <p>Fits a <code>TextProfile</code> directly from the staged corpus without an external reference profile:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb30"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="im">using</span> <span class="bu">TextSearch</span>: NormalizationConfig</span>
 <span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a>hf <span class="op">=</span> <span class="fu">create_project</span>(workdir, <span class="st">"custom_corpus"</span>; engine<span class="op">=</span>FullTextEngine, backend<span class="op">=</span>BM25InvertedFile,</span>
-<span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a>    textmodel<span class="op">=</span><span class="fu">FitFromCorpus</span>(<span class="fu">TextConfig</span>(normalization<span class="op">=</span><span class="fu">NormalizationConfig</span>(lc<span class="op">=</span><span class="cn">false</span>, del_diac<span class="op">=</span><span class="cn">false</span>),</span>
-<span id="cb30-5"><a href="#cb30-5" aria-hidden="true" tabindex="-1"></a>                                       language<span class="op">=:</span>es);</span>
-<span id="cb30-6"><a href="#cb30-6" aria-hidden="true" tabindex="-1"></a>                            min_ndocs<span class="op">=</span><span class="fl">3</span>, stopwords<span class="op">=</span><span class="fl">0.9</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a>hf <span class="op">=</span> <span class="fu">create_project</span>(workdir, <span class="st">"custom_corpus"</span>, <span class="fu">TextDocuments</span>(</span>
+<span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a>    <span class="fu">FitFromCorpus</span>(<span class="fu">TextConfig</span>(normalization<span class="op">=</span><span class="fu">NormalizationConfig</span>(lc<span class="op">=</span><span class="cn">false</span>, del_diac<span class="op">=</span><span class="cn">false</span>), language<span class="op">=:</span>es);</span>
+<span id="cb30-5"><a href="#cb30-5" aria-hidden="true" tabindex="-1"></a>                  min_ndocs<span class="op">=</span><span class="fl">3</span>, stopwords<span class="op">=</span><span class="fl">0.9</span>)))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p>The number of documents used for fitting is limited by <code>max_documents</code>, whose default value is 1,000.</p>
 </section>
 <section id="baseprofile" class="level3">
 <h3 class="anchored" data-anchor-id="baseprofile">3. <code>BaseProfile</code></h3>
 <p>Creates a text project from a <code>TextProfile</code> that was computed earlier and read from disk:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb31"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a>hp <span class="op">=</span> <span class="fu">create_project</span>(workdir, <span class="st">"wiki_base"</span>; engine<span class="op">=</span>FullTextEngine, backend<span class="op">=</span>BM25InvertedFile,</span>
-<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>                    textmodel<span class="op">=</span><span class="fu">BaseProfile</span>(<span class="fu">load_profile</span>(<span class="st">"wiki-es.zip"</span>)))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb31"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a>hp <span class="op">=</span> <span class="fu">create_project</span>(workdir, <span class="st">"wiki_base"</span>, <span class="fu">TextDocuments</span>(<span class="fu">BaseProfile</span>(<span class="fu">load_profile</span>(<span class="st">"wiki-es.zip"</span>))))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <hr>
 </section>
 </section>
@@ -666,10 +656,10 @@ window.Quarto = {
 </section>
 <section id="correcting-misspelled-tokens-edit_correction" class="level3">
 <h3 class="anchored" data-anchor-id="correcting-misspelled-tokens-edit_correction">Correcting Misspelled Tokens: <code>edit_correction</code></h3>
-<p>The default correction folds case and diacritics, so it maps <code>musica</code> to <code>música</code>. It does not map <code>guerar</code> to <code>guerra</code>, because that correction exchanges two letters. The keyword <code>edit_correction=true</code> adds this kind of correction. A query token that is absent from the vocabulary is replaced by the only vocabulary token at Damerau-Levenshtein distance 1 from it. The Damerau-Levenshtein distance counts insertions, deletions, substitutions and exchanges of two adjacent letters. If there are two or more such tokens, the query token is not replaced.</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb34"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a>hes <span class="op">=</span> <span class="fu">open_project</span>(workdir, <span class="st">"news_es"</span>; edit_correction<span class="op">=</span><span class="cn">true</span>)</span>
+<p>The default correction folds case and diacritics, so it maps <code>musica</code> to <code>música</code>. It does not map <code>guerar</code> to <code>guerra</code>, because that correction exchanges two letters. The option <code>edit_correction=true</code> of <code>Runtime</code> adds this kind of correction. A query token that is absent from the vocabulary is replaced by the only vocabulary token at Damerau-Levenshtein distance 1 from it. The Damerau-Levenshtein distance counts insertions, deletions, substitutions and exchanges of two adjacent letters. If there are two or more such tokens, the query token is not replaced.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb34"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a>hes <span class="op">=</span> <span class="fu">open_project</span>(workdir, <span class="st">"news_es"</span>; runtime<span class="op">=</span><span class="fu">Runtime</span>(edit_correction<span class="op">=</span><span class="cn">true</span>))</span>
 <span id="cb34-2"><a href="#cb34-2" aria-hidden="true" tabindex="-1"></a><span class="fu">ftexplain</span>(hes, <span class="st">"guerar civil"</span>)    <span class="co"># ["guerar not found, searched as guerra (edit) instead"]</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>The keyword is <code>false</code> by default, and the value is not stored with the project. Each call to <code>open_project</code> or <code>create_project</code> sets it again. <code>QueryPolicy(correction=:off)</code> disables it for one query.</p>
+<p>The option is <code>false</code> by default, and the value is not stored with the project. Each call to <code>open_project</code> or <code>create_project</code> sets it again with its keyword <code>runtime</code>. <code>QueryPolicy(correction=:off)</code> disables it for one query.</p>
 <p>It is disabled by default because it has a cost. The engine builds the edit index from the vocabulary each time it opens the project. Measured on 2026-09-24 over the Spanish profile (730,320 tokens):</p>
 <table class="caption-top table">
 <colgroup>
@@ -715,22 +705,19 @@ window.Quarto = {
 <hr>
 </section>
 </section>
-<section id="full-text-retrieval-with-tf-idf-textinvertedfile" class="level2">
-<h2 class="anchored" data-anchor-id="full-text-retrieval-with-tf-idf-textinvertedfile">Full-Text Retrieval with TF-IDF (<code>TextInvertedFile</code>)</h2>
-<p>To index text using classic TF-IDF weights and cosine distance:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb35"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a><span class="im">using</span> <span class="bu">TextSearch</span>: TextInvertedFile</span>
+<section id="full-text-retrieval-with-tf-idf-vectorspace" class="level2">
+<h2 class="anchored" data-anchor-id="full-text-retrieval-with-tf-idf-vectorspace">Full-Text Retrieval with TF-IDF (<code>VectorSpace</code>)</h2>
+<p>To index text using classic TF-IDF weights and cosine distance, use the index <code>VectorSpace()</code>. It builds a <code>TextInvertedFile</code>:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb35"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a>ht <span class="op">=</span> <span class="fu">create_project</span>(workdir, <span class="st">"frankenstein_tfidf"</span>, <span class="fu">TextDocuments</span>(<span class="fu">FitFromCorpus</span>(); index<span class="op">=</span><span class="fu">VectorSpace</span>()))</span>
 <span id="cb35-2"><a href="#cb35-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb35-3"><a href="#cb35-3" aria-hidden="true" tabindex="-1"></a>ht <span class="op">=</span> <span class="fu">create_project</span>(workdir, <span class="st">"frankenstein_tfidf"</span>; engine<span class="op">=</span>FullTextEngine, backend<span class="op">=</span>TextInvertedFile,</span>
-<span id="cb35-4"><a href="#cb35-4" aria-hidden="true" tabindex="-1"></a>                    textmodel<span class="op">=</span><span class="fu">FitFromCorpus</span>())</span>
-<span id="cb35-5"><a href="#cb35-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb35-6"><a href="#cb35-6" aria-hidden="true" tabindex="-1"></a><span class="fu">append_items!</span>(ht, [</span>
-<span id="cb35-7"><a href="#cb35-7" aria-hidden="true" tabindex="-1"></a>    <span class="fu">TextItem</span>(it[<span class="st">"text"</span>]; doc_id <span class="op">=</span> it[<span class="st">"doc_id"</span>], keywords <span class="op">=</span> it[<span class="st">"keywords"</span>])</span>
-<span id="cb35-8"><a href="#cb35-8" aria-hidden="true" tabindex="-1"></a>    for it <span class="kw">in</span> items[<span class="fl">1</span><span class="op">:</span><span class="fl">200</span>]</span>
-<span id="cb35-9"><a href="#cb35-9" aria-hidden="true" tabindex="-1"></a>])</span>
-<span id="cb35-10"><a href="#cb35-10" aria-hidden="true" tabindex="-1"></a><span class="fu">index!</span>(ht)</span>
-<span id="cb35-11"><a href="#cb35-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb35-12"><a href="#cb35-12" aria-hidden="true" tabindex="-1"></a>hits <span class="op">=</span> <span class="fu">ftsearch</span>(ht, <span class="st">"monster creature fear"</span>, <span class="fl">5</span>)</span>
-<span id="cb35-13"><a href="#cb35-13" aria-hidden="true" tabindex="-1"></a><span class="fu">close_project!</span>(ht)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<span id="cb35-3"><a href="#cb35-3" aria-hidden="true" tabindex="-1"></a><span class="fu">append_items!</span>(ht, [</span>
+<span id="cb35-4"><a href="#cb35-4" aria-hidden="true" tabindex="-1"></a>    <span class="fu">TextItem</span>(it[<span class="st">"text"</span>]; doc_id <span class="op">=</span> it[<span class="st">"doc_id"</span>], keywords <span class="op">=</span> it[<span class="st">"keywords"</span>])</span>
+<span id="cb35-5"><a href="#cb35-5" aria-hidden="true" tabindex="-1"></a>    for it <span class="kw">in</span> items[<span class="fl">1</span><span class="op">:</span><span class="fl">200</span>]</span>
+<span id="cb35-6"><a href="#cb35-6" aria-hidden="true" tabindex="-1"></a>])</span>
+<span id="cb35-7"><a href="#cb35-7" aria-hidden="true" tabindex="-1"></a><span class="fu">index!</span>(ht)</span>
+<span id="cb35-8"><a href="#cb35-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb35-9"><a href="#cb35-9" aria-hidden="true" tabindex="-1"></a>hits <span class="op">=</span> <span class="fu">ftsearch</span>(ht, <span class="st">"monster creature fear"</span>, <span class="fl">5</span>)</span>
+<span id="cb35-10"><a href="#cb35-10" aria-hidden="true" tabindex="-1"></a><span class="fu">close_project!</span>(ht)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <hr>
 </section>
 <section id="whole-dataset-metric-operations" class="level2">
@@ -856,7 +843,7 @@ window.Quarto = {
 </section>
 <section id="summary" class="level2">
 <h2 class="anchored" data-anchor-id="summary">Summary</h2>
-<p>This tutorial covered the following operations: 1. Creation of a project with an explicit payload engine and index backend. 2. Insertion with <code>append_items!</code> and construction of the graph or the vocabulary with <code>index!</code>. 3. Nearest-neighbor queries with metadata filtering, an explicit number of candidates, and deleted records. 5. A declared schema for <code>meta</code>, which states what a field holds and how a filter compares it. 4. Batch queries, with metadata (<code>search</code>) or without it (<code>searchbatch</code>). 6. Calibration of the search parameters (<code>calibrate!</code>) for a target recall, and measurement of the cost of a query. 7. Operations over the entire dataset, executed in the calling process. 8. Retrieval by external identifier, and compaction of the storage when the project is closed. 9. Failure handling through the four categories of typed errors.</p>
+<p>This tutorial covered the following operations: 1. Creation of a project from a specification of its payload and its index. 2. Insertion with <code>append_items!</code> and construction of the graph or the vocabulary with <code>index!</code>. 3. Nearest-neighbor queries with metadata filtering, an explicit number of candidates, and deleted records. 5. A declared schema for <code>meta</code>, which states what a field holds and how a filter compares it. 4. Batch queries, with metadata (<code>search</code>) or without it (<code>searchbatch</code>). 6. Calibration of the search parameters (<code>calibrate!</code>) for a target recall, and measurement of the cost of a query. 7. Operations over the entire dataset, executed in the calling process. 8. Retrieval by external identifier, and compaction of the storage when the project is closed. 9. Failure handling through the four categories of typed errors.</p>
 
 
 </section>

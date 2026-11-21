@@ -14,98 +14,22 @@ using SimilaritySearch.ScalarQuant: ScalarQuant, SQEncoder, QuantDatabase, SQMin
 using SimilaritySearch: Projections, MMapMatrixDatabase
 using SimilaritySearch: encode, encodequery
 
-export ScalarQuantizer, QuantizerInfo
+export QuantizerInfo
 
-const _QUANT_KINDS = (:sqgu8, :sqgu4, :sqgu2, :squ8, :squ4, :squ2)
-const _QUANT_ROTATIONS = (:none, :qr, :hadamard)
-
-"""
-    ScalarQuantizer(kind=:sqgu8; rotation=:none, keep_vectors=false, minmax=nothing, samplesize=4096)
-
-The scalar quantizer of a dense project, given to `create_project(...; quantizer=...)`. The
-project stores each vector as `bits` codes per coordinate instead of a `Float32`, and searches
-with the distances of `SimilaritySearch.ScalarQuant`.
-
-`kind` names the family and the number of bits:
-
-- `:sqgu8`, `:sqgu4`, `:sqgu2`: one range for every coordinate of every vector. The range is
-  estimated from a sample of the staged vectors at the first `index!`, or given as `minmax`.
-- `:squ8`, `:squ4`, `:squ2`: one range for each vector, taken from its own coordinates. It
-  costs 8 more bytes per vector, and it needs no sample.
-
-A vector of dimension 1024 takes 1024 bytes at 8 bits, 512 at 4 bits and 256 at 2 bits,
-against 4096 bytes in `Float32`. The dimension must be a multiple of 2 at 4 bits and of 4 at 2
-bits.
-
-`rotation` is applied to every vector and every query before quantization:
-
-- `:none`, the default, quantizes the coordinates as they are. It works for the output of most
-  modern neural embedding models, whose coordinates have similar scales. On SISAP 2025
-  `ccnews`, a QR rotation changed recall@10 by less than 0.01 at every width.
-- `:qr` applies a random orthogonal matrix, which gives every coordinate the same scale. Use it
-  when the coordinates have different scales or heavy tails: vectors that are not normalized,
-  vectors from several models or pipelines in one project, features that were not produced by
-  a neural model, or a recall clearly below the exact search on a sample of queries. It costs
-  `dim²` operations per query and per inserted item, and `4 dim²` bytes of storage.
-- `:hadamard` is a random rotation that costs `dim log dim` operations. The dimension must be a
-  power of two.
-
-`keep_vectors=true` keeps the original `Float32` vectors on disk next to the codes, so that
-`fetch_items` returns them. With `false`, the original vectors are removed once they are
-encoded, and `fetch_items` returns `nothing` as the payload.
-
-`minmax=(lo, hi)` fixes the range of a global quantizer, and nothing is fitted. `samplesize` is
-the number of staged vectors the range is estimated from.
-"""
-struct ScalarQuantizer
-    kind::Symbol
-    rotation::Symbol
-    keep_vectors::Bool
-    minmax::Union{Nothing,Tuple{Float32,Float32}}
-    samplesize::Int
-
-    function ScalarQuantizer(kind::Symbol, rotation::Symbol, keep_vectors::Bool, minmax, samplesize::Integer)
-        kind in _QUANT_KINDS ||
-            invalid_option(:quantizer, "unknown quantizer kind $(repr(kind)); expected one of $(join(_QUANT_KINDS, ", "))")
-        rotation in _QUANT_ROTATIONS ||
-            invalid_option(:quantizer, "unknown rotation $(repr(rotation)); expected one of $(join(_QUANT_ROTATIONS, ", "))")
-        samplesize >= 1 || invalid_option(:quantizer, "samplesize must be at least 1; got $samplesize")
-        mm = if minmax === nothing
-            nothing
-        else
-            _quant_global(kind) ||
-                invalid_option(:quantizer, "`minmax` applies to a global quantizer (sqgu8, sqgu4, sqgu2); " *
-                      "$kind takes the range of each vector from its own coordinates")
-            length(minmax) == 2 && minmax[1] < minmax[2] ||
-                invalid_option(:quantizer, "`minmax` must be two numbers (lo, hi) with lo < hi; got $(repr(minmax))")
-            (Float32(minmax[1]), Float32(minmax[2]))
-        end
-        new(kind, rotation, keep_vectors, mm, Int(samplesize))
-    end
+# The library module of a quantizer: one global range or one range per vector, at 8, 4 or 2 bits.
+function _quant_module(q::SQ)
+    glob = q.range isa GlobalRange
+    q.bits == 8 && return glob ? ScalarQuant.SQgu8 : ScalarQuant.SQu8
+    q.bits == 4 && return glob ? ScalarQuant.SQgu4 : ScalarQuant.SQu4
+    return glob ? ScalarQuant.SQgu2 : ScalarQuant.SQu2
 end
-
-ScalarQuantizer(kind::Symbol=:sqgu8; rotation::Symbol=:none, keep_vectors::Bool=false,
-                minmax=nothing, samplesize::Integer=4096) =
-    ScalarQuantizer(kind, rotation, keep_vectors, minmax, samplesize)
-
-Base.:(==)(a::ScalarQuantizer, b::ScalarQuantizer) =
-    a.kind == b.kind && a.rotation == b.rotation && a.keep_vectors == b.keep_vectors &&
-    a.minmax == b.minmax && a.samplesize == b.samplesize
-
-_quant_global(kind::Symbol) = kind in (:sqgu8, :sqgu4, :sqgu2)
-_quant_bits(kind::Symbol) = kind in (:sqgu8, :squ8) ? 8 : kind in (:sqgu4, :squ4) ? 4 : 2
-_quant_module(kind::Symbol) =
-    kind === :sqgu8 ? ScalarQuant.SQgu8 : kind === :sqgu4 ? ScalarQuant.SQgu4 : kind === :sqgu2 ? ScalarQuant.SQgu2 :
-    kind === :squ8 ? ScalarQuant.SQu8 : kind === :squ4 ? ScalarQuant.SQu4 : ScalarQuant.SQu2
 
 """
     QuantizerInfo
 
 What `quantizer_info(h)` reports about the quantizer of a dense project.
 
-- `kind`, `rotation`, `keep_vectors`: as given to [`ScalarQuantizer`](@ref).
-- `family`: `:global` (one range for the project) or `:per_vector`.
-- `bits`: bits per coordinate.
+- `storage`: the [`Quantized`](@ref) storage the project was created with.
 - `fitted`: whether the encoder exists. A global quantizer without `minmax` is fitted at the
   first `index!`.
 - `min`, `max`: the range of a fitted global quantizer, or `nothing`.
@@ -114,11 +38,7 @@ What `quantizer_info(h)` reports about the quantizer of a dense project.
   range of a per-vector quantizer, or `nothing` before the encoder exists.
 """
 struct QuantizerInfo
-    kind::Symbol
-    family::Symbol
-    bits::Int
-    rotation::Symbol
-    keep_vectors::Bool
+    storage::Quantized
     fitted::Bool
     min::Union{Nothing,Float32}
     max::Union{Nothing,Float32}
@@ -138,7 +58,7 @@ vectors are not encoded yet.
 and `nothing` for a global one. Both are `nothing` before the encoder exists.
 """
 mutable struct QuantState
-    spec::ScalarQuantizer
+    spec::Quantized
     distance::SimilaritySearch.PreMetric
     encoder::Union{Nothing,SQEncoder}
     codes::Union{Nothing,MMapMatrixDatabase}
@@ -163,7 +83,7 @@ quantized_distance(d) =
           "$(nameof(typeof(d))) has no distance over codes")
 
 """
-    enable_quantization!(engine::AbstractSearchEngine, spec::ScalarQuantizer, distance) -> DenseEngine
+    enable_quantization!(engine::AbstractSearchEngine, spec::Quantized, distance) -> DenseEngine
 
 Returns `engine` as a quantized engine. `engine` must be empty and have no partitions yet, and
 `distance` is the distance it was created with.
@@ -173,7 +93,7 @@ parameters (`ExactBackend{ExhaustiveSearch}`). `install_encoder!` replaces the e
 `Float32` vectors with an index over codes, whose concrete type is different, and the field of a
 backend whose parameter is concrete cannot hold it.
 """
-function enable_quantization!(engine::AbstractSearchEngine, spec::ScalarQuantizer, distance)
+function enable_quantization!(engine::AbstractSearchEngine, spec::Quantized, distance)
     quantized_distance(distance)
     if engine.backend isa ExactBackend
         b = engine.backend
@@ -193,39 +113,38 @@ quantized_length(q::QuantState) = q.codes === nothing ? 0 : length(q.codes)
 
 Raises `InvalidOption` when vectors of dimension `dim` cannot be stored with `spec`.
 """
-function check_quantized_dimension(spec::ScalarQuantizer, dim::Integer)
-    bits = _quant_bits(spec.kind)
+function check_quantized_dimension(spec::Quantized, dim::Integer)
+    bits = spec.quantizer.bits
     perbyte = 8 ÷ bits
     dim % perbyte == 0 ||
-        invalid_option(:quantizer, "$(spec.kind) packs $perbyte coordinates per byte, so the dimension must be " *
-              "a multiple of $perbyte; the vectors have dimension $dim")
-    spec.rotation === :hadamard && !ispow2(dim) &&
-        invalid_option(:quantizer, "rotation=:hadamard needs a dimension that is a power of two; the vectors have " *
-              "dimension $dim. Use rotation=:qr")
+        invalid_option(:quantizer, "a quantizer of $bits bits packs $perbyte coordinates per byte, so the dimension " *
+              "must be a multiple of $perbyte; the vectors have dimension $dim")
+    spec.rotation isa HadamardRotation && !ispow2(dim) &&
+        invalid_option(:quantizer, "HadamardRotation needs a dimension that is a power of two; the vectors have " *
+              "dimension $dim. Use QRRotation()")
     return nothing
 end
 
-function _rotation(spec::ScalarQuantizer, dim::Int, rng::AbstractRNG)
-    spec.rotation === :none && return nothing
-    spec.rotation === :qr && return Projections.qr(rng, Float32, dim, dim)
-    return Projections.RandomizedHadamard(dim; rng)
-end
+_rotation(::NoRotation, dim::Int, rng::AbstractRNG) = nothing
+_rotation(::QRRotation, dim::Int, rng::AbstractRNG) = Projections.qr(rng, Float32, dim, dim)
+_rotation(::HadamardRotation, dim::Int, rng::AbstractRNG) = Projections.RandomizedHadamard(dim; rng)
 
 """
     fit_encoder(spec, distance, sample::AbstractMatrix{Float32}, rng) -> SQEncoder
 
 The encoder of a quantized project. `sample` holds one staged vector per column. A global
-quantizer estimates its range from `sample` unless `spec.minmax` gives it. A per-vector
+quantizer estimates its range from `sample` unless its `minmax` gives it. A per-vector
 quantizer calibrates its range policy on `sample`.
 """
-function fit_encoder(spec::ScalarQuantizer, distance, sample::AbstractMatrix{Float32}, rng::AbstractRNG)
+function fit_encoder(spec::Quantized, distance, sample::AbstractMatrix{Float32}, rng::AbstractRNG)
     dim = size(sample, 1)
     check_quantized_dimension(spec, dim)
-    quant = _quant_module(spec.kind)
-    rot = _rotation(spec, dim, rng)
+    quant = _quant_module(spec.quantizer)
+    rot = _rotation(spec.rotation, dim, rng)
     dist = quantized_distance(distance)
-    if spec.minmax !== nothing
-        return SQEncoder(quant, rot, dim; dist, minmax=spec.minmax)
+    range = spec.quantizer.range
+    if range isa GlobalRange && range.minmax !== nothing
+        return SQEncoder(quant, rot, dim; dist, minmax=range.minmax)
     end
     return SQEncoder(quant, rot, sample; dist, samplesize=size(sample, 2), rng)
 end
@@ -337,8 +256,8 @@ end
 function quantizer_info(q::QuantState)
     spec = q.spec
     enc = q.encoder
-    bits = _quant_bits(spec.kind)
-    glob = _quant_global(spec.kind)
+    bits = spec.quantizer.bits
+    glob = spec.quantizer.range isa GlobalRange
     lo = hi = nothing
     if enc !== nothing && glob
         lo = enc.E.min
@@ -346,8 +265,7 @@ function quantizer_info(q::QuantState)
     end
     dim = enc === nothing ? nothing : enc.dim
     bpv = dim === nothing ? nothing : cld(dim * bits, 8) + (glob ? 0 : 8)
-    QuantizerInfo(spec.kind, glob ? :global : :per_vector, bits, spec.rotation, spec.keep_vectors,
-                  enc !== nothing, lo, hi, dim, bpv)
+    QuantizerInfo(spec, enc !== nothing, lo, hi, dim, bpv)
 end
 
 """

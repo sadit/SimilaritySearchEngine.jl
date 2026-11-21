@@ -304,10 +304,8 @@ end
 
 # 2. Create project using a pre-computed BaseProfile
 workdir = mktempdir()
-h = SSE.create_project(workdir, "sample_project";
-        engine    = SSE.FullTextEngine,
-        backend   = TextSearch.BM25InvertedFile,
-        textmodel = SSE.BaseProfile(profiles["gutenberg-en"]))
+h = SSE.create_project(workdir, "sample_project",
+        SSE.TextDocuments(SSE.BaseProfile(profiles["gutenberg-en"]); index=SSE.BM25()))
 
 # 3. Stage items (durable on disk, pending indexing)
 SSE.append_items!(h, slice)

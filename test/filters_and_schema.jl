@@ -2,7 +2,7 @@
     mktempworkdir() do workdir
         # Exact backend and vectors ranked by construction: item i sits at distance i-1 from
         # the query, so "the item the predicate wants" has a known rank.
-        h = create_project(workdir, "budget_ds"; engine=DenseEngine, backend=ExhaustiveSearch)
+        h = create_project(workdir, "budget_ds", DenseVectors(; index=Exhaustive()))
         append_items!(h, [DenseItem(Float32[i - 1, 0, 0, 0]; doc_id="v$i") for i in 1:64])
         q = Float32[0, 0, 0, 0]
 
@@ -77,8 +77,7 @@ end
 
 @testset "a project declares its meta schema, and declaring later leaves old records alone" begin
     mktempworkdir() do workdir
-        h = create_project(workdir, "schema_ds"; engine=DenseEngine, backend=ExhaustiveSearch,
-                           meta_schema=["year" => :int64, "lang" => :string])
+        h = create_project(workdir, "schema_ds", DenseVectors(; index=Exhaustive()); meta_schema=["year" => :int64, "lang" => :string])
         @test [f.name for f in meta_schema(h).fields] == ["year", "lang"]
         @test meta_schema(h).version == 1
 

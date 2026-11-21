@@ -1,5 +1,5 @@
 # Partitions of a dense project (PLAN.md §5.10). Three partitions of 40, 300 and 1,200
-# items, and item 1 in both "a" and "b". With `partition_graph_min=250`, "a" is scanned and
+# items, and item 1 in both "a" and "b". With `graph_min=250`, "a" is scanned and
 # "b" and "c" have graphs.
 dense_partition_corpus(rng) = begin
     labels = vcat(fill("a", 40), fill("b", 300), fill("c", 1200))
@@ -16,7 +16,7 @@ exact_ids(X, members, q, k) = members[sortperm([sum(abs2, X[i] .- q) for i in me
     mktempworkdir() do workdir
         c = dense_partition_corpus(Xoshiro(21))
         Q = [randn(Xoshiro(22), Float32, 16) for _ in 1:20]
-        h = create_project(workdir, "dpe"; engine=DenseEngine, backend=ExhaustiveSearch, partition_by="p")
+        h = create_project(workdir, "dpe", DenseVectors(; index=Exhaustive()); partitions=PartitionBy("p"))
         append_items!(h, c.items)
         inpart(p) = (record, meta) -> meta !== nothing && (meta["p"] isa AbstractString ? meta["p"] == p : p in meta["p"])
         same(h) = all(Iterators.product(Q, ("a", "b", "c"))) do (q, p)
@@ -43,8 +43,7 @@ end
         recall(h, p) = sum(length(intersect(ids(h, q, p), exact_ids(c.X, c.members(p), q, 10))) for q in Q) / (10 * length(Q))
         graphs(h) = Dict(p.name => p.graph for p in partitions(h))
 
-        h = create_project(workdir, "dpg"; engine=DenseEngine, backend=SearchGraph, partition_by="p",
-                           partition_graph_min=250)
+        h = create_project(workdir, "dpg", DenseVectors(); partitions=PartitionBy("p"; graph_min=250))
         append_items!(h, c.items)
         # Staged items are not searchable yet, in a partition as in the global graph.
         @test isempty(search(h, Q[1], 10; partition="c"))
@@ -103,10 +102,10 @@ end
         c = dense_partition_corpus(Xoshiro(41))
         Q = [randn(Xoshiro(42), Float32, 16) for _ in 1:10]
 
-        h = create_project(workdir, "dpd"; engine=DenseEngine, backend=SearchGraph)
+        h = create_project(workdir, "dpd", DenseVectors())
         append_items!(h, c.items)
         index!(h)
-        parts = declare_partition!(h, "p"; partition_graph_min=250)
+        parts = declare_partition!(h, PartitionBy("p"; graph_min=250))
         @test [(p.name, p.items, p.graph) for p in parts] ==
               [(n, length(c.members(n)), g) for (n, g) in (("a", false), ("b", true), ("c", true))]
         @test all(q -> [r._id for r in search(h, q, 10; partition="a")] == exact_ids(c.X, c.members("a"), q, 10), Q)
@@ -115,8 +114,7 @@ end
 
         # The global graph indexes, and the process stops before the partition graphs do:
         # the next open has the members and no graphs, and the next index! builds them.
-        h = create_project(workdir, "dpi"; engine=DenseEngine, backend=SearchGraph, partition_by="p",
-                           partition_graph_min=250)
+        h = create_project(workdir, "dpi", DenseVectors(); partitions=PartitionBy("p"; graph_min=250))
         append_items!(h, c.items)
         IndexEngine.index!(h.engine)
         close_project!(h)
@@ -127,12 +125,10 @@ end
         @test Dict(p.name => p.graph for p in partitions(h)) == Dict("a" => false, "b" => true, "c" => true)
         close_project!(h)
 
-        @test_throws InvalidOption create_project(workdir, "o1"; engine=DenseEngine, partition_graph_min=10)
-        @test_throws InvalidOption create_project(workdir, "o2"; engine=FullTextEngine, backend=BM25InvertedFile,
-                                                  textmodel=FitFromCorpus(), partition_by="p", partition_graph_min=10)
-        @test_throws InvalidOption create_project(workdir, "o3"; engine=SparseEngine, dimension=8, partition_by="p")
-        @test_throws InvalidOption create_project(workdir, "o4"; engine=DenseEngine, partition_by="p", partition_graph_min=0)
-        h = create_project(workdir, "o5"; engine=DenseEngine)
+        @test_throws InvalidOption create_project(workdir, "o2", TextDocuments(FitFromCorpus()); partitions=PartitionBy("p"; graph_min=10))
+        @test_throws InvalidOption create_project(workdir, "o3", SparseVectors(8); partitions=PartitionBy("p"))
+        @test_throws InvalidOption create_project(workdir, "o4", DenseVectors(); partitions=PartitionBy("p"; graph_min=0))
+        h = create_project(workdir, "o5", DenseVectors())
         append_items!(h, c.items[1:10]); index!(h)
         @test_throws InvalidOption search(h, Q[1], 3; partition="a")
         close_project!(h)
