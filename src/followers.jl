@@ -166,7 +166,8 @@ struct Manual <: SyncPolicy end
     Periodic(; seconds=nothing, items=nothing)
 
 The server processes the new items every `seconds`, or every `items` new items of the leader,
-as a job. At least one of the two is given. The engine itself treats it as [`Manual`](@ref).
+as a task of `serve` (PLAN.md §5.12). At least one of the two is given. The engine itself treats
+it as [`Manual`](@ref).
 """
 struct Periodic <: SyncPolicy
     seconds::Union{Nothing,Float64}

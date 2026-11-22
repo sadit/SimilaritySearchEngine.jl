@@ -366,6 +366,10 @@ of it exist.
       project. Every list of the engine holds ids without weights, so it returns `Int32` ids.
       A dense project raises `UnsupportedOperation`.
 
+    Phase 5, followers in the server, the command lines and the clients: designed in §5.12 on
+    2026-11-22. `Periodic` runs as a task of `serve`, not as a job, because a job cannot write
+    to a dataset that `serve` holds open.
+
 The stemmer registry of §5.3 and §9's phase 5 is not on this list: it was discarded. Stemming
 was the way this specification proposed to make a query match a word it does not equal. That
 is now the work of the query pipeline of `TextSearch.jl`, which the engine exposes through the
@@ -1443,7 +1447,7 @@ Policies are types, as specs are:
 |---|---|
 | `OnIndex()` (default) | after `index!` of the leader, which is when the new items of the leader become searchable |
 | `OnWrite()` | after each `append_items!` of the leader. On a leader that stages its items (a graph, a text project, a quantized project), there are no new indexed items at that point. |
-| `Periodic(; seconds, items)` | in the server, as a job, every `seconds` or every `items` new items. The engine treats it as `Manual()`. |
+| `Periodic(; seconds, items)` | in the server, as a task of `serve` (§5.12), every `seconds` or every `items` new items. The engine treats it as `Manual()`. |
 | `Manual()` | only when `sync!` is called |
 
 In the engine, `index!` and `append_items!` of the leader call `sync!` on each registered
@@ -1548,6 +1552,206 @@ Each phase updates `manual/architecture.qmd`, the tutorial, and this section.
 - The propagation of deletes to a follower.
 - A log of changes. With the position of a follower and the deletes marked by the leader,
   nothing needs one. An operation that changes the metadata of an item in place would need it.
+
+### 5.12. Followers in the Server (design, 2026-11-22)
+
+Status: designed on 2026-11-22 for issue #5, phase 5. Phases 1 to 4 of the issue are done in
+the engine (§0, item 15): the framework of followers, the partition follower, the keyword
+follower and `posting_list`. This section designs how the server, the two command lines and
+the two clients expose them. Phase 6, plugins in the server, has its own section later.
+
+#### What the server does today
+
+These facts of the current server decide the design:
+
+- `serve` holds one writable `EmbeddedEngine` per dataset, in `app.handles`. Every write to an
+  open dataset runs in that process: `append` (which calls `index!` in the same request),
+  `delete`, and `calibrate`.
+- A job runs as a subprocess (`LocalCLIExecutor`). It opens its dataset read-only, because the
+  write lock of RocksDB belongs to `serve`. `allknn`, `fft`, `neardup`, `hsp` and `dump` read a
+  dataset; `load` creates a new one.
+- `rebuild` is a command of `similarity-search`, run while the dataset is unloaded
+  (`POST /api/v1/admin/datasets/{id}/unload`, then `reload`). It moves the project to
+  `<dir>.old`, creates a new project with the same spec, appends the live items and indexes
+  them. The new project has a new generation (§5.11) and no list of followers.
+- `dump` copies the directory of the project into a bundle, and `load` copies it back under a
+  new id. The directory of the followers, `<leader>.followers/`, is next to the project and is
+  not copied.
+- `GET /api/v1/datasets/{id}` returns the `descriptor.json` of the dataset.
+- The partitions inside a project have the route `GET /api/v1/datasets/{id}/partitions` and the
+  argument `partition` of `search`, `ftsearch` and `calibrate`. They stay until `PartitionBy` is
+  removed (issue #5, open question).
+- The Julia client creates a dataset with wire names (`index_type`, `distance`), not with the
+  spec types of the engine. The nested spec over HTTP is the open part of issue #2.
+
+#### Decisions
+
+1. **A follower is processed in `serve`.** A job cannot do it: it cannot open the leader for
+   writing while `serve` holds it, and a follower reads the index of its leader in memory.
+2. **`OnIndex` and `OnWrite` run inside the request that writes the leader.** `append` calls
+   `index!`, and `index!` processes the registered followers, as it does for the partitions
+   inside a project today. The response of `append` comes after the followers are processed.
+   A follower that fails does not undo the write: the response is the error of the follower,
+   and the follower lags until its next processing.
+3. **`Periodic` runs as a task of `serve`, not as a job.** A task wakes up every
+   `[followers] check_seconds` seconds, and processes each follower whose period has passed or
+   whose lag has reached its number of items. This replaces "as a job" in §5.11.
+4. **Lifecycle operations are explicit.** Creating, rebuilding, deleting and migrating a
+   follower are requests or commands of their own. No load, reload or rebuild of a leader
+   processes or rebuilds a follower unless the request asks for it.
+5. **A follower is addressed under its leader.** The routes are under
+   `/api/v1/datasets/{leader}/followers/{follower}`, where `{follower}` is the follower name, or
+   `name=value` for a partition. The permissions are those of the leader.
+6. **The wire names a spec with strings,** as `POST /api/v1/datasets` does: a kind, a source
+   and options. Phase 6 adds the names that plugins register.
+
+#### Wire format of a follower
+
+`POST /api/v1/datasets/{leader}/followers` takes:
+
+```json
+{"name": "by_repo", "kind": "partition", "source": "meta:repo",
+ "disjoint": false, "graph_min": 4096, "policy": "on_index"}
+```
+
+| field | values |
+|---|---|
+| `name` | a follower name, `[A-Za-z0-9_-]{1,128}` |
+| `kind` | `partition` or `keyword` |
+| `source` | `keywords`, `refs`, `doc_id`, or `meta:<field>` |
+| `disjoint` | `partition` only; `true` by default |
+| `graph_min` | `partition` on a dense leader only |
+| `distance` | `keyword` only: `jaccard` (default), `dice`, `intersection` or `cosine_set` |
+| `policy` | `on_index` (default), `on_write`, `manual`, or `{"periodic": {"seconds": 60, "items": 1000}}` |
+
+A value that the server does not know answers `400`. `FollowerStatus` is sent with the same
+names: `kind`, `source` and `policy` as text, and the other fields as numbers and booleans.
+
+#### Routes
+
+| route | permission | what it does |
+|---|---|---|
+| `POST /datasets/{id}/followers` | admin | creates a follower; `201` with its status |
+| `GET /datasets/{id}/followers` | read | the status of every follower |
+| `GET /datasets/{id}/followers/{f}` | read | the status of one follower |
+| `DELETE /datasets/{id}/followers/{f}` | admin | closes and deletes a follower |
+| `POST /datasets/{id}/followers/{f}/sync` | write | processes the new items now |
+| `POST /datasets/{id}/followers/{f}/rebuild` | admin | `rebuild_follower!` |
+| `GET /datasets/{id}/followers/{f}/partitions` | read | the partitions of a partition follower |
+| `POST /datasets/{id}/followers/{f}=value/search` | read | `search` in a partition of a dense leader |
+| `POST /datasets/{id}/followers/{f}=value/ftsearch` | read | `ftsearch` in a partition of a text leader |
+| `POST /datasets/{id}/followers/{f}=value/calibrate` | write | `calibrate!` of a partition graph |
+| `POST /datasets/{id}/followers/{f}/search` | read | a keyword follower: `{"keys": [...], "k": 10, "t": 1}` |
+| `GET /datasets/{id}/followers/{f}/postings?key=&limit=` | read | `posting_list` of a keyword follower |
+| `GET /datasets/{id}/postings?key=&limit=` | read | `posting_list` of a text or sparse dataset |
+| `POST /datasets/{id}/migrate-partitions` | admin | `migrate_partitions!`: `{"name": ..., "disjoint": ...}` |
+| `GET /datasets/{id}/group` | read | the leader and the status of all its followers |
+
+All routes are under `/api/v1`. The search routes take the fields of the routes of the leader
+(`filter`, `page_size`, ...) and answer in the same shape. A value with a character that is
+not allowed in a path segment is URL-encoded. The engine errors keep their mapping:
+`UnknownFollower` and `PluginNotLoaded` answer `404`, and `StaleFollower` and `HasFollowers`
+answer `409`.
+
+#### Lifecycle in `serve`
+
+- **Load and reload.** After a leader is opened, `serve` opens each follower that the leader
+  lists. A follower that cannot be opened (stale, a plugin not loaded, a missing directory) is
+  not opened, and its status reports why. The leader stays available.
+- **Unload and delete.** Closing a leader closes its followers (§5.11). `DELETE
+  /datasets/{id}` of a leader that lists followers answers `409` with `HasFollowers`, and the
+  message names `DELETE /datasets/{id}/followers/{f}` and the command.
+- **Concurrency.** `serve` creates, deletes, rebuilds and opens followers under `app.lock`, as
+  it does for datasets, because a leader handle keeps its open followers in a dictionary.
+  Processing and searching use the locks of the engine.
+- **Describe.** `GET /datasets/{id}` adds `followers`: the status of each follower of a leader,
+  and for a follower that failed, its last error. `GET /datasets/{id}/followers/{f}` is the view
+  of one follower, and `GET /datasets/{id}/group` the view of the group.
+
+#### Rebuild, dump and load
+
+A new engine function is needed:
+
+- `attach_follower!(leader, name) -> Nothing` lists in `leader` a follower directory that
+  already exists in `follower_dir(workdir, leader, name)`, and writes the name of the leader in
+  it. It processes nothing. A follower built from another generation stays stale until
+  `rebuild_follower!`.
+
+How the commands use it:
+
+- `similarity-search rebuild` reads the followers of the old project, creates the new project,
+  and attaches each follower to it. The followers are stale, because the new project has a new
+  generation. `--rebuild-followers` also rebuilds each of them, in the same command. The output
+  lists the followers and their state.
+- `dump` copies the directory of the followers into the bundle, under `followers/`. `load`
+  copies them to `<new id>.followers/` and attaches each one. The project and its followers
+  come from the same copy, so their generations agree and the followers are not stale.
+
+#### Command lines
+
+`similarity-search`, which works on a working directory without a server:
+
+- `follower-create --dataset ID --name N --kind partition|keyword --source S [--non-disjoint]
+  [--graph-min N] [--distance D] [--policy P]`
+- `follower-list --dataset ID`, `follower-sync`, `follower-rebuild`, `follower-delete`, each with
+  `--dataset ID --name N`
+- `migrate-partitions --dataset ID --name N --disjoint true|false`; `--disjoint` has no default
+- `postings --dataset ID [--follower N] --key K [--limit N]`
+- `searchbatch --follower N=VALUE`, in addition to `--partition`
+- `describe` lists the followers of a dataset
+
+`similarity-search-ctl`, which calls a running server: `followers --dataset ID` (the group
+view), `follower-create`, `follower-delete`, `follower-sync`, `follower-rebuild` and
+`migrate-partitions`, with the arguments above.
+
+#### Clients
+
+- **Python.** `create_follower(index, name, kind, source, ...)`, `list_followers`,
+  `get_follower`, `delete_follower`, `sync_follower`, `rebuild_follower`, `follower_partitions`,
+  `follower_search` (a vector in a partition, or keys in a keyword follower), `follower_ftsearch`,
+  `follower_calibrate`, `posting_list(index, key, follower=None, limit=None)`,
+  `migrate_partitions` and `get_group`.
+- **Julia.** The names of the engine, on remote handles, with wire arguments as in its
+  `create_project`: `create_follower(h, name; kind, source, disjoint, graph_min, distance,
+  policy)`, `open_follower(h, "name=value")` returning a `RemoteFollower` or a
+  `RemoteFollowerView`, `search`, `ftsearch`, `calibrate!`, `posting_list`, `partitions`,
+  `followers`, `follower_status`, `sync!`, `rebuild_follower!`, `delete_follower!` and
+  `migrate_partitions!`. It declares no engine type. The spec types (`PartitionFollower`,
+  `KeywordFollower`) are not mirrored until the nested spec of issue #2 exists for datasets too.
+
+#### Phases
+
+5a. The engine function `attach_follower!`; in `serve`, opening followers at load and reload,
+    the routes, the `[followers] check_seconds` task for `Periodic`, and `HasFollowers` on
+    delete.
+5b. `similarity-search` and `similarity-search-ctl`: the commands above, `rebuild` and
+    `dump`/`load` with followers.
+5c. The Python and Julia clients.
+5d. The server manual and tutorial, and this section with what differs.
+
+#### Tests
+
+- Creating a partition follower and a keyword follower over HTTP, and the status of each.
+- A partition search over HTTP equals the global search restricted to the partition, for a
+  text and a dense dataset.
+- `append` processes an `on_index` follower in the same request. A `manual` follower lags until
+  `sync`. A `periodic` follower is processed by the task.
+- `posting_list` of a keyword follower and of a text dataset, with and without `limit`.
+- `DELETE` of a leader with followers answers `409` with `HasFollowers`.
+- A follower survives `unload` and `reload`, and a restart of the server.
+- `rebuild` leaves the followers stale, and `--rebuild-followers` rebuilds them. `dump` and
+  `load` keep the followers usable.
+- `migrate-partitions` over HTTP and from the command line.
+- The Julia client against a running server: the same operations, with the error types of the
+  engine.
+
+#### Not in this version
+
+- A job over a follower, such as `allknn` over one partition.
+- A follower of a dataset in another server or another working directory.
+- Processing a follower outside the request that wrote the leader, for `OnIndex` and
+  `OnWrite`. It would shorten the response of `append`, and it is worth adding if a
+  measurement shows that the processing of a follower dominates the time of `append`.
 
 ## 6. Hybrid Search Readiness (Suggestions & Specifications)
 

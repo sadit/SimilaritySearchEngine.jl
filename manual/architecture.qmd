@@ -522,7 +522,7 @@ A policy says when a follower processes the new items:
 |---|---|
 | `OnIndex()` (default) | after each `index!` of the leader |
 | `OnWrite()` | after each `append_items!` of the leader; on a leader that stages its items, nothing is indexed at that point |
-| `Periodic(; seconds, items)` | in the server, as a job; the engine treats it as `Manual()` |
+| `Periodic(; seconds, items)` | in the server, as a task of `serve`; the engine treats it as `Manual()` |
 | `Manual()` | only at `sync!` |
 
 `open_follower` registers the follower in the handle of its leader. `index!` and `append_items!` of the leader call `sync!` on the registered followers whose policy applies, after the leader has saved its own work. When `sync!` of a follower raises, the other followers are processed, and the first error is raised afterwards. `close_project!` of the leader closes its followers first. `open_follower` processes nothing: a follower that lags behind its leader stays behind until its policy or `sync!` processes the new items. `follower_status(f)` and `followers(h)` report the position, the lag and whether a follower is synchronized.
