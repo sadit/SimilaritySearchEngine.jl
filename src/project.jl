@@ -54,14 +54,16 @@ Manages a project backed by RocksDB.
   apart from `cf_records` so a caller that only wants `meta` (or only the record) never
   pays to read/decode the other.
 - `cf_op_log::RocksDB.ColumnFamily`: Column family for operation logs.
-- `cf_idx_keywords::RocksDB.ColumnFamily`: Secondary index from a keyword value to the
-  `_id`s of records carrying it (see [`put_metadata!`](@ref)).
+- `cf_idx_keywords::RocksDB.ColumnFamily`: The column family `idx_keywords`. Until 2026-11-22
+  it held a secondary index from a keyword value to the `_id`s of the records that carry it.
+  No function read it, and it is no longer written (issue #5): keywords are metadata. It is
+  still opened, because projects written before that date have it.
 - `cf_idx_refs::RocksDB.ColumnFamily`: Secondary index from a referenced `doc_id` to the
   `_id`s of records whose `refs` list it.
 
 There is no per-project typed-field schema carried here anymore -- every project has
-exactly these column families, always; only `keywords`/`refs` are indexed, and that's
-fixed, not configurable per project.
+exactly these column families, always. `doc_id` and `refs` are indexed, and that is fixed,
+not configurable per project. `keywords` are not indexed (issue #5).
 """
 mutable struct ProjectManager
     dataset::String
@@ -236,11 +238,14 @@ docid_key(doc_id::AbstractString, id::Int32) = vcat(Vector{UInt8}(String(doc_id)
 
 Inserts or updates `record` (and its accompanying free-form `meta`, if any -- see
 [`Schema.metadata_record`](@ref)) in the project, keyed by `record._id` in both `cf_records`
-and `cf_meta`. Also (re)writes `record`'s `keywords`/`refs` entries into their respective
+and `cf_meta`. Also (re)writes the entries of `record`'s `doc_id` and `refs` into their
 secondary index column families -- this is *not* incremental: any previous index entries
-for this `_id` are left in place (an update that removes a keyword/ref leaks a stale
-index row pointing at an `_id` whose current record no longer carries it) -- acceptable
-for the append-mostly, rarely-updated workloads this targets, not a general upsert.
+for this `_id` are left in place (an update that removes a ref leaks a stale index row
+pointing at an `_id` whose current record no longer carries it) -- acceptable for the
+append-mostly, rarely-updated workloads this targets, not a general upsert.
+
+`keywords` are stored in the record and indexed nowhere (issue #5). An index over keywords is
+a follower dataset of the project.
 
 # Arguments
 - `manager::ProjectManager`: The target project manager.
@@ -261,10 +266,6 @@ function put_metadata!(manager::ProjectManager, record::MetadataRecord, meta)
     something(record.doc_id, "") == "" ||
         RocksDB.put!(b, docid_key(record.doc_id, record._id), UInt8[], cf=manager.cf_idx_docid)
 
-    for kw in record.keywords
-        idx_key = vcat(Vector{UInt8}(kw), key_bytes)
-        RocksDB.put!(b, idx_key, UInt8[], cf=manager.cf_idx_keywords)
-    end
     for r in record.refs
         idx_key = vcat(Vector{UInt8}(r), key_bytes)
         RocksDB.put!(b, idx_key, UInt8[], cf=manager.cf_idx_refs)

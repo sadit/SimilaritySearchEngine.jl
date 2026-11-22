@@ -107,6 +107,8 @@ batch = [
 append_items!(h, batch)  # Stages 362 vectors into dense_vectors.mmapdb
 ```
 
+Each item carries metadata next to its vector. The engine indexes `doc_id`: [`fetch_items`](https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html#SimilaritySearchEngine.fetch_items) finds an item by it. The engine stores `keywords` and `meta` with the item and returns them in every result. It does not index `keywords`. It indexes a field of `meta` only when that field is the partition field of the project (see [Searching One Partition](#searching-one-partition)). A filter function reads both, as in section 5.
+
 ### 4. Constructing the Proximity Graph
 
 For a `SearchGraph` backend, `append_items!` writes vectors to disk immediately but does not construct graph edges. To build graph connectivity across the staged backlog, invoke [`index!`](https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html#SimilaritySearchEngine.index!-Tuple{EmbeddedEngine}):
@@ -645,7 +647,7 @@ To retrieve stored records by internal `_id` or external `doc_id`:
 items_fetched = fetch_items(h2, ["frankenstein_2"])
 it = only(items_fetched)
 it.doc_id         # "frankenstein_2"
-it.keywords       # Indexed keywords array
+it.keywords       # Keywords, stored as metadata
 it.meta           # Free-form metadata dictionary
 it.payload        # Stored vector or text
 

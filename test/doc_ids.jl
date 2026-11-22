@@ -71,3 +71,16 @@ end
         close_project!(h2)
     end
 end
+
+@testset "keywords are stored and returned, and not indexed (issue #5)" begin
+    mktempworkdir() do workdir
+        h = create_project(workdir, "kw_ds", DenseVectors(; index=Exhaustive()))
+        append_items!(h, [DenseItem(Float32[1, 2, 3]; doc_id="k1", keywords=["a", "b"]),
+                          DenseItem(Float32[3, 2, 1]; doc_id="k2", keywords=["b"])])
+        @test fetch_items(h, ["k1"])[1].keywords == ["a", "b"]
+        has_a(record, meta) = "a" in record.keywords
+        @test [r._id for r in search(h, Float32[3, 2, 1], 2; filter=has_a)] == [1]
+        @test isempty(collect(RocksDB.DBIterator(h.project.db; cf=h.project.cf_idx_keywords)))
+        close_project!(h)
+    end
+end

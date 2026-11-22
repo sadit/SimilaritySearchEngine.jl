@@ -350,7 +350,7 @@ window.Quarto = {
 </section>
 <section id="uniform-metadata-contract" class="level3">
 <h3 class="anchored" data-anchor-id="uniform-metadata-contract">Uniform Metadata Contract</h3>
-<p>Projects use a standardized metadata record structure, <code>Schema.MetadataRecord</code>: - <code>_id</code>: Internal, sequential, zero-based or 1-based integer identifier aligned with vector storage indices. - <code>schema_version</code>: Which declaration of <code>meta</code> was in force when the record was written (see below). - <code>doc_id</code>: Caller-provided external string identifier. - <code>keywords</code>: Indexed string tags mapped via the secondary index <code>idx_keywords</code>. - <code>refs</code>: Indexed document reference links mapped via <code>idx_refs</code>. - <code>meta</code>: Metadata stored as a serialized JSON object, in its own column family.</p>
+<p>Projects use a standardized metadata record structure, <code>Schema.MetadataRecord</code>: - <code>_id</code>: Internal, sequential, zero-based or 1-based integer identifier aligned with vector storage indices. - <code>schema_version</code>: Which declaration of <code>meta</code> was in force when the record was written (see below). - <code>doc_id</code>: Caller-provided external string identifier. - <code>keywords</code>: String tags. They are metadata of the item: the engine stores them, returns them, and passes them to filter functions. It does not index them. Until 2026-11-22 they were also written to the column family <code>idx_keywords</code>, which no function read (issue #5). - <code>refs</code>: Indexed document reference links mapped via <code>idx_refs</code>. - <code>meta</code>: Metadata stored as a serialized JSON object, in its own column family.</p>
 <p>The record has the same shape in every project. What varies is <code>meta</code>, and a project may declare part of it.</p>
 </section>
 <section id="the-declared-shape-of-meta" class="level3">
@@ -617,7 +617,6 @@ window.Quarto = {
         records[("records&lt;br/&gt;&lt;small&gt;_id → MetadataRecord&lt;/small&gt;")]
         meta[("meta&lt;br/&gt;&lt;small&gt;_id → JSON meta blob&lt;/small&gt;")]
         oplog[("op_log")]
-        idxkw[("idx_keywords&lt;br/&gt;&lt;small&gt;keyword → _ids&lt;/small&gt;")]
         idxrefs[("idx_refs&lt;br/&gt;&lt;small&gt;referenced doc_id → _ids&lt;/small&gt;")]
         idxdoc[("idx_docid&lt;br/&gt;&lt;small&gt;doc_id → _ids&lt;/small&gt;")]
         engine[("engine&lt;br/&gt;&lt;small&gt;Field-level engine state&lt;/small&gt;")]
@@ -634,7 +633,6 @@ window.Quarto = {
 
     ProjectManager -- "Metadata CRUD" --&gt; records
     ProjectManager -- "Unstructured Meta" --&gt; meta
-    ProjectManager -- "Secondary Indices" --&gt; idxkw
     ProjectManager -- "Secondary Indices" --&gt; idxrefs
     ProjectManager -- "Secondary Indices" --&gt; idxdoc
     EngineStore -- "save_field! / load_field" --&gt; engine

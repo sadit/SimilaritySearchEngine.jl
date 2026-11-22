@@ -375,6 +375,7 @@ window.Quarto = {
 <span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>    for it <span class="kw">in</span> items[<span class="fl">1</span><span class="op">:</span>half]</span>
 <span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>]</span>
 <span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a><span class="fu">append_items!</span>(h, batch)  <span class="co"># Stages 362 vectors into dense_vectors.mmapdb</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Each item carries metadata next to its vector. The engine indexes <code>doc_id</code>: <a href="https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html#SimilaritySearchEngine.fetch_items"><code>fetch_items</code></a> finds an item by it. The engine stores <code>keywords</code> and <code>meta</code> with the item and returns them in every result. It does not index <code>keywords</code>. It indexes a field of <code>meta</code> only when that field is the partition field of the project (see <a href="#searching-one-partition">Searching One Partition</a>). A filter function reads both, as in section 5.</p>
 </section>
 <section id="constructing-the-proximity-graph" class="level3">
 <h3 class="anchored" data-anchor-id="constructing-the-proximity-graph">4. Constructing the Proximity Graph</h3>
@@ -788,7 +789,7 @@ window.Quarto = {
 <span id="cb41-2"><a href="#cb41-2" aria-hidden="true" tabindex="-1"></a>items_fetched <span class="op">=</span> <span class="fu">fetch_items</span>(h2, [<span class="st">"frankenstein_2"</span>])</span>
 <span id="cb41-3"><a href="#cb41-3" aria-hidden="true" tabindex="-1"></a>it <span class="op">=</span> <span class="fu">only</span>(items_fetched)</span>
 <span id="cb41-4"><a href="#cb41-4" aria-hidden="true" tabindex="-1"></a>it.doc_id         <span class="co"># "frankenstein_2"</span></span>
-<span id="cb41-5"><a href="#cb41-5" aria-hidden="true" tabindex="-1"></a>it.keywords       <span class="co"># Indexed keywords array</span></span>
+<span id="cb41-5"><a href="#cb41-5" aria-hidden="true" tabindex="-1"></a>it.keywords       <span class="co"># Keywords, stored as metadata</span></span>
 <span id="cb41-6"><a href="#cb41-6" aria-hidden="true" tabindex="-1"></a>it.meta           <span class="co"># Free-form metadata dictionary</span></span>
 <span id="cb41-7"><a href="#cb41-7" aria-hidden="true" tabindex="-1"></a>it.payload        <span class="co"># Stored vector or text</span></span>
 <span id="cb41-8"><a href="#cb41-8" aria-hidden="true" tabindex="-1"></a></span>

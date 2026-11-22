@@ -49,7 +49,7 @@ Projects use a standardized metadata record structure, `Schema.MetadataRecord`:
 - `_id`: Internal, sequential, zero-based or 1-based integer identifier aligned with vector storage indices.
 - `schema_version`: Which declaration of `meta` was in force when the record was written (see below).
 - `doc_id`: Caller-provided external string identifier.
-- `keywords`: Indexed string tags mapped via the secondary index `idx_keywords`.
+- `keywords`: String tags. They are metadata of the item: the engine stores them, returns them, and passes them to filter functions. It does not index them. Until 2026-11-22 they were also written to the column family `idx_keywords`, which no function read (issue #5).
 - `refs`: Indexed document reference links mapped via `idx_refs`.
 - `meta`: Metadata stored as a serialized JSON object, in its own column family.
 
@@ -318,7 +318,6 @@ flowchart TB
         records[("records<br/><small>_id → MetadataRecord</small>")]
         meta[("meta<br/><small>_id → JSON meta blob</small>")]
         oplog[("op_log")]
-        idxkw[("idx_keywords<br/><small>keyword → _ids</small>")]
         idxrefs[("idx_refs<br/><small>referenced doc_id → _ids</small>")]
         idxdoc[("idx_docid<br/><small>doc_id → _ids</small>")]
         engine[("engine<br/><small>Field-level engine state</small>")]
@@ -335,7 +334,6 @@ flowchart TB
 
     ProjectManager -- "Metadata CRUD" --> records
     ProjectManager -- "Unstructured Meta" --> meta
-    ProjectManager -- "Secondary Indices" --> idxkw
     ProjectManager -- "Secondary Indices" --> idxrefs
     ProjectManager -- "Secondary Indices" --> idxdoc
     EngineStore -- "save_field! / load_field" --> engine

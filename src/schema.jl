@@ -181,7 +181,8 @@ that's why `meta` is a separate JSON blob, never a field on this struct).
   `meta`, not validated or enforced by this module.
 - `doc_id::Union{String,Nothing}`: the caller-supplied external id, if the appended
   item had one (its raw `"doc_id"` key) -- `nothing` if it didn't.
-- `keywords::Vector{String}`: free tags, indexed for lookup (see `Project`).
+- `keywords::Vector{String}`: free tags. They are metadata: the engine stores and returns them,
+  and does not index them (issue #5).
 - `refs::Vector{String}`: `doc_id`s of related records -- *not* validated against
   anything at write time (a ref may point at a `doc_id` that doesn't exist yet, or
   ever, e.g. a forward reference inserted before its target), so this is a plain
