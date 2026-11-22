@@ -308,8 +308,26 @@ of it exist.
       `DEFAULT_PARTITION_GRAPH_MIN`.
 15. **Leader and follower datasets (§5.11, issue #5)** — designed on 2026-11-22. Phase 1 done
     on the same date: keywords are metadata, and the engine no longer writes `idx_keywords`.
-    Next: phase 2, the framework of followers in the engine. The partitions of §5.9 and §5.10
-    become followers in phase 3.
+    Phase 2, the framework of followers in the engine, done on 2026-11-22 (`src/followers.jl`,
+    `test/followers.jl`). The partitions of §5.9 and §5.10 become followers in phase 3.
+
+    What differs from §5.11, or was decided while implementing phase 2:
+    - The key source of a field of `meta` is `MetaValue(name)`. `MetaField` already names a
+      declared field of a `MetaSchema` (§4.5).
+    - The functions of a kind are `create_follower_state`, `open_follower_state`,
+      `process_items!`, `close_follower_state!`, `check_follower_spec` and
+      `check_follower_value`. They are not exported; a kind extends them qualified.
+    - `create_follower` deletes the follower and raises when processing the items of the leader
+      raises, for example a key that is not a string. It does not leave a follower behind.
+    - When `sync!` of a follower raises inside `index!` or `append_items!` of the leader, the
+      error raised afterwards is the error of the kind, with its own type, so that its category
+      still maps to a status code. A warning names the follower and says to call `sync!`.
+    - `follower_dir(workdir, leader, name)` is exported, for a caller that moves a leader with
+      its followers.
+    - `reload_datasets!` of the server skips a directory whose name is not a dataset id, such as
+      `<leader>.followers`.
+    - `rebuild_follower!` builds the follower in `<dir>.rebuild` and moves it in place when it is
+      complete. `delete_follower!` also removes that directory.
 
 The stemmer registry of §5.3 and §9's phase 5 is not on this list: it was discarded. Stemming
 was the way this specification proposed to make a query match a word it does not equal. That
@@ -1275,7 +1293,7 @@ needs_payload(source::KeySource) = false
 - `item` is the item of the leader as `fetch_items` returns it. Its `payload` is `nothing`
   unless `needs_payload(source)` is `true`, because a copy of each vector costs time and
   memory.
-- The engine includes `Keywords()`, `Refs()`, `MetaField(name)` and `DocId()`.
+- The engine includes `Keywords()`, `Refs()`, `MetaValue(name)` and `DocId()`.
 - A new key source is a subtype of `KeySource` with a method of `keys_of`. A type defined
   outside the engine must belong to a registered plugin (below).
 - `sync!` calls `keys_of` through a function specialized on the type of the key source. The
@@ -1284,20 +1302,22 @@ needs_payload(source::KeySource) = false
 #### Kinds of follower
 
 A kind of follower is a subtype of `FollowerSpec`. The spec holds the key source and the
-options of the kind, for example `PartitionFollower(MetaField("repo"); disjoint=true)` in
+options of the kind, for example `PartitionFollower(MetaValue("repo"); disjoint=true)` in
 phase 3. A kind implements these functions:
 
 | function | what it does |
 |---|---|
 | `follower_column_families(spec)` | the names of the column families that the kind uses |
-| `create_state(spec, leader, store)` | the empty state of a new follower |
-| `open_state(spec, leader, store)` | the state of an existing follower, read from its storage |
-| `process!(state, leader, ids, keys)` | adds the items `ids` of the leader, with their keys, to the structure, and saves it |
+| `check_follower_spec(spec, leader)` | raises when the leader cannot have this follower |
+| `create_follower_state(spec, leader, store, db)` | the empty state of a new follower |
+| `open_follower_state(spec, leader, store, db)` | the state of an existing follower, read from its storage |
+| `process_items!(state, leader, ids, keys)` | adds the items `ids` of the leader, with their keys, to the structure, and saves it |
 | `follower_stats(state)` | the statistics of the kind for `describe` |
-| `close_state!(state)` | releases what the state holds |
+| `check_follower_value(state, value)` | raises when `value` does not name a group of the follower |
+| `close_follower_state!(state)` | releases what the state holds |
 
-`process!` must give the same result when it runs twice on the same items. `sync!` relies on
-that after an interruption (below).
+`process_items!` must give the same result when it runs twice on the same items. `sync!` relies
+on that after an interruption (below).
 
 Phase 2 defines no kind for the user. Its tests define a kind in the test files, which also
 checks that a kind can be defined outside the engine.
@@ -1332,7 +1352,7 @@ New engine fields of the leader:
 #### Creating, opening, rebuilding and deleting
 
 ```julia
-f = create_follower(leader, "by_repo", PartitionFollower(MetaField("repo")); policy=OnIndex())
+f = create_follower(leader, "by_repo", PartitionFollower(MetaValue("repo")); policy=OnIndex())
 f = open_follower(leader, "by_repo")
 u = open_follower(leader, "by_repo=unicach")
 sync!(f)
@@ -1372,9 +1392,9 @@ and returns the number of items processed.
   the number of codes of a quantized project. A staged item that `index!` has not indexed is not
   processed.
 - `sync!` works in blocks of `FOLLOWER_SYNC_BLOCK` items. For each block it reads the records
-  and the `meta` of the items from the leader, computes their keys, calls `process!`, and then
+  and the `meta` of the items from the leader, computes their keys, calls `process_items!`, and then
   saves `:position`. An interruption leaves the position at the end of the last complete
-  block. The next `sync!` processes the next block again, and `process!` gives the same result.
+  block. The next `sync!` processes the next block again, and `process_items!` gives the same result.
 - `sync!` reads the leader under its read lock, and writes the follower under the write lock of
   the follower. A search of the leader is not blocked.
 - Deletes are not processed. A result of a follower is an `_id` of the leader, and the leader
@@ -1472,7 +1492,7 @@ Each phase updates `manual/architecture.qmd`, the tutorial, and this section.
 - A staged item is processed after `index!` of the leader with `OnIndex()`, and not before.
 - `OnWrite()` processes after `append_items!` of an exact leader. `Manual()` processes only at
   `sync!`.
-- A `process!` that fails in the second block leaves the position at the end of the first
+- A `process_items!` that fails in the second block leaves the position at the end of the first
   block. The next `sync!` gives the same structure as a `sync!` without the failure.
 - `append_items!` and `delete_item!` on a follower raise `UnsupportedOperation`.
 - After a new generation of the leader, `open_follower` raises `StaleFollower`, and

@@ -226,6 +226,10 @@ mutable struct EmbeddedEngine
     # raises `ProjectClosed` (issue #4): the stores behind a closed handle are closed, and an
     # operation on them returned wrong results instead of an error.
     closed::Base.RefValue{Bool}
+    # The followers opened on this handle, by name (PLAN.md §5.11). `index!` and
+    # `append_items!` process them according to their policies, and `close_project!` closes
+    # them. The values are `Follower`s, a type defined after this one.
+    followers::Dict{String,Any}
 end
 
 """
@@ -505,12 +509,15 @@ function create_project(workdir::String, dataset::String, spec::ProjectSpec=Dens
     eng = IndexEngine.create_engine(spec; on_change=_on_change(spec, store, project), log_io=nothing,
                                     maxbatches=runtime.maxbatches, adj_factory, edit_correction=runtime.edit_correction)
     Persistence.save_field!(store, :spec, IndexEngine.spec_to_dict(spec))
+    # The numbering of the items, which a follower checks (PLAN.md §5.11).
+    Persistence.save_field!(store, :generation, Project.generate_id())
     Persistence.save_fields!(store, IndexEngine.snapshot_state(eng))
     isempty(schema) || Persistence.save_field!(store, :meta_schema, schema)
     partition_by === nothing || Persistence.save_field!(store, :partition_by, partition_by)
     handle = EmbeddedEngine(workdir, dataset, dir, project, eng, store, schema_version,
                             schema, OOVCounters(), dense_vectors, false, Ref(true), partitions_ref,
-                            (runtime.postings_cache_max, runtime.postings_cache_base), spec, Ref(false))
+                            (runtime.postings_cache_max, runtime.postings_cache_base), spec, Ref(false),
+                            Dict{String,Any}())
     if kind === :dense && partition_by !== nothing
         Persistence.save_field!(store, :partition_graph_min, graph_min)
         _enable_dense_partitions!(handle, graph_min, Dict{UInt32,Int}())
@@ -807,7 +814,8 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
                             Persistence.load_field(store, :meta_schema, Schema.MetaSchema()),
                             Persistence.load_field(store, :oov_counters, OOVCounters()),
                             dense_vectors, read_only, Ref(false), partitions_ref,
-                            (runtime.postings_cache_max, runtime.postings_cache_base), spec, Ref(false))
+                            (runtime.postings_cache_max, runtime.postings_cache_base), spec, Ref(false),
+                            Dict{String,Any}())
     spec isa DenseVectors && partition_by !== nothing && _restore_dense_partitions!(handle)
     return handle
 end
@@ -918,6 +926,10 @@ After it, every other function that takes `handle` raises [`ProjectClosed`](@ref
 """
 function close_project!(handle::EmbeddedEngine; compact::Bool=true)
     handle.closed[] && return nothing
+    # A follower reads the index of its leader, so it is closed first.
+    for f in collect(values(handle.followers))
+        close_follower!(f)
+    end
     # The queries counted since the last write (see `OOVCounters`). A read-only handle counted
     # them for its own report and has nowhere to put them.
     if !handle.read_only && handle.oov.unflushed > 0
@@ -1036,6 +1048,7 @@ function index!(handle::EmbeddedEngine)
     else
         IndexEngine.index!(engine)   # sparse and exact: already indexed on append, a no-op
     end
+    _sync_followers!(handle, OnIndex)
     return handle
 end
 
@@ -1305,6 +1318,7 @@ function append_items!(handle::EmbeddedEngine, items::AbstractVector{<:Schema.Ab
         Persistence.append_staged_texts!(Persistence.open_staged_text_store(project.db), text_sp, staged_texts)
     end
 
+    _sync_followers!(handle, OnWrite)
     return length(items)
 end
 

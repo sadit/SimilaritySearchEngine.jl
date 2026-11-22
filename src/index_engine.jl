@@ -15,7 +15,7 @@ export AbstractSearchEngine, DenseEngine, SparseEngine, FullTextEngine
 export GraphBackend, ExactBackend, SparseBackend, TextBackend, backend_tag, payload_kind
 export ReadWriteLock, read_lock, write_lock
 export ContextPool, checkout!, checkin!
-export create_engine, restore_engine, snapshot_state, extra_state_fields, build_exact_index, add_item!, index!, search_live, mark_deleted!
+export create_engine, restore_engine, snapshot_state, extra_state_fields, build_exact_index, indexed_length, add_item!, index!, search_live, mark_deleted!
 export stored_payload
 export calibrate!, current_beamsearch, OptBeamSearch, CalibrationLevel, DEFAULT_MINRECALL_LEVELS
 export direct_neighbors, apply_searchgraph_vectors!, build_searchgraph
@@ -769,6 +769,17 @@ mutable struct FullTextEngine <: AbstractSearchEngine
     deleted_ids::Set{UInt32}
     lock::ReadWriteLock
 end
+
+"""
+    indexed_length(engine::AbstractSearchEngine) -> Int
+
+The number of items that a search of `engine` can return: the length of the graph, of the exact
+index, of the sparse or text inverted file, or the number of codes of a quantized project. An
+item that is staged and not indexed yet is not counted. A follower processes the items of its
+leader up to this number (PLAN.md §5.11).
+"""
+indexed_length(engine::FullTextEngine) = engine.backend.index === nothing ? 0 : length(engine.backend.index)
+indexed_length(engine::AbstractSearchEngine) = length(engine.backend.index)
 
 """
     payload_kind(engine::AbstractSearchEngine) -> Symbol

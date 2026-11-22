@@ -47,6 +47,9 @@ using .IndexEngine
 # with no Job/token/HTTP surface at all (the trust boundary here is OS file permissions on
 # workdir, same as the CLI).
 include("embedded.jl")
+# Leader and follower datasets (PLAN.md §5.11): a follower organizes the items of a project
+# without copying them.
+include("followers.jl")
 
 export EmbeddedEngine, create_project, open_project, close_project!, compact_project!,
        append_items!, index!,
@@ -110,6 +113,16 @@ export EngineError, InvalidRequest, NotFound, ConflictingState, StorageFailure
 export PayloadMismatch, WrongDimension, UnknownBackend, InvalidOption, UnsupportedOperation
 export ProfileNotInstalled, UnknownPartition, PendingBacklog, NothingStaged, NoIndex, NotTrained
 export EmptyProject, ProjectClosed, CorruptedStorage
+export UnknownFollower, PluginNotLoaded, StaleFollower, HasFollowers
+
+# Leader and follower datasets (PLAN.md §5.11, issue #5). The functions that a kind of follower
+# implements (`create_follower_state`, `process_items!`, ...) are not exported: a kind extends
+# them qualified, as `SimilaritySearchEngine.process_items!`.
+export KeySource, Keywords, Refs, DocId, MetaValue, keys_of, needs_payload
+export FollowerSpec, SyncPolicy, OnIndex, OnWrite, Periodic, Manual
+export Follower, FollowerView, FollowerStatus, create_follower, open_follower, close_follower!, sync!,
+       rebuild_follower!, delete_follower!, follower_status, followers, follower_dir, register_plugin!,
+       FOLLOWER_SYNC_BLOCK
 
 # ---------------------------------------------------------------------------------------
 # Precompilation workload.

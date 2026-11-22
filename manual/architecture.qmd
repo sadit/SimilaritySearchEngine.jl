@@ -489,6 +489,48 @@ Before 2026-11-18, neither was saved. A reopened graph searched with the default
 
 ---
 
+## Leader and Follower Datasets
+
+A **follower** is a dataset that organizes the items of another dataset, its **leader** (issue #5, `server/PLAN.md` §5.11). It reads the items of the leader and does not copy them. It stores its own structure, expressed with the `_id`s of the leader. A leader can have several followers, and each one is created, rebuilt and deleted without a change to the items of the leader.
+
+The engine includes the framework of followers since 2026-11-22. It does not include a kind of follower for the user yet. The partitions of the two previous sections become a kind of follower, disjoint or non-disjoint, and the index of keywords becomes another kind.
+
+### Concepts
+
+- **Key source.** A key source is the part of an item that a follower uses: `Keywords()`, `Refs()`, `DocId()` or `MetaValue("field")`. `keys_of(source, item)` returns the keys of one item: `nothing`, a string, or a list of strings. A key is a non-empty string. A key source that reads the payload says so with `needs_payload`, because a copy of each vector costs time and memory.
+- **Kind of follower.** A kind is a subtype of `FollowerSpec`. It holds its key source and its options, and it implements a small interface: create and open its state, process a block of items, and report its statistics. The docstring of `FollowerSpec` lists the functions.
+- **Position.** The position of a follower is the last `_id` of the leader that it processed. A follower processes the items of the leader up to `IndexEngine.indexed_length` of the leader: the items that a search of the leader can return. A staged item that `index!` has not indexed is not processed.
+- **Generation.** The leader saves a random identifier of the numbering of its items in the engine field `:generation`. A `rebuild` of the server creates a new project, which can change the `_id`s, and the new project has a new generation. A follower saves the generation it was built from. When the two differ, `open_follower` raises `StaleFollower`, and `rebuild_follower!` builds the follower again.
+
+### Names and Storage
+
+The canonical name of a follower is `leader/follower`, and the name of a follower restricted to one value is `leader/follower=value`. `open_follower(h, "by_repo=unicach")` returns a `FollowerView` restricted to that value.
+
+A follower is stored in `<workdir>/<leader>.followers/<follower>/`, a RocksDB database with the column family `engine` and the column families of its kind. It is not inside the directory of the leader, because that directory is the database of the leader. A dataset id of the server cannot contain `.`, so this directory is never taken for a dataset.
+
+The engine fields of a follower are the name of its leader, the generation of the leader, its position, a description of its kind for `followers(h)`, the name of its plugin, and its spec and policy. All of them except the spec and the policy are plain values, which can be read without the plugin. The leader saves the names of its followers in `:followers`.
+
+### Processing
+
+`sync!(f)` reads the records and the `meta` of the items of the leader after the position of the follower, computes their keys, and passes them to the kind. It works in blocks of `FOLLOWER_SYNC_BLOCK` (16,384) items and saves the position after each block. An interruption repeats at most one block, so a kind must give the same result when it processes the same items twice. Deletes are not processed: a result of a follower is an `_id` of the leader, and the leader marks a deleted item in each result.
+
+A policy says when a follower processes the new items:
+
+| policy | when |
+|---|---|
+| `OnIndex()` (default) | after each `index!` of the leader |
+| `OnWrite()` | after each `append_items!` of the leader; on a leader that stages its items, nothing is indexed at that point |
+| `Periodic(; seconds, items)` | in the server, as a job; the engine treats it as `Manual()` |
+| `Manual()` | only at `sync!` |
+
+`open_follower` registers the follower in the handle of its leader. `index!` and `append_items!` of the leader call `sync!` on the registered followers whose policy applies, after the leader has saved its own work. When `sync!` of a follower raises, the other followers are processed, and the first error is raised afterwards. `close_project!` of the leader closes its followers first. `open_follower` processes nothing: a follower that lags behind its leader stays behind until its policy or `sync!` processes the new items. `follower_status(f)` and `followers(h)` report the position, the lag and whether a follower is synchronized.
+
+A follower accepts no direct write. `append_items!`, `delete_item!` and `index!` on a follower raise `UnsupportedOperation`, and the message names the leader.
+
+### Plugins
+
+A spec or a key source whose type is defined outside the engine belongs to a module registered with `register_plugin!`. The engine saves the spec with `Serialization`, and a value of a type from a module that is not loaded cannot be read back. A follower saves the name of its plugin as a plain value, and `open_follower` raises `PluginNotLoaded` before it reads the spec in a process that has not registered the plugin. `create_follower` refuses a type from a module that is not registered.
+
 ## Failure Reporting: Typed Errors and Their Boundaries
 
 Every failure that the engine raises is an `EngineError`. The type of the error, not its message, is the interface. There are four abstract categories, and one or more concrete types under each of them:
@@ -496,11 +538,11 @@ Every failure that the engine raises is an `EngineError`. The type of the error,
 | category | meaning | concrete types |
 |---|---|---|
 | `InvalidRequest` | the call cannot be honoured as written; retrying it unchanged fails again | `PayloadMismatch`, `WrongDimension`, `UnknownBackend`, `InvalidOption`, `UnsupportedOperation` |
-| `NotFound` | something the call named does not exist | `ProfileNotInstalled`, `UnknownPartition` |
-| `ConflictingState` | the request is well formed but the project is not in a state that can serve it; the same call succeeds later | `PendingBacklog`, `NothingStaged`, `NoIndex`, `NotTrained`, `EmptyProject`, `ProjectClosed` |
+| `NotFound` | something the call named does not exist | `ProfileNotInstalled`, `UnknownPartition`, `UnknownFollower`, `PluginNotLoaded` |
+| `ConflictingState` | the request is well formed but the project is not in a state that can serve it; the same call succeeds later | `PendingBacklog`, `NothingStaged`, `NoIndex`, `NotTrained`, `EmptyProject`, `ProjectClosed`, `StaleFollower`, `HasFollowers` |
 | `StorageFailure` | what was read back cannot be interpreted | `CorruptedStorage` |
 
-`ProjectClosed` is raised by every function that takes a handle after `close_project!` closed it. That handle stays closed, and the same call succeeds on a new handle from `open_project`.
+`ProjectClosed` is raised by every function that takes a handle after `close_project!` closed it. That handle stays closed, and the same call succeeds on a new handle from `open_project`. A follower raises it after `close_follower!`, or after `close_project!` of its leader.
 
 The concrete types carry the values a caller can use. `PendingBacklog` reports the number of staged items and the number of indexed items, `WrongDimension` reports the expected and the received length, and `InvalidOption` reports the keyword that was rejected.
 

@@ -54,6 +54,8 @@ for (name, parent, doc) in (
         (:RequestRejected, :InvalidRequest, "A 400 response without an engine `kind`: the server rejected the request before it reached the engine."),
         (:ProfileNotInstalled, :NotFound, "A linguistic profile that the server does not have."),
         (:UnknownPartition, :NotFound, "A partition name that the dataset does not have. The message lists the closest names."),
+        (:UnknownFollower, :NotFound, "A follower name that the leader dataset does not have. The message lists the closest names."),
+        (:PluginNotLoaded, :NotFound, "A follower that needs a plugin the server has not loaded."),
         (:ResourceNotFound, :NotFound, "A 404 response without an engine `kind`, for example a dataset that does not exist or is not loaded."),
         (:PendingBacklog, :ConflictingState, "Items are appended but not indexed yet."),
         (:NothingStaged, :ConflictingState, "Nothing was ever appended, so there is nothing to index."),
@@ -61,6 +63,8 @@ for (name, parent, doc) in (
         (:NotTrained, :ConflictingState, "A text dataset without a fitted vocabulary, or a partition that was not calibrated."),
         (:EmptyProject, :ConflictingState, "An operation over the whole dataset, on a dataset with no items."),
         (:ProjectClosed, :ConflictingState, "The server closed the dataset while the request was served, for example to reload or delete it."),
+        (:StaleFollower, :ConflictingState, "A follower built before its leader was rebuilt. Rebuilding the follower makes it usable again."),
+        (:HasFollowers, :ConflictingState, "A request to delete a dataset that has followers. The followers are deleted first."),
         (:StateConflict, :ConflictingState, "A 409 response without an engine `kind`."),
         (:CorruptedStorage, :StorageFailure, "Stored data that the server cannot interpret."),
         (:Unauthenticated, :AccessDenied, "The request has no token, or its token is not valid. HTTP 401."),
@@ -107,6 +111,8 @@ const ERROR_KINDS = Dict{String,Type}(
     "NothingStaged" => NothingStaged, "NoIndex" => NoIndex, "NotTrained" => NotTrained,
     "EmptyProject" => EmptyProject, "ProjectClosed" => ProjectClosed,
     "CorruptedStorage" => CorruptedStorage,
+    "UnknownFollower" => UnknownFollower, "PluginNotLoaded" => PluginNotLoaded,
+    "StaleFollower" => StaleFollower, "HasFollowers" => HasFollowers,
     "Unauthenticated" => Unauthenticated, "Forbidden" => Forbidden,
 )
 

@@ -4,6 +4,7 @@ export EngineError, InvalidRequest, NotFound, ConflictingState, StorageFailure
 export PayloadMismatch, WrongDimension, UnknownBackend, InvalidOption, UnsupportedOperation
 export ProfileNotInstalled, UnknownPartition, PendingBacklog, NothingStaged, NoIndex, NotTrained
 export EmptyProject, ProjectClosed, CorruptedStorage
+export UnknownFollower, PluginNotLoaded, StaleFollower, HasFollowers
 
 """
     EngineError <: Exception
@@ -107,6 +108,24 @@ struct UnknownPartition <: NotFound
     msg::String
 end
 
+"""
+A follower name that the leader does not list in its followers (PLAN.md §5.11). `name` is the
+name that was asked for; the message lists the names closest to it.
+"""
+struct UnknownFollower <: NotFound
+    name::String
+    msg::String
+end
+
+"""
+A follower whose spec or key source has a type from a plugin module that is not registered in
+this process (PLAN.md §5.11). `plugin` is the name of the module.
+"""
+struct PluginNotLoaded <: NotFound
+    plugin::String
+    msg::String
+end
+
 # --- ConflictingState ----------------------------------------------------------------
 
 """
@@ -150,6 +169,26 @@ struct ProjectClosed <: ConflictingState
     msg::String
 end
 
+"""
+A follower built from an earlier numbering of the items of its leader: the leader was rebuilt
+after the follower processed its items (PLAN.md §5.11). `follower` is the canonical name.
+`rebuild_follower!` builds the follower again.
+"""
+struct StaleFollower <: ConflictingState
+    follower::String
+    msg::String
+end
+
+"""
+A request to delete a leader that has followers (PLAN.md §5.11). `followers` holds their names;
+each one is deleted first with `delete_follower!`.
+"""
+struct HasFollowers <: ConflictingState
+    dataset::String
+    followers::Vector{String}
+    msg::String
+end
+
 # --- StorageFailure ------------------------------------------------------------------
 
 "Stored bytes or recorded state that this version cannot interpret."
@@ -168,6 +207,7 @@ Base.showerror(io::IO, e::EngineError) = print(io, e.msg)
 export payload_mismatch, wrong_dimension, unknown_backend, invalid_option, unsupported_operation
 export profile_not_installed, unknown_partition, pending_backlog, nothing_staged, no_index, not_trained
 export empty_project, project_closed, corrupted_storage
+export unknown_follower, plugin_not_loaded, stale_follower, has_followers
 
 payload_mismatch(msg...) = throw(PayloadMismatch(string(msg...)))
 wrong_dimension(expected::Integer, got::Integer, msg...) =
@@ -187,5 +227,10 @@ not_trained(msg...) = throw(NotTrained(string(msg...)))
 empty_project(operation::Symbol, msg...) = throw(EmptyProject(operation, string(msg...)))
 project_closed(dataset, msg...) = throw(ProjectClosed(String(dataset), string(msg...)))
 corrupted_storage(msg...) = throw(CorruptedStorage(string(msg...)))
+unknown_follower(name, msg...) = throw(UnknownFollower(String(name), string(msg...)))
+plugin_not_loaded(plugin, msg...) = throw(PluginNotLoaded(String(plugin), string(msg...)))
+stale_follower(follower, msg...) = throw(StaleFollower(String(follower), string(msg...)))
+has_followers(dataset, followers, msg...) =
+    throw(HasFollowers(String(dataset), String[String(f) for f in followers], string(msg...)))
 
 end # module

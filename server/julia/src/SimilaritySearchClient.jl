@@ -32,8 +32,8 @@ export AbstractItem, DenseItem, SparseItem, TextItem
 export SearchResult, StoredItem, ExistsResult, CalibrationLevel
 export RemoteError, EngineError, InvalidRequest, NotFound, ConflictingState, StorageFailure, AccessDenied
 export PayloadMismatch, WrongDimension, UnknownBackend, InvalidOption, UnsupportedOperation, RequestRejected
-export ProfileNotInstalled, UnknownPartition, ResourceNotFound
-export PendingBacklog, NothingStaged, NoIndex, NotTrained, EmptyProject, StateConflict
+export ProfileNotInstalled, UnknownPartition, UnknownFollower, PluginNotLoaded, ResourceNotFound
+export PendingBacklog, NothingStaged, NoIndex, NotTrained, EmptyProject, ProjectClosed, StaleFollower, HasFollowers, StateConflict
 export CorruptedStorage, Unauthenticated, Forbidden, ServerFailure, UnexpectedResponse
 
 include("errors.jl")

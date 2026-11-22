@@ -593,6 +593,9 @@ function reload_datasets!(app::AppState)
     reloaded = String[]
     for id in sort(readdir(base))
         isdir(joinpath(base, id)) || continue
+        # A name that is not a dataset id is not a dataset: `<leader>.followers` holds the
+        # followers of a leader (PLAN.md §5.11).
+        valid_project_id(id) || continue
         haskey(app.handles, id) && continue
         _reload_one_dataset!(app, id) && push!(reloaded, id)
     end
