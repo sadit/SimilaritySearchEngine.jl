@@ -306,6 +306,10 @@ of it exist.
       describes the global graph.
     - Not done yet: phase 3, the measurement on real embeddings that sets
       `DEFAULT_PARTITION_GRAPH_MIN`.
+15. **Leader and follower datasets (§5.11, issue #5)** — designed on 2026-11-22. Phase 1 done
+    on the same date: keywords are metadata, and the engine no longer writes `idx_keywords`.
+    Next: phase 2, the framework of followers in the engine. The partitions of §5.9 and §5.10
+    become followers in phase 3.
 
 The stemmer registry of §5.3 and §9's phase 5 is not on this list: it was discarded. Stemming
 was the way this specification proposed to make a query match a word it does not equal. That
@@ -1196,6 +1200,297 @@ On 2026-11-18 a `SearchGraph` over a `SubDatabase` was checked to grow: ids are 
 - A filter evaluated inside the beam search of the global graph. SimilaritySearch has no such
   search, and its recall falls for small partitions, which is the case that matters here.
 - More than one partition field, and the intersection of two partitions.
+
+### 5.11. Leader and Follower Datasets (design, 2026-11-22)
+
+Status: designed on 2026-11-22 with the author, in issue #5. Phase 1 of the issue was done on
+the same date (commit `ead817e`): the engine no longer writes keywords to `idx_keywords`, and
+keywords are metadata. This section designs phase 2, the framework of followers. It also fixes
+what phases 3 to 6 rely on: what a follower saves, the functions that create, open and update
+a follower, and the information that `describe` reports.
+
+#### The use case
+
+An application organizes the items of one dataset in more than one way. The partitions of
+§5.9 and §5.10 are one way: one group per repository. A group per keyword, per value of a
+field of `meta`, or per ref of an item are other ways.
+
+Today an organization is either part of the project or a filter at query time. A partition is
+part of the project: there is one partition field per project, it is declared at creation or
+with `declare_partition!`, and its structures are in the column families of the project. A
+filter costs a search over the whole index, and it does not fill the page for a small group
+(§5.9, §5.10).
+
+A **follower** is a dataset that holds one organization of the items of another dataset, its
+**leader**. A leader can have several followers. A follower is created, rebuilt and deleted
+without a change to the items of its leader.
+
+#### Decisions
+
+These are the decisions of issue #5, as they apply to this design.
+
+1. A follower reads the items of its leader: the payload, `doc_id`, `keywords`, `refs` and
+   `meta`. It does not copy them. It stores its own structure, expressed with `_id`s of the
+   leader.
+2. A follower accepts no direct write. `append_items!` and `delete_item!` on a follower raise
+   an error whose message names the leader.
+3. A follower can lag behind its leader. A policy of the follower says when it processes new
+   items. A query to a follower answers with what the follower holds. `describe` reports
+   whether each follower is synchronized.
+4. A follower restricted to one value accepts the search operations of its leader. Exceptions
+   are found during the implementation and listed in §0.
+5. Partitions become followers (phase 3), disjoint or non-disjoint. In a disjoint partition an
+   item has one value or none. In a non-disjoint partition an item has several values: an
+   author of ReposMx belongs to every institution where they have documents.
+6. A follower offers no operation in the opposite direction of the data. For example, the
+   partitions of an authors project by institution are not used to search institutions.
+7. The keyword follower (phase 4) is an inverted file of SimilaritySearch, of any type that
+   SimilaritySearch supports.
+8. Key sources are types. The engine includes the common ones, an application adds more with
+   Julia code, and the server adds more with plugins (phase 6).
+9. A migration is an explicit function and an explicit command, never a step of
+   `open_project` or `open_follower`. An error that a migration solves names the function
+   and the command.
+
+#### Names and directories
+
+- A follower has a name with the pattern of a dataset id, `[A-Za-z0-9_-]{1,128}`.
+- The **canonical name** of a follower is `leader/follower`. The canonical name of a follower
+  restricted to one value is `leader/follower=value`. The value is the text after the first
+  `=`, and it must not be empty. The engine, the server and the clients use the same names.
+- The directory of a follower is `<workdir>/<leader>.followers/<follower>/`. It is not inside
+  the directory of the leader, because that directory is the RocksDB database of the leader.
+  A dataset id cannot contain `.`, so this directory is never taken for a dataset. The scan of
+  datasets of the server (`reload_datasets!`) must skip it.
+- A follower is in the same working directory as its leader.
+
+#### Key sources
+
+```julia
+abstract type KeySource end
+keys_of(source::KeySource, item::Schema.StoredItem)  # -> nothing, a String or a Vector{String}
+needs_payload(source::KeySource) = false
+```
+
+- `item` is the item of the leader as `fetch_items` returns it. Its `payload` is `nothing`
+  unless `needs_payload(source)` is `true`, because a copy of each vector costs time and
+  memory.
+- The engine includes `Keywords()`, `Refs()`, `MetaField(name)` and `DocId()`.
+- A new key source is a subtype of `KeySource` with a method of `keys_of`. A type defined
+  outside the engine must belong to a registered plugin (below).
+- `sync!` calls `keys_of` through a function specialized on the type of the key source. The
+  type is resolved once per call to `sync!`, not once per item.
+
+#### Kinds of follower
+
+A kind of follower is a subtype of `FollowerSpec`. The spec holds the key source and the
+options of the kind, for example `PartitionFollower(MetaField("repo"); disjoint=true)` in
+phase 3. A kind implements these functions:
+
+| function | what it does |
+|---|---|
+| `follower_column_families(spec)` | the names of the column families that the kind uses |
+| `create_state(spec, leader, store)` | the empty state of a new follower |
+| `open_state(spec, leader, store)` | the state of an existing follower, read from its storage |
+| `process!(state, leader, ids, keys)` | adds the items `ids` of the leader, with their keys, to the structure, and saves it |
+| `follower_stats(state)` | the statistics of the kind for `describe` |
+| `close_state!(state)` | releases what the state holds |
+
+`process!` must give the same result when it runs twice on the same items. `sync!` relies on
+that after an interruption (below).
+
+Phase 2 defines no kind for the user. Its tests define a kind in the test files, which also
+checks that a kind can be defined outside the engine.
+
+#### Storage
+
+The follower has its own RocksDB database, with the column family `engine` of every project
+and the column families of its kind. It has no `records` and no `meta`, because it has no
+items of its own.
+
+Engine fields of the follower:
+
+- `:follows`: the name of the leader, the generation of the leader (below), the spec, and the
+  policy.
+- `:follows_plugin`: the name of the plugin that defines the spec or its key source, or
+  `nothing`. It is a plain `String`, read before `:follows`. The engine saves values with
+  `Serialization`, and a value of a type from a module that is not loaded cannot be read back.
+  `open_follower` checks this field first, and raises `PluginNotLoaded` with the name of the
+  plugin.
+- `:position`: the last `_id` of the leader that the follower processed.
+
+New engine fields of the leader:
+
+- `:generation`: a random identifier of the current numbering of the items. `create_project`
+  writes it. A `rebuild` of the server writes a new one, because a rebuild can change the
+  `_id`s. A project created before this field existed gets it from `create_follower`, which
+  holds a writable handle of the leader.
+- `:followers`: the names of the followers of the leader. `create_follower` and
+  `delete_follower!` write it. It is read by `followers(leader)` and by the deletion of a
+  dataset in the server.
+
+#### Creating, opening, rebuilding and deleting
+
+```julia
+f = create_follower(leader, "by_repo", PartitionFollower(MetaField("repo")); policy=OnIndex())
+f = open_follower(leader, "by_repo")
+u = open_follower(leader, "by_repo=unicach")
+sync!(f)
+rebuild_follower!(leader, "by_repo")
+delete_follower!(leader, "by_repo")
+close_follower!(f)
+```
+
+- `create_follower` needs a writable handle of the leader. It creates the directory, saves the
+  fields of the follower, adds the name to `:followers` of the leader, and processes every
+  indexed item of the leader before it returns. It raises `InvalidOption` when the name exists,
+  and when the spec or the key source has a type from a module that is not a registered plugin.
+- `open_follower` takes the leader handle, and a name or a canonical name without the leader
+  part. It raises `UnknownFollower` (`NotFound`) for a name that is not in `:followers`, with
+  the closest names, as `UnknownPartition` does. It raises `StaleFollower` (`ConflictingState`)
+  when the saved generation differs from the generation of the leader, and the message names
+  `rebuild_follower!` and its command. It processes nothing: a follower that lags behind stays
+  behind until its policy or `sync!` processes the new items.
+- A follower opened from a read-only leader handle is read-only. `sync!` on it raises.
+- `open_follower` registers the follower in the leader handle. `close_project!` on the leader
+  closes its registered followers first. A closed follower raises `ProjectClosed` (issue #4).
+- `rebuild_follower!` empties the structures of the follower, saves the generation of the
+  leader and position 0, and processes every indexed item of the leader.
+- `delete_follower!` removes the directory and the name from `:followers`. The follower must
+  not be open.
+- The engine has no function that deletes a project. The server refuses to delete a leader
+  that has followers, with `HasFollowers` (`ConflictingState`, HTTP 409). The message lists
+  the followers and names `delete_follower!` and its command.
+
+#### Processing
+
+`sync!(f)` processes the items of the leader from `position + 1` to `indexed_length(leader)`,
+and returns the number of items processed.
+
+- `indexed_length` is a new function of `IndexEngine`: the number of items that a search of the
+  leader can return. It is the length of the graph, of the exact index, of the text index, or
+  the number of codes of a quantized project. A staged item that `index!` has not indexed is not
+  processed.
+- `sync!` works in blocks of `FOLLOWER_SYNC_BLOCK` items. For each block it reads the records
+  and the `meta` of the items from the leader, computes their keys, calls `process!`, and then
+  saves `:position`. An interruption leaves the position at the end of the last complete
+  block. The next `sync!` processes the next block again, and `process!` gives the same result.
+- `sync!` reads the leader under its read lock, and writes the follower under the write lock of
+  the follower. A search of the leader is not blocked.
+- Deletes are not processed. A result of a follower is an `_id` of the leader, and the leader
+  marks a deleted item in each result, as it does today. The position is therefore one number.
+
+Policies are types, as specs are:
+
+| policy | when the follower processes new items |
+|---|---|
+| `OnIndex()` (default) | after `index!` of the leader, which is when the new items of the leader become searchable |
+| `OnWrite()` | after each `append_items!` of the leader. On a leader that stages its items (a graph, a text project, a quantized project), there are no new indexed items at that point. |
+| `Periodic(; seconds, items)` | in the server, as a job, every `seconds` or every `items` new items. The engine treats it as `Manual()`. |
+| `Manual()` | only when `sync!` is called |
+
+In the engine, `index!` and `append_items!` of the leader call `sync!` on each registered
+follower whose policy applies, after the leader has saved its own work. When `sync!` of a
+follower fails, the leader keeps its work, the other followers are still processed, and the
+call raises the first error afterwards. The message names the follower and says to call
+`sync!` on it.
+
+#### Reading
+
+- A follower restricted to one value accepts the search operations of the leader for the kind
+  of its payload, with the arguments of the leader (`filter`, `candidates`, `minrecall`,
+  `stats`, and the others). The results are `_id`s of the leader. Their records and their
+  `meta` are read from the leader, and the leader marks the deleted ones.
+- A follower that is not restricted accepts the operations of its kind. In phase 4 this is
+  `posting_list` for a keyword follower.
+- A follower that lags behind answers with the items it holds.
+
+#### Information for `describe`
+
+- `follower_status(f)` returns: the canonical name, the leader, the kind and its key source,
+  the plugin, the policy, the position, `indexed_length` of the leader, the lag (the
+  difference), whether it is synchronized, whether it is stale, and the statistics of its kind.
+- `followers(leader)` returns the status of each follower named in `:followers`. A follower
+  that is not open is read from its fields, with a read-only open of its database, without
+  building its state. A follower whose directory is missing is reported as missing.
+- The server has three views: a leader with the status of its followers, one follower, and the
+  group (the leader and all its followers in one report).
+
+#### Errors
+
+New error types, each with a type of the same name in the Julia client
+(`server/julia/src/errors.jl`):
+
+| type | category | when |
+|---|---|---|
+| `UnknownFollower` | `NotFound` | `open_follower` with a name that the leader does not list |
+| `PluginNotLoaded` | `NotFound` | the follower names a plugin that is not loaded |
+| `StaleFollower` | `ConflictingState` | the leader was rebuilt after the follower processed its items |
+| `HasFollowers` | `ConflictingState` | the server is asked to delete a leader that has followers |
+
+A write to a follower raises `UnsupportedOperation`, with a message that names the leader.
+
+#### Plugins in the engine
+
+`register_plugin!(mod::Module)` registers a module whose types can be saved in a follower. The
+name of the plugin is `nameof(mod)`. A type of a spec or a key source must belong to the engine
+or to a registered plugin. Otherwise `create_follower` raises `InvalidOption`, because a type of
+a module that is not loaded at the next open cannot be read back. Phase 6 loads plugins in the
+server, from the `[plugins]` section of the TOML file.
+
+#### Server and clients
+
+Phase 5 designs the routes and the jobs in detail. What this section fixes:
+
+- A follower is addressed by its canonical name. The routes of a follower are under
+  `/api/v1/datasets/{leader}/followers/{name}`, and the value of a restricted follower is a
+  path segment, encoded in the URL.
+- The server opens each follower after its leader, at load and at reload.
+- `delete` of a leader with followers answers `409` (`HasFollowers`).
+- `rebuild` of a leader writes a new generation, and its followers become stale until
+  `rebuild_follower!`. The response of `rebuild` lists them.
+
+#### Phases
+
+2. The framework of this section in the engine: key sources, `FollowerSpec`, storage,
+   `create_follower`, `open_follower`, `sync!`, the policies, `rebuild_follower!`,
+   `delete_follower!`, `register_plugin!`, the status functions and the errors, with a kind
+   defined in the tests.
+3. The partition follower, disjoint and non-disjoint, for text and dense leaders. The
+   migration of the partitions inside a project is an explicit function and command, and the
+   caller chooses the kind.
+4. The keyword follower and `posting_list` for every inverted index.
+5. The server, the CLI, the Python and Julia clients, and the manual.
+6. Plugins in the server.
+
+Each phase updates `manual/architecture.qmd`, the tutorial, and this section.
+
+#### Tests of phase 2
+
+- `create_follower` on a leader with indexed items processes all of them: the position equals
+  `indexed_length` of the leader.
+- A staged item is processed after `index!` of the leader with `OnIndex()`, and not before.
+- `OnWrite()` processes after `append_items!` of an exact leader. `Manual()` processes only at
+  `sync!`.
+- A `process!` that fails in the second block leaves the position at the end of the first
+  block. The next `sync!` gives the same structure as a `sync!` without the failure.
+- `append_items!` and `delete_item!` on a follower raise `UnsupportedOperation`.
+- After a new generation of the leader, `open_follower` raises `StaleFollower`, and
+  `rebuild_follower!` makes it usable.
+- A kind whose type is not in a registered plugin is refused by `create_follower`. A follower
+  whose plugin is not loaded raises `PluginNotLoaded` at `open_follower`.
+- `close_project!` of the leader closes its followers.
+- `followers(leader)` reports an open follower, a closed one, and a missing directory.
+- `delete_follower!` removes the directory and the name.
+- A follower opened from a read-only leader handle refuses `sync!`.
+
+#### Not in this version
+
+- A follower of a follower.
+- A follower in another working directory than its leader.
+- The propagation of deletes to a follower.
+- A log of changes. With the position of a follower and the deletes marked by the leader,
+  nothing needs one. An operation that changes the metadata of an item in place would need it.
 
 ## 6. Hybrid Search Readiness (Suggestions & Specifications)
 
