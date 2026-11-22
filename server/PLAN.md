@@ -329,6 +329,28 @@ of it exist.
     - `rebuild_follower!` builds the follower in `<dir>.rebuild` and moves it in place when it is
       complete. `delete_follower!` also removes that directory.
 
+    Phase 3, the partition follower, done on 2026-11-22 (`src/partition_followers.jl`,
+    `test/partition_followers.jl`). What it implements, and what differs from §5.11:
+    - `PartitionFollower(source; disjoint=true, graph_min=nothing)`, for a text or a dense
+      leader. A sparse leader and a `graph_min` on a text leader raise `InvalidOption`.
+    - A restricted follower accepts `search` (dense), `ftsearch` (text) and `calibrate!`
+      (dense, `SearchGraph`). `searchbatch`, `allknn` and the other operations over the whole
+      collection do not take a partition, as for the partitions inside a project (§5.10).
+      `partitions(f)` lists the partitions.
+    - The functions of §5.10 in `src/dense_partitions.jl` take the set of partitions as an
+      argument. The partitions inside a project pass `engine.partitions`; a follower passes its
+      own set. A follower adds members and builds its graphs under the write lock of the leader,
+      whose vectors the graphs read.
+    - `migrate_partitions!(leader, name; disjoint)` is the explicit migration of the engine.
+      Its command belongs to phase 5. The calibrated levels of the partition graphs are not
+      moved. A search with `partition` on a migrated project raises `InvalidOption`, and the
+      message names the followers of the project.
+    - `PartitionBy` and `declare_partition!` still create partitions inside a project. When they
+      are removed is the open question of issue #5.
+    - The tutorial uses a partition follower. `vocabulary_report(hb)` in the tutorial used a
+      handle closed two blocks before, which raises `ProjectClosed` since issue #4; it now
+      reopens the project.
+
 The stemmer registry of §5.3 and §9's phase 5 is not on this list: it was discarded. Stemming
 was the way this specification proposed to make a query match a word it does not equal. That
 is now the work of the query pipeline of `TextSearch.jl`, which the engine exposes through the

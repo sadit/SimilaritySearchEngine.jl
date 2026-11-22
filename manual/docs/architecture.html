@@ -285,6 +285,7 @@ window.Quarto = {
   <li><a href="#names-and-storage" id="toc-names-and-storage" class="nav-link" data-scroll-target="#names-and-storage">Names and Storage</a></li>
   <li><a href="#processing" id="toc-processing" class="nav-link" data-scroll-target="#processing">Processing</a></li>
   <li><a href="#plugins" id="toc-plugins" class="nav-link" data-scroll-target="#plugins">Plugins</a></li>
+  <li><a href="#partition-followers" id="toc-partition-followers" class="nav-link" data-scroll-target="#partition-followers">Partition Followers</a></li>
   </ul></li>
   <li><a href="#failure-reporting-typed-errors-and-their-boundaries" id="toc-failure-reporting-typed-errors-and-their-boundaries" class="nav-link" data-scroll-target="#failure-reporting-typed-errors-and-their-boundaries">Failure Reporting: Typed Errors and Their Boundaries</a></li>
   <li><a href="#logging-channels-reporters-and-observers" id="toc-logging-channels-reporters-and-observers" class="nav-link" data-scroll-target="#logging-channels-reporters-and-observers">Logging Channels: Reporters and Observers</a></li>
@@ -673,6 +674,7 @@ window.Quarto = {
 </section>
 <section id="partitioned-text-indexes" class="level3">
 <h3 class="anchored" data-anchor-id="partitioned-text-indexes">Partitioned Text Indexes</h3>
+<p>This section and the next describe the partitions inside a project. Since 2026-11-22 a partition follower holds the same structures in its own database (see <a href="#partition-followers">Partition Followers</a>), and <code>migrate_partitions!</code> moves the partitions of a project to one.</p>
 <p>A text project can declare one <code>meta</code> field as its partition field (<code>partitions=PartitionBy(field)</code> in <code>create_project</code>, or <code>declare_partition!</code> later). Each value of the field is a partition. Three column families store the partitions:</p>
 <ul>
 <li><code>partition_table</code> maps each partition name to a number and to the number of items appended to it. Numbers start at 1, follow the order in which the names first appear, and are not reused. The table is read into memory when the project is opened.</li>
@@ -846,7 +848,7 @@ window.Quarto = {
 <section id="leader-and-follower-datasets" class="level2">
 <h2 class="anchored" data-anchor-id="leader-and-follower-datasets">Leader and Follower Datasets</h2>
 <p>A <strong>follower</strong> is a dataset that organizes the items of another dataset, its <strong>leader</strong> (issue #5, <code>server/PLAN.md</code> §5.11). It reads the items of the leader and does not copy them. It stores its own structure, expressed with the <code>_id</code>s of the leader. A leader can have several followers, and each one is created, rebuilt and deleted without a change to the items of the leader.</p>
-<p>The engine includes the framework of followers since 2026-11-22. It does not include a kind of follower for the user yet. The partitions of the two previous sections become a kind of follower, disjoint or non-disjoint, and the index of keywords becomes another kind.</p>
+<p>The engine includes the framework of followers and one kind, the partition follower, since 2026-11-22. The index of keywords becomes another kind (issue #5, phase 4).</p>
 <section id="concepts" class="level3">
 <h3 class="anchored" data-anchor-id="concepts">Concepts</h3>
 <ul>
@@ -902,6 +904,18 @@ window.Quarto = {
 <section id="plugins" class="level3">
 <h3 class="anchored" data-anchor-id="plugins">Plugins</h3>
 <p>A spec or a key source whose type is defined outside the engine belongs to a module registered with <code>register_plugin!</code>. The engine saves the spec with <code>Serialization</code>, and a value of a type from a module that is not loaded cannot be read back. A follower saves the name of its plugin as a plain value, and <code>open_follower</code> raises <code>PluginNotLoaded</code> before it reads the spec in a process that has not registered the plugin. <code>create_follower</code> refuses a type from a module that is not registered.</p>
+</section>
+<section id="partition-followers" class="level3">
+<h3 class="anchored" data-anchor-id="partition-followers">Partition Followers</h3>
+<p><code>PartitionFollower(source; disjoint=true, graph_min=nothing)</code> divides the items of a text or a dense leader into partitions, one per key of <code>source</code>. In a disjoint follower an item has at most one key, and an item with several keys raises <code>PayloadMismatch</code>. A non-disjoint follower, <code>disjoint=false</code>, puts an item in each partition it names: an author of ReposMx belongs to each institution where they have documents.</p>
+<p>The follower holds the column families of the partitions inside a project, <code>partition_table</code>, <code>partition_members</code>, <code>partition_postings</code> and <code>partition_graph</code>, with the same keys and values, in its own database. It reads everything else from its leader.</p>
+<ul>
+<li><strong>Text leader.</strong> For each block of items, the follower reads the token ids of each document from the document vectors of the leader, which are in memory, and appends the document to the list of each of its partitions and tokens. It does not read or tokenize text. A search in a partition builds the index of the leader with the lists of the partition in place of the global ones, as for the partitions inside a project. A document therefore gets the same score in the partition search and in the global search.</li>
+<li><strong>Dense leader.</strong> A partition is a view of the vectors of the leader. A partition with fewer than <code>graph_min</code> members, and every partition of an exact leader, is searched with an exact scan. A larger partition has its own graph, built and extended under the write lock of the leader, whose vectors it reads. The direct neighbors of each range are saved in <code>partition_graph</code>, and the number of members each graph holds in the engine field <code>:partition_graph_len</code> of the follower. <code>calibrate!</code> on a partition saves its levels in the follower.</li>
+</ul>
+<p><code>open_follower(h, "name=value")</code> returns the partition <code>value</code>, and <code>search</code>, <code>ftsearch</code> and <code>calibrate!</code> accept it. A partition name that the follower does not hold raises <code>UnknownPartition</code>, with the closest names. <code>partitions(f)</code> lists the partitions with the number of items of each one, and <code>follower_status(f).stats</code> gives the number of partitions, the number of memberships, the smallest, median and largest partition, and the number of graphs.</p>
+<p>Processing a block again gives the same structures. The members of an item that already has an entry in <code>partition_members</code> are not counted again. An id that is not larger than the last id of a posting list is not appended to it. A dense partition does not take an id that its list already ends with or exceeds. When a follower is opened, a dense partition takes the members of the processed items only, and a graph that holds members of an unprocessed block keeps its first members, because a graph saves only the links of each member to earlier members.</p>
+<p><code>migrate_partitions!(h, name; disjoint)</code> moves the partitions inside a project to a partition follower over <code>MetaValue(field)</code>, with the <code>graph_min</code> of the project. It builds the follower from the items of the leader. Then it empties the partition column families of the project and deletes its partition fields. The calibrated levels of the partition graphs are not moved. With <code>disjoint=true</code> and a field that holds a list, it raises <code>PayloadMismatch</code>, and the project keeps its partitions. After the migration, a search with <code>partition</code> on the project raises <code>InvalidOption</code>, and the message names its followers.</p>
 </section>
 </section>
 <section id="failure-reporting-typed-errors-and-their-boundaries" class="level2">

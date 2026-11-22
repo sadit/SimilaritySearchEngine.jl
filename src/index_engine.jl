@@ -6,7 +6,7 @@ using SimilaritySearch
 import SimilaritySearch: ParallelExhaustiveSearch
 using TextSearch
 using Base.Threads
-using SparseArrays: SparseVector
+using SparseArrays: SparseArrays, SparseVector, AbstractSparseVector
 using Dates: Dates
 using Random: AbstractRNG, default_rng
 using ..Errors
@@ -15,7 +15,7 @@ export AbstractSearchEngine, DenseEngine, SparseEngine, FullTextEngine
 export GraphBackend, ExactBackend, SparseBackend, TextBackend, backend_tag, payload_kind
 export ReadWriteLock, read_lock, write_lock
 export ContextPool, checkout!, checkin!
-export create_engine, restore_engine, snapshot_state, extra_state_fields, build_exact_index, indexed_length, add_item!, index!, search_live, mark_deleted!
+export create_engine, restore_engine, snapshot_state, extra_state_fields, build_exact_index, indexed_length, document_tokens, add_item!, index!, search_live, mark_deleted!
 export stored_payload
 export calibrate!, current_beamsearch, OptBeamSearch, CalibrationLevel, DEFAULT_MINRECALL_LEVELS
 export direct_neighbors, apply_searchgraph_vectors!, build_searchgraph
@@ -780,6 +780,25 @@ leader up to this number (PLAN.md §5.11).
 """
 indexed_length(engine::FullTextEngine) = engine.backend.index === nothing ? 0 : length(engine.backend.index)
 indexed_length(engine::AbstractSearchEngine) = length(engine.backend.index)
+
+"""
+    document_tokens(engine::FullTextEngine, ids::AbstractUnitRange) -> Vector{Vector{UInt32}}
+
+The token ids of each indexed document in `ids`, read from the document vectors that the text
+index holds in memory. A partition follower builds its posting lists from them (PLAN.md
+§5.11), without reading or tokenizing the text again.
+"""
+function document_tokens(engine::FullTextEngine, ids::AbstractUnitRange)
+    read_lock(engine.lock) do
+        db = database(engine.backend.index)
+        [_docvec_tokens(db[i]) for i in ids]
+    end
+end
+
+# The token ids of one document vector, in each of the shapes a text index holds.
+_docvec_tokens(v::AbstractDict) = sort!(collect(UInt32, keys(v)))
+_docvec_tokens(v::AbstractSparseVector) = UInt32.(SparseArrays.nonzeroinds(v))
+_docvec_tokens(v) = UInt32.(v.nzind)
 
 """
     payload_kind(engine::AbstractSearchEngine) -> Symbol
@@ -1662,11 +1681,13 @@ the interval then describes the tuning queries, and it is optimistic for other q
 - `partition`: the number of a partition with a graph (PLAN.md §5.10). Calibrates that graph
   and stores the levels in its own table instead of the global one. Raises `InvalidOption`
   for a partition without a graph.
+- `partitions`: the set of partitions that `partition` belongs to, when it is not the one of
+  `engine`: the set of a partition follower (PLAN.md §5.11).
 """
 function calibrate!(engine::DenseEngine{GraphBackend}; levels=DEFAULT_MINRECALL_LEVELS, numqueries::Int=64,
                     ksearch::Int=10, queries=nothing, tradeoff::Real=1.5, transition=(-1, 1),
                     nboot::Int=1000, confidence::Real=0.95, rng::AbstractRNG=default_rng(),
-                    partition::Union{Nothing,Integer}=nothing)
+                    partition::Union{Nothing,Integer}=nothing, partitions::Union{Nothing,DensePartitions}=nothing)
     tradeoff > 1 && isfinite(tradeoff) ||
         invalid_option(:tradeoff, "tradeoff must be a finite number above 1; got $tradeoff")
     length(transition) == 2 && all(isfinite, transition) && transition[1] <= transition[2] ||
@@ -1679,7 +1700,8 @@ function calibrate!(engine::DenseEngine{GraphBackend}; levels=DEFAULT_MINRECALL_
     write_lock(engine.lock) do
         index, ctx, table = partition === nothing ?
             (engine.backend.index, engine.backend.ctx, engine.backend.opt_beamsearch) :
-            _partition_graph_parts(engine, UInt32(partition))
+            partitions === nothing ? _partition_graph_parts(engine, UInt32(partition)) :
+                                     _partition_graph_parts(engine, partitions, UInt32(partition))
         tuning, measuring, heldout = _calibration_queries(index, queries, numqueries, rng)
         gold = _calibration_gold(index, ctx, measuring, ksearch)
         map(target_levels) do r

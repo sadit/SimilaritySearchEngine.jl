@@ -18,6 +18,7 @@ export StagedTextStore, STAGED_TEXT_CF, open_staged_text_store, append_staged_te
 export InvertedIndexStore, INVFILE_POSTINGS_CF, INVFILE_DOCVECS_CF, open_inverted_index_store, has_inverted_index,
        write_invfile_block!, load_invfile_docvecs, docvec_nnz, DocVec, WeightedDocVec, BagDocVec
 export LazyPostings, trim_postings_cache!, invalidate_postings!
+export assign_new_partitions!, append_partition_postings!
 export PartitionStore, PartitionPostings, PARTITION_TABLE_CF, PARTITION_MEMBERS_CF, PARTITION_POSTINGS_CF,
        PARTITION_GRAPH_CF, save_partition_neighbors!, load_partition_neighbors, load_partition_membership,
        open_partition_store, assign_partitions!, partition_number, partition_names, partition_counts,
@@ -1097,6 +1098,52 @@ function add_partition_postings!(b::RocksDB.WriteBatch, store::PartitionStore, b
         RocksDB.put!(b, key, _encode_ids(merged); cf=store.postings)
     end
     collect(keys(grouped))
+end
+
+"""
+    assign_new_partitions!(store::PartitionStore, first_id::Integer, values::AbstractVector) -> Vector{Vector{UInt32}}
+
+[`assign_partitions!`](@ref) for the items that have no entry in [`PARTITION_MEMBERS_CF`](@ref)
+yet. An item that has one keeps it, its count is not added again, and its numbers are returned
+as they are stored. A partition follower repeats a block after an interruption (PLAN.md §5.11),
+and this makes the repetition leave the table and the counts as they were.
+"""
+function assign_new_partitions!(store::PartitionStore, first_id::Integer, values::AbstractVector)
+    stored = _load_members(store, first_id:(first_id + length(values) - 1))
+    fresh = [isempty(stored[i]) ? values[i] : String[] for i in eachindex(values)]
+    assigned = assign_partitions!(store, first_id, fresh)
+    return [isempty(stored[i]) ? assigned[i] : stored[i] for i in eachindex(values)]
+end
+
+"""
+    append_partition_postings!(store::PartitionStore, lists::Dict{UInt64,Vector{UInt32}}) -> Int
+
+Appends to each partition list the ascending ids in `lists`, keyed by
+`_partition_cache_key(number, token)`, in one `WriteBatch`, and drops those lists from the
+cache. An id that is not larger than the last id of the stored list is skipped, so appending the
+same ids twice leaves the list as it was. Returns the number of ids written.
+"""
+function append_partition_postings!(store::PartitionStore, lists::Dict{UInt64,Vector{UInt32}})
+    b = RocksDB.WriteBatch()
+    total = 0
+    for (ck, ids) in lists
+        key = _partition_postings_key(ck >> 32, ck & 0xffffffff)
+        raw = RocksDB.get(store.db, key; cf=store.postings)
+        old = raw === nothing ? UInt32[] : _decode_ids(raw)
+        last_id = isempty(old) ? UInt32(0) : old[end]
+        fresh = UInt32[id for id in ids if id > last_id]
+        isempty(fresh) && continue
+        RocksDB.put!(b, key, _encode_ids(vcat(old, fresh)); cf=store.postings)
+        total += length(fresh)
+    end
+    RocksDB.write!(store.db, b)
+    lock(store.lk) do
+        for ck in keys(lists)
+            delete!(store.cache, ck)
+            delete!(store.uses, ck)
+        end
+    end
+    return total
 end
 
 """

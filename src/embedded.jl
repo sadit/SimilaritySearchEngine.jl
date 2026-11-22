@@ -1902,10 +1902,16 @@ field.
 """
 function _partition_store(handle::EmbeddedEngine, operation::Symbol)
     parts = handle.partitions[]
-    parts === nothing &&
+    if parts === nothing
+        names = _listed_followers(handle)
         invalid_option(operation === :partitions ? :partition_by : :partition,
-              "this project has no partition field, so `$operation` does not apply. Create it with " *
-              "`partition_by`, or call declare_partition!(handle, field).")
+              "this project has no partition field, so `$operation` does not apply. ",
+              isempty(names) ?
+                  "Partition it with a follower: create_follower(handle, name, PartitionFollower(MetaValue(field))), " *
+                  "then search open_follower(handle, \"name=value\")." :
+                  "Its followers are $(join(repr.(names), ", ")); a partition follower is searched with " *
+                  "open_follower(handle, \"name=value\").")
+    end
     parts
 end
 

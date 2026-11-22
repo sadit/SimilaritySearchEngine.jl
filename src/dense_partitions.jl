@@ -5,8 +5,8 @@
 # list of the `_id`s of its members. A partition with fewer members than `graph_min` is searched
 # with an exact scan of that `SubDatabase`. A larger one has its own `SearchGraph` over it.
 
-export DensePartition, DensePartitions, enable_partitions!, restore_partition!, add_partition_members!,
-       index_partition_graphs!,
+export DensePartition, DensePartitions, enable_partitions!, new_partitions, restore_partition!, add_partition_members!,
+       add_new_partition_members!, index_partition_graphs!,
        search_partition_live, partition_graphs, partition_search_state, partition_opt_beamsearch
 
 """
@@ -18,14 +18,25 @@ builds one. `on_change` is `number -> (index, sp, ep) -> nothing`, the observer 
 range of the graph of partition `number`, or `nothing`.
 """
 function enable_partitions!(engine::DenseEngine, graph_min::Integer, on_change::Union{Nothing,Function})
-    graph_min >= 1 || invalid_option(:partition_graph_min, "partition_graph_min must be at least 1; got $graph_min")
-    is_graph = engine isa DenseEngine{GraphBackend}
-    parts = DensePartitions(is_graph ? Int(graph_min) : typemax(Int), Dict{UInt32,DensePartition}(), on_change,
-                            is_graph ? engine.backend.minrecall : nothing,
-                            is_graph ? Int(engine.backend.ctx.maxbatches) : 1,
-                            ContextPool(_search_context(GenericContext)))
+    parts = new_partitions(engine, graph_min, on_change)
     write_lock(() -> (engine.partitions = parts), engine.lock)
     return parts
+end
+
+"""
+    new_partitions(engine::DenseEngine, graph_min::Integer, on_change) -> DensePartitions
+
+An empty set of partitions over the vectors of `engine`, not attached to it. A partition
+follower (PLAN.md §5.11) holds its own set; [`enable_partitions!`](@ref) attaches one to the
+engine for the partitions inside a project. The arguments are those of `enable_partitions!`.
+"""
+function new_partitions(engine::DenseEngine, graph_min::Integer, on_change::Union{Nothing,Function})
+    graph_min >= 1 || invalid_option(:partition_graph_min, "partition_graph_min must be at least 1; got $graph_min")
+    is_graph = engine isa DenseEngine{GraphBackend}
+    DensePartitions(is_graph ? Int(graph_min) : typemax(Int), Dict{UInt32,DensePartition}(), on_change,
+                    is_graph ? engine.backend.minrecall : nothing,
+                    is_graph ? Int(engine.backend.ctx.maxbatches) : 1,
+                    ContextPool(_search_context(GenericContext)))
 end
 
 # The database the partitions are views of: every staged vector of a graph project, every
@@ -68,6 +79,31 @@ function add_partition_members!(engine::DenseEngine, first_id::Integer, members:
     write_lock(() -> _add_members!(parts, first_id, members), engine.lock)
 end
 
+"""
+    add_new_partition_members!(engine::DenseEngine, parts::DensePartitions, first_id::Integer, members::AbstractVector)
+        -> Vector{UInt32}
+
+Appends the ids `first_id`, `first_id + 1`, ... to their partitions in `parts`, as
+[`_add_members!`](@ref) does, skipping an id that its partition already ends with or exceeds.
+Adding the same ids twice therefore gives the same partitions, which a follower needs when it
+repeats a block (PLAN.md §5.11). Then indexes the partition graphs of a `SearchGraph` engine. All
+of it runs under the write lock of `engine`, whose vectors the partitions are views of. Returns
+the numbers of the partitions whose graph changed.
+"""
+function add_new_partition_members!(engine::DenseEngine, parts::DensePartitions, first_id::Integer,
+                                    members::AbstractVector)
+    write_lock(engine.lock) do
+        for (i, nums) in enumerate(members)
+            id = UInt32(first_id + i - 1)
+            for num in nums
+                ids = _partition!(parts, UInt32(num)).ids
+                (isempty(ids) || id > ids[end]) && push!(ids, id)
+            end
+        end
+        engine isa DenseEngine{GraphBackend} ? _index_partition_graphs!(engine, parts) : UInt32[]
+    end
+end
+
 function _partition_context(parts::DensePartitions, number::UInt32)
     observers = parts.on_change === nothing ? [] : [CallbackLog(parts.on_change(number))]
     # No reporter: a project with many partitions would print one status line per range of
@@ -82,8 +118,9 @@ Indexes the members each partition graph does not hold yet, and builds the graph
 partition that reached `graph_min`. Called under the write lock. Returns the numbers of the
 partitions whose graph changed.
 """
-function _index_partition_graphs!(engine::DenseEngine{GraphBackend})
-    parts = engine.partitions
+_index_partition_graphs!(engine::DenseEngine{GraphBackend}) = _index_partition_graphs!(engine, engine.partitions)
+
+function _index_partition_graphs!(engine::DenseEngine{GraphBackend}, parts::DensePartitions)
     changed = UInt32[]
     for number in sort!(collect(keys(parts.parts)))
         p = parts.parts[number]
@@ -121,6 +158,11 @@ function restore_partition!(engine::DenseEngine, number::Integer, ids::Vector{UI
                             graph_len::Integer, beamsearch, hints, opt_beamsearch)
     parts = engine.partitions
     parts === nothing && invalid_option(:partition_by, "restore_partition! needs enable_partitions! first")
+    restore_partition!(engine, parts, number, ids; load_neighbors, graph_len, beamsearch, hints, opt_beamsearch)
+end
+
+function restore_partition!(engine::DenseEngine, parts::DensePartitions, number::Integer, ids::Vector{UInt32};
+                            load_neighbors::Function, graph_len::Integer, beamsearch, hints, opt_beamsearch)
     p = DensePartition(ids, nothing, nothing, opt_beamsearch === nothing ? OptBeamSearch() : opt_beamsearch)
     if graph_len > 0 && engine isa DenseEngine{GraphBackend}
         graph_len <= length(ids) ||
@@ -146,6 +188,10 @@ nothing to calibrate.
 function _partition_graph_parts(engine::DenseEngine{GraphBackend}, number::UInt32)
     parts = engine.partitions
     parts === nothing && invalid_option(:partition, "this project has no partition field")
+    _partition_graph_parts(engine, parts, number)
+end
+
+function _partition_graph_parts(engine::DenseEngine{GraphBackend}, parts::DensePartitions, number::UInt32)
     p = get(parts.parts, number, nothing)
     (p === nothing || p.graph === nothing) &&
         invalid_option(:partition, "this partition has fewer than $(parts.graph_min) indexed members, so it is " *
@@ -168,6 +214,11 @@ A partition that is in the table and has no indexed member returns no result.
 function search_partition_live(engine::DenseEngine, number::UInt32, query, k::Int, minrecall::Union{Nothing,Real})
     parts = engine.partitions
     parts === nothing && invalid_option(:partition, "this project has no partition field")
+    search_partition_live(engine, parts, number, query, k, minrecall)
+end
+
+function search_partition_live(engine::DenseEngine, parts::DensePartitions, number::UInt32, query, k::Int,
+                               minrecall::Union{Nothing,Real})
     read_lock(engine.lock) do
         p = get(parts.parts, number, nothing)
         p === nothing && return (id=UInt32[], dist=Float32[], deleted=Bool[], distance_evaluations=0)
@@ -229,9 +280,10 @@ end
 
 Whether each partition with an indexed member has a graph.
 """
-function partition_graphs(engine::DenseEngine)
-    parts = engine.partitions
-    parts === nothing && return Dict{UInt32,Bool}()
+partition_graphs(engine::DenseEngine) =
+    engine.partitions === nothing ? Dict{UInt32,Bool}() : partition_graphs(engine, engine.partitions)
+
+function partition_graphs(engine::DenseEngine, parts::DensePartitions)
     read_lock(() -> Dict(n => p.graph !== nothing for (n, p) in parts.parts), engine.lock)
 end
 
@@ -241,9 +293,10 @@ end
 The `BeamSearch` and the hints of each partition graph, by partition number: what
 `embedded.jl` saves so that a reopened partition graph searches as it did (PLAN.md §0, item 13).
 """
-function partition_search_state(engine::DenseEngine)
-    parts = engine.partitions
-    parts === nothing && return Dict{UInt32,NamedTuple}()
+partition_search_state(engine::DenseEngine) =
+    engine.partitions === nothing ? Dict{UInt32,NamedTuple}() : partition_search_state(engine, engine.partitions)
+
+function partition_search_state(engine::DenseEngine, parts::DensePartitions)
     read_lock(engine.lock) do
         Dict{UInt32,NamedTuple}(n => (beamsearch=p.graph.algo[], hints=collect(UInt32, p.graph.hints))
                                 for (n, p) in parts.parts if p.graph !== nothing)
@@ -255,9 +308,10 @@ end
 
 The calibrated levels of each partition that has any, by partition number.
 """
-function partition_opt_beamsearch(engine::DenseEngine)
-    parts = engine.partitions
-    parts === nothing && return Dict{UInt32,OptBeamSearch}()
+partition_opt_beamsearch(engine::DenseEngine) =
+    engine.partitions === nothing ? Dict{UInt32,OptBeamSearch}() : partition_opt_beamsearch(engine, engine.partitions)
+
+function partition_opt_beamsearch(engine::DenseEngine, parts::DensePartitions)
     read_lock(engine.lock) do
         Dict{UInt32,OptBeamSearch}(n => copy(p.opt_beamsearch) for (n, p) in parts.parts if !isempty(p.opt_beamsearch))
     end
