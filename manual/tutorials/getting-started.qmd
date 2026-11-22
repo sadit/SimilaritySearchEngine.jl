@@ -445,6 +445,27 @@ Errors are raised, not returned as empty results:
 
 A project can also hold its partitions inside itself, declared with `create_project(...; partitions=PartitionBy("volume"))` or with `declare_partition!(h, "volume")`, and searched with `ftsearch(h, q, k; partition="second")`. That was the only form until 2026-11-22. `migrate_partitions!(h, "volume"; disjoint=true)` moves them to a follower and removes them from the project. The caller chooses `disjoint`, and a project whose field holds lists needs `disjoint=false`.
 
+## Organizing Items by Keywords
+
+The engine stores the keywords of an item and does not index them. A *keyword follower* indexes them in an inverted file of SimilaritySearch, with one posting list per keyword. The BM25 project of the previous sections was created with the character names of each paragraph as its keywords:
+
+```julia
+hk = open_project(workdir, "frankenstein_bm25")
+characters = create_follower(hk, "characters", KeywordFollower())
+
+posting_list(characters, "Elizabeth"; limit=5)           # Int32[66, 67, 68, 72, 85]
+search(characters, ["Henry", "Clerval"], 10; t=2)       # the 7 paragraphs that name both
+follower_status(characters).stats                       # number of keywords, lengths of the lists
+```
+
+`posting_list` returns the `_id`s of the items that hold one key, in ascending order. With `limit=n` it returns the first `n`. A whole list is copied, so in a large index a caller that needs only part of a frequent key passes `limit`. A text project gives the posting list of a token in the same way, `posting_list(hk, "monster")`, and a sparse project the posting list of a dimension.
+
+`search` ranks the items of the leader by the distance between their keywords and the query, `Dist.Sets.Jaccard()` by default. `t` is the number of query keys that an item must hold: `t=1` takes every item with any of them, and `t=2` here takes only the paragraphs that name both characters. `KeywordFollower(MetaValue("tags"))` indexes a field of `meta` that holds a list of strings in the same way.
+
+```julia
+close_project!(hk)
+```
+
 ---
 
 ## What the Vocabulary Does Not Cover

@@ -351,6 +351,21 @@ of it exist.
       handle closed two blocks before, which raises `ProjectClosed` since issue #4; it now
       reopens the project.
 
+    Phase 4, the keyword follower and `posting_list`, done on 2026-11-22
+    (`src/keyword_followers.jl`, `test/keyword_followers.jl`). What it implements, and what
+    differs from §5.11:
+    - `KeywordFollower(source=Keywords(); distance=Dist.Sets.Jaccard())` is a `DictInvertedFile`
+      of SimilaritySearch, keyed by the key itself. It has no vocabulary of its own: §5.11 and
+      issue #5 planned one, from key to key number.
+    - It keeps its inverted file in memory, and saves the keys of each item in the column family
+      `keyword_items`, from which `open_follower` rebuilds it. The posting lists are not saved.
+    - `search(f, keys, k; t, filter, candidates, stats)` ranks the items of the leader. A keyword
+      follower has no restriction to one value: `open_follower(h, "kw=value")` raises
+      `UnsupportedOperation`.
+    - `posting_list(h, key; limit)` works on a keyword follower, a text project and a sparse
+      project. Every list of the engine holds ids without weights, so it returns `Int32` ids.
+      A dense project raises `UnsupportedOperation`.
+
 The stemmer registry of §5.3 and §9's phase 5 is not on this list: it was discarded. Stemming
 was the way this specification proposed to make a query match a word it does not equal. That
 is now the work of the query pipeline of `TextSearch.jl`, which the engine exposes through the

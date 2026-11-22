@@ -286,6 +286,7 @@ window.Quarto = {
   <li><a href="#processing" id="toc-processing" class="nav-link" data-scroll-target="#processing">Processing</a></li>
   <li><a href="#plugins" id="toc-plugins" class="nav-link" data-scroll-target="#plugins">Plugins</a></li>
   <li><a href="#partition-followers" id="toc-partition-followers" class="nav-link" data-scroll-target="#partition-followers">Partition Followers</a></li>
+  <li><a href="#keyword-followers" id="toc-keyword-followers" class="nav-link" data-scroll-target="#keyword-followers">Keyword Followers</a></li>
   </ul></li>
   <li><a href="#failure-reporting-typed-errors-and-their-boundaries" id="toc-failure-reporting-typed-errors-and-their-boundaries" class="nav-link" data-scroll-target="#failure-reporting-typed-errors-and-their-boundaries">Failure Reporting: Typed Errors and Their Boundaries</a></li>
   <li><a href="#logging-channels-reporters-and-observers" id="toc-logging-channels-reporters-and-observers" class="nav-link" data-scroll-target="#logging-channels-reporters-and-observers">Logging Channels: Reporters and Observers</a></li>
@@ -848,7 +849,7 @@ window.Quarto = {
 <section id="leader-and-follower-datasets" class="level2">
 <h2 class="anchored" data-anchor-id="leader-and-follower-datasets">Leader and Follower Datasets</h2>
 <p>A <strong>follower</strong> is a dataset that organizes the items of another dataset, its <strong>leader</strong> (issue #5, <code>server/PLAN.md</code> §5.11). It reads the items of the leader and does not copy them. It stores its own structure, expressed with the <code>_id</code>s of the leader. A leader can have several followers, and each one is created, rebuilt and deleted without a change to the items of the leader.</p>
-<p>The engine includes the framework of followers and one kind, the partition follower, since 2026-11-22. The index of keywords becomes another kind (issue #5, phase 4).</p>
+<p>The engine includes the framework of followers and two kinds, the partition follower and the keyword follower, since 2026-11-22.</p>
 <section id="concepts" class="level3">
 <h3 class="anchored" data-anchor-id="concepts">Concepts</h3>
 <ul>
@@ -916,6 +917,17 @@ window.Quarto = {
 <p><code>open_follower(h, "name=value")</code> returns the partition <code>value</code>, and <code>search</code>, <code>ftsearch</code> and <code>calibrate!</code> accept it. A partition name that the follower does not hold raises <code>UnknownPartition</code>, with the closest names. <code>partitions(f)</code> lists the partitions with the number of items of each one, and <code>follower_status(f).stats</code> gives the number of partitions, the number of memberships, the smallest, median and largest partition, and the number of graphs.</p>
 <p>Processing a block again gives the same structures. The members of an item that already has an entry in <code>partition_members</code> are not counted again. An id that is not larger than the last id of a posting list is not appended to it. A dense partition does not take an id that its list already ends with or exceeds. When a follower is opened, a dense partition takes the members of the processed items only, and a graph that holds members of an unprocessed block keeps its first members, because a graph saves only the links of each member to earlier members.</p>
 <p><code>migrate_partitions!(h, name; disjoint)</code> moves the partitions inside a project to a partition follower over <code>MetaValue(field)</code>, with the <code>graph_min</code> of the project. It builds the follower from the items of the leader. Then it empties the partition column families of the project and deletes its partition fields. The calibrated levels of the partition graphs are not moved. With <code>disjoint=true</code> and a field that holds a list, it raises <code>PayloadMismatch</code>, and the project keeps its partitions. After the migration, a search with <code>partition</code> on the project raises <code>InvalidOption</code>, and the message names its followers.</p>
+</section>
+<section id="keyword-followers" class="level3">
+<h3 class="anchored" data-anchor-id="keyword-followers">Keyword Followers</h3>
+<p><code>KeywordFollower(source=Keywords(); distance=Dist.Sets.Jaccard())</code> indexes the keys of each item of its leader in a <code>DictInvertedFile</code> of SimilaritySearch: an inverted file whose posting lists are keyed by the key itself, a <code>String</code>, so it needs no vocabulary of its own. The leader can be a project of any kind.</p>
+<ul>
+<li>It indexes one object per item of the leader, the set of keys of the item, empty when the item has none. The numbers of the inverted file are therefore the <code>_id</code>s of the leader, and its posting lists hold them.</li>
+<li>The keys of each processed item are stored in the column family <code>keyword_items</code> of the follower, under the big-endian <code>_id</code>. <code>open_follower</code> rebuilds the inverted file in memory from them, in one block. Items are inserted in blocks because the inverted file sorts every posting list after each block.</li>
+<li><code>search(f, keys, k; t)</code> merges the posting lists of the query keys. <code>t</code> is the number of lists an item must appear in. <code>Dist.Sets.Jaccard</code>, <code>Dice</code>, <code>Intersection</code> and <code>CosineSet</code> are computed from the sizes of the two sets and of their intersection during the merge. Another distance is evaluated on the stored keys of each candidate. A key that no item holds is ignored.</li>
+<li>A keyword follower has no restriction to one value, and it lists no keys. <code>follower_status(f).stats</code> gives the number of keys, the total length of the posting lists, the shortest, median and longest list, and the number of items without keys.</li>
+</ul>
+<p><code>posting_list(h, key; limit)</code> returns the <code>_id</code>s of the items that hold one key, in ascending order, for every index with posting lists: a keyword follower (a key), a text project (a token of its vocabulary, read from <code>invfile_postings</code> through the cache of lists) and a sparse project (a dimension). With <code>limit=n</code> it returns the first <code>n</code> ids, without a cursor. Deleted items are in the lists. A dense project has no posting lists and raises <code>UnsupportedOperation</code>.</p>
 </section>
 </section>
 <section id="failure-reporting-typed-errors-and-their-boundaries" class="level2">

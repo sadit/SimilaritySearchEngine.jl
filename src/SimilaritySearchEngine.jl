@@ -52,6 +52,8 @@ include("embedded.jl")
 include("followers.jl")
 # The first kind of follower: partitions, disjoint or not, of a text or a dense leader.
 include("partition_followers.jl")
+# The second kind: an inverted file over the keywords, or other keys, of the items of a leader.
+include("keyword_followers.jl")
 
 export EmbeddedEngine, create_project, open_project, close_project!, compact_project!,
        append_items!, index!,
@@ -125,7 +127,7 @@ export FollowerSpec, SyncPolicy, OnIndex, OnWrite, Periodic, Manual
 export Follower, FollowerView, FollowerStatus, create_follower, open_follower, close_follower!, sync!,
        rebuild_follower!, delete_follower!, follower_status, followers, follower_dir, register_plugin!,
        FOLLOWER_SYNC_BLOCK
-export PartitionFollower, migrate_partitions!
+export PartitionFollower, migrate_partitions!, KeywordFollower, posting_list
 
 # ---------------------------------------------------------------------------------------
 # Precompilation workload.
