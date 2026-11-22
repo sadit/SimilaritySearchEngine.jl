@@ -496,9 +496,11 @@ Every failure that the engine raises is an `EngineError`. The type of the error,
 | category | meaning | concrete types |
 |---|---|---|
 | `InvalidRequest` | the call cannot be honoured as written; retrying it unchanged fails again | `PayloadMismatch`, `WrongDimension`, `UnknownBackend`, `InvalidOption`, `UnsupportedOperation` |
-| `NotFound` | something the call named does not exist | `ProfileNotInstalled` |
-| `ConflictingState` | the request is well formed but the project is not in a state that can serve it; the same call succeeds later | `PendingBacklog`, `NothingStaged`, `NoIndex`, `NotTrained`, `EmptyProject` |
+| `NotFound` | something the call named does not exist | `ProfileNotInstalled`, `UnknownPartition` |
+| `ConflictingState` | the request is well formed but the project is not in a state that can serve it; the same call succeeds later | `PendingBacklog`, `NothingStaged`, `NoIndex`, `NotTrained`, `EmptyProject`, `ProjectClosed` |
 | `StorageFailure` | what was read back cannot be interpreted | `CorruptedStorage` |
+
+`ProjectClosed` is raised by every function that takes a handle after `close_project!` closed it. That handle stays closed, and the same call succeeds on a new handle from `open_project`.
 
 The concrete types carry the values a caller can use. `PendingBacklog` reports the number of staged items and the number of indexed items, `WrongDimension` reports the expected and the received length, and `InvalidOption` reports the keyword that was rejected.
 

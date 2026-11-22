@@ -115,3 +115,48 @@ end
         close_project!(h)
     end
 end
+
+@testset "a closed handle raises ProjectClosed (issue #4)" begin
+    mktempworkdir() do workdir
+        q = rand(Float32, 8)
+        h = create_project(workdir, "closed_dense")
+        append_items!(h, [DenseItem(rand(Float32, 8); doc_id="d$i") for i in 1:50])
+        index!(h)
+        @test length(search(h, q, 3)) == 3
+        close_project!(h)
+        @test close_project!(h) === nothing          # a second close does nothing
+        err = try searchbatch(h, [q], 3); nothing catch e; e end
+        @test err isa ProjectClosed && err isa ConflictingState && err.dataset == "closed_dense"
+        @test_throws ProjectClosed search(h, q, 3)
+        @test_throws ProjectClosed search(h, [q, q], 3)
+        @test_throws ProjectClosed append_items!(h, DenseItem(q; doc_id="late"))
+        @test_throws ProjectClosed index!(h)
+        @test_throws ProjectClosed fetch_items(h, ["d1"])
+        @test_throws ProjectClosed exists(h, [1])
+        @test_throws ProjectClosed delete_item!(h, 1)
+        @test_throws ProjectClosed calibrate!(h)
+        @test_throws ProjectClosed allknn(h; k=2)
+        @test_throws ProjectClosed compact_project!(h)
+        @test_throws ProjectClosed project_spec(h)
+        @test_throws ProjectClosed meta_schema(h)
+        @test_throws ProjectClosed partitions(h)
+        @test_throws ProjectClosed quantizer_info(h)
+
+        # the project itself is intact: a new handle serves it
+        h2 = open_project(workdir, "closed_dense")
+        @test length(search(h2, q, 3)) == 3
+        close_project!(h2)
+
+        ht = create_project(workdir, "closed_text", TextDocuments(FitFromCorpus()))
+        append_items!(ht, [TextItem("a closed handle raises an error $i"; doc_id="t$i") for i in 1:20])
+        index!(ht)
+        close_project!(ht)
+        @test_throws ProjectClosed ftsearch(ht, "closed handle", 3)
+        @test_throws ProjectClosed ftexplain(ht, "closed handle")
+        @test_throws ProjectClosed vocabulary_report(ht)
+
+        hs = create_project(workdir, "closed_sparse", SparseVectors(16))
+        close_project!(hs)
+        @test_throws ProjectClosed search(hs, sparsevec([1], [1f0], 16), 3)
+    end
+end

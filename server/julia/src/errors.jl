@@ -60,6 +60,7 @@ for (name, parent, doc) in (
         (:NoIndex, :ConflictingState, "A text dataset with a profile and no index."),
         (:NotTrained, :ConflictingState, "A text dataset without a fitted vocabulary, or a partition that was not calibrated."),
         (:EmptyProject, :ConflictingState, "An operation over the whole dataset, on a dataset with no items."),
+        (:ProjectClosed, :ConflictingState, "The server closed the dataset while the request was served, for example to reload or delete it."),
         (:StateConflict, :ConflictingState, "A 409 response without an engine `kind`."),
         (:CorruptedStorage, :StorageFailure, "Stored data that the server cannot interpret."),
         (:Unauthenticated, :AccessDenied, "The request has no token, or its token is not valid. HTTP 401."),
@@ -104,7 +105,8 @@ const ERROR_KINDS = Dict{String,Type}(
     "UnsupportedOperation" => UnsupportedOperation, "ProfileNotInstalled" => ProfileNotInstalled,
     "UnknownPartition" => UnknownPartition, "PendingBacklog" => PendingBacklog,
     "NothingStaged" => NothingStaged, "NoIndex" => NoIndex, "NotTrained" => NotTrained,
-    "EmptyProject" => EmptyProject, "CorruptedStorage" => CorruptedStorage,
+    "EmptyProject" => EmptyProject, "ProjectClosed" => ProjectClosed,
+    "CorruptedStorage" => CorruptedStorage,
     "Unauthenticated" => Unauthenticated, "Forbidden" => Forbidden,
 )
 

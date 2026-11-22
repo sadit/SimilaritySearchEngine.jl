@@ -602,7 +602,7 @@ end
 """
     handle_delete_dataset(req, app, id)
 
-Really deletes the dataset: closes its RocksDB handle, drops it from the in-memory
+Really deletes the dataset: closes its handle with `close_project!`, drops it from the in-memory
 caches, and removes its on-disk directory.
 """
 function handle_delete_dataset(req::HTTP.Request, app::AppState, id::String)
@@ -610,7 +610,9 @@ function handle_delete_dataset(req::HTTP.Request, app::AppState, id::String)
 
     lock(app.lock) do
         if haskey(app.handles, id)
-            Project.close_project(app.handles[id].project)
+            # The whole handle, not only its RocksDB: this also closes the vector file and marks
+            # the handle, so a request that still holds it gets `ProjectClosed` (409).
+            SSE.close_project!(app.handles[id]; compact=false)
             delete!(app.handles, id)
         end
     end
@@ -625,7 +627,7 @@ end
     handle_unload_dataset(req, app, id) -> HTTP.Response
 
 `POST /api/v1/admin/datasets/{id}/unload` (PLAN.md §5.7's "hot-reload a single dataset"
-open issue): closes this dataset's RocksDB handle and drops it from `app.handles`, so an external process -- concretely, the CLI `rebuild` (§1) -- can safely
+open issue): closes this dataset's handle with `close_project!` and drops it from `app.handles`, so an external process -- concretely, the CLI `rebuild` (§1) -- can safely
 open it for exclusive writing without hitting RocksDB's per-process write lock. The
 intended flow for refreshing a live server's view of a dataset after an out-of-band CLI
 `rebuild`: `unload` -> run `rebuild` -> `reload` (`handle_reload_dataset` below). `404` if
@@ -634,7 +636,7 @@ intended flow for refreshing a live server's view of a dataset after an out-of-b
 function handle_unload_dataset(req::HTTP.Request, app::AppState, id::String)
     haskey(app.handles, id) || return json_response(404, Dict("error" => "dataset_not_loaded"))
     lock(app.lock) do
-        Project.close_project(app.handles[id].project)
+        SSE.close_project!(app.handles[id]; compact=false)
         delete!(app.handles, id)
     end
     return json_response(200, Dict("status" => "unloaded", "id" => id))
@@ -685,7 +687,9 @@ function handle_reload_dataset(req::HTTP.Request, app::AppState, id::String)
 
     if haskey(app.handles, id)
         lock(app.lock) do
-            Project.close_project(app.handles[id].project)
+            # The whole handle: the reopen below maps the same vector file, and the old mapping
+            # would otherwise write its own, older length into the header when it is finalized.
+            SSE.close_project!(app.handles[id]; compact=false)
             delete!(app.handles, id)
         end
     end

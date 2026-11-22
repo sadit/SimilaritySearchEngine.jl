@@ -689,7 +689,7 @@ The categories, and when each one appears:
 | :--- | :--- | :--- |
 | `InvalidRequest` | the call cannot be honoured as written | a `DenseItem` appended to a text project, a query of the wrong dimension, `dimension` on a dense project |
 | `NotFound` | something the call named does not exist | `DefaultProfile(:es)` with no profile installed |
-| `ConflictingState` | the project is not in a state that can serve the request | whole-dataset operations against a staged backlog, `ftsearch` before the first `index!` |
+| `ConflictingState` | the project is not in a state that can serve the request | whole-dataset operations against a staged backlog, `ftsearch` before the first `index!`, a handle used after `close_project!` |
 | `StorageFailure` | stored data this version cannot interpret | a project written by a newer layout |
 
 A test against a category matches every concrete type under it. Code written this way continues to work when a new `EngineError` is added under `ConflictingState`. A test against a concrete type (`PendingBacklog`, `WrongDimension`, `InvalidOption`) is appropriate when the distinction is required; those types carry the corresponding values: the counts, the expected dimension, and the rejected keyword.

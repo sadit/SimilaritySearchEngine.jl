@@ -229,7 +229,19 @@ mutable struct EmbeddedEngine
     postings_cache::Tuple{Int,Int}
     # What the project holds and how it is indexed (issue #2), as saved in `:spec`.
     spec::IndexEngine.ProjectSpec
+    # Set by `close_project!`. Every other function that takes a handle checks it first and
+    # raises `ProjectClosed` (issue #4): the stores behind a closed handle are closed, and an
+    # operation on them returned wrong results instead of an error.
+    closed::Base.RefValue{Bool}
 end
+
+"""
+    _check_open(handle::EmbeddedEngine)
+
+Raises [`ProjectClosed`](@ref) when `close_project!` already closed `handle`.
+"""
+_check_open(handle::EmbeddedEngine) = handle.closed[] && project_closed(handle.dataset,
+    "project '", handle.dataset, "' was closed by close_project!; open it again with open_project")
 
 """
     _maybe_flush_index!(handle::EmbeddedEngine)
@@ -527,7 +539,7 @@ function create_project(workdir::String, dataset::String, spec::ProjectSpec=Dens
     partition_by === nothing || Persistence.save_field!(store, :partition_by, partition_by)
     handle = EmbeddedEngine(workdir, dataset, dir, project, eng, store, pending_flush, schema_version,
                             schema, OOVCounters(), dense_vectors, false, Ref(true), partitions_ref,
-                            (runtime.postings_cache_max, runtime.postings_cache_base), spec)
+                            (runtime.postings_cache_max, runtime.postings_cache_base), spec, Ref(false))
     if kind === :dense && partition_by !== nothing
         Persistence.save_field!(store, :partition_graph_min, graph_min)
         _enable_dense_partitions!(handle, graph_min, Dict{UInt32,Int}())
@@ -562,7 +574,7 @@ end
 
 The specification the project was created with (see [`create_project`](@ref)).
 """
-project_spec(handle::EmbeddedEngine) = handle.spec
+project_spec(handle::EmbeddedEngine) = (_check_open(handle); handle.spec)
 
 """
     _load_spec(store, read_only) -> Union{Nothing,ProjectSpec}
@@ -825,7 +837,7 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
                             Persistence.load_field(store, :meta_schema, Schema.MetaSchema()),
                             Persistence.load_field(store, :oov_counters, OOVCounters()),
                             dense_vectors, read_only, Ref(false), partitions_ref,
-                            (runtime.postings_cache_max, runtime.postings_cache_base), spec)
+                            (runtime.postings_cache_max, runtime.postings_cache_base), spec, Ref(false))
     spec isa DenseVectors && partition_by !== nothing && _restore_dense_partitions!(handle)
     return handle
 end
@@ -901,8 +913,12 @@ Then, unless `compact=false`, it compacts the project's storage through
 [`compact_project!`](@ref) -- a no-op for a read-only handle or a session that only read. That
 is what keeps the *next* open fast (2.97s versus 0.28s on a 50k-vector project, measured
 2026-09-10); pass `compact=false` when closing is on a latency path and the next open is not.
+
+After it, every other function that takes `handle` raises [`ProjectClosed`](@ref). A second
+`close_project!` on the same handle does nothing.
 """
 function close_project!(handle::EmbeddedEngine; compact::Bool=true)
+    handle.closed[] && return nothing
     handle.pending_flush[] = false
     # The queries counted since the last write (see `OOVCounters`). A read-only handle counted
     # them for its own report and has nowhere to put them.
@@ -922,6 +938,7 @@ function close_project!(handle::EmbeddedEngine; compact::Bool=true)
     handle.dense_vectors[] === nothing || close(handle.dense_vectors[])
     IndexEngine.isquantized(handle.engine) && IndexEngine.close_quantized!(handle.engine)
     compact && compact_project!(handle)
+    handle.closed[] = true
     Project.close_project(handle.project)
     return nothing
 end
@@ -944,6 +961,7 @@ reopen without this, 0.28s with it, for 0.03s of compaction. It runs automatical
 compacting mid-session -- after a big ingest that the process will keep serving from, say.
 """
 function compact_project!(handle::EmbeddedEngine; force::Bool=false)
+    _check_open(handle)
     (handle.read_only || !(force || handle.wrote[])) && return false
     Project.compact_all!(handle.project)
     handle.wrote[] = false
@@ -1005,6 +1023,7 @@ alternative made switching a project from a graph to a brute-force scan a change
 that fed it.
 """
 function index!(handle::EmbeddedEngine)
+    _check_open(handle)
     handle.wrote[] = true
     engine = handle.engine
     if IndexEngine.isquantized(engine)
@@ -1133,6 +1152,7 @@ whole collection is staged. Does nothing when the encoder exists. Raises `Nothin
 nothing is staged, and `InvalidOption` for a project that is not quantized.
 """
 function fit_quantizer!(handle::EmbeddedEngine; rng::AbstractRNG=Random.default_rng())
+    _check_open(handle)
     IndexEngine.isquantized(handle.engine) ||
         invalid_option(:quantizer, "fit_quantizer! applies to a project with Quantized storage; this one stores Float32 vectors")
     handle.wrote[] = true
@@ -1146,8 +1166,8 @@ end
 The quantizer of a dense project (issue #1), or `nothing` for a project that stores `Float32`
 vectors. See [`QuantizerInfo`](@ref) for the fields.
 """
-quantizer_info(handle::EmbeddedEngine) =
-    IndexEngine.isquantized(handle.engine) ? IndexEngine.quantizer_info(handle.engine.quant) : nothing
+quantizer_info(handle::EmbeddedEngine) = (_check_open(handle);
+    IndexEngine.isquantized(handle.engine) ? IndexEngine.quantizer_info(handle.engine.quant) : nothing)
 
 """
     append_items!(handle::EmbeddedEngine, items) -> Int
@@ -1221,6 +1241,7 @@ _check_item(engine, item::Schema.AbstractItem) =
         (item.doc_id === nothing ? "" : " (doc_id $(item.doc_id))"))
 
 function append_items!(handle::EmbeddedEngine, items::AbstractVector{<:Schema.AbstractItem})
+    _check_open(handle)
     handle.wrote[] = true
     engine = handle.engine
     project = handle.project
@@ -1513,6 +1534,7 @@ hold raises `UnknownPartition`.
 """
 function search(handle::EmbeddedEngine, vector, k::Int=10; filter=nothing, minrecall=nothing, candidates::Int=2k,
                 stats::Union{Nothing,SearchStats}=nothing, partition::Union{Nothing,AbstractString}=nothing)
+    _check_open(handle)
     query = _search_query(handle.engine, vector)
     partition === nothing || return _search_partition(handle, query, k, partition; filter, minrecall, candidates, stats)
     needs_save = minrecall !== nothing && handle.engine isa IndexEngine.DenseEngine{IndexEngine.GraphBackend} && isempty(handle.engine.backend.opt_beamsearch)
@@ -1603,6 +1625,7 @@ A text project has no batch entry point here -- its queries are strings the libr
 one at a time -- so call [`ftsearch`](@ref) in a loop.
 """
 function searchbatch(handle::EmbeddedEngine, queries, k::Int=10)
+    _check_open(handle)
     Q = _batch_query_database(handle.engine, queries)
     IndexEngine.searchbatch_live(handle.engine, Q, k)
 end
@@ -1625,6 +1648,7 @@ the predicate yourself, or loop over the single-query [`search`](@ref) when the 
 what matters.
 """
 function search(handle::EmbeddedEngine, queries::AbstractVector{<:AbstractVector{<:Real}}, k::Int=10)
+    _check_open(handle)
     ids, dists = searchbatch(handle, queries, k)
     engine = handle.engine
     out = Vector{Vector{SearchResult}}(undef, size(ids, 2))
@@ -1696,6 +1720,7 @@ function ftsearch(handle::EmbeddedEngine, query::Union{AbstractString,AbstractVe
                   minrecall=nothing, policy::QueryPolicy=QueryPolicy(),
                   stats::Union{Nothing,SearchStats}=nothing, partition::Union{Nothing,AbstractString}=nothing,
                   filter=nothing, candidates::Int=2k)
+    _check_open(handle)
     n = filter === nothing ? k : max(candidates, k)
     raw = partition === nothing ?
         IndexEngine.search_live(handle.engine, query, n; bs_override=nothing, minrecall, policy) :
@@ -1713,6 +1738,7 @@ The `meta` field this project is partitioned by, or `nothing` when it declares n
 §5.9). See [`create_project`](@ref)'s `partition_by` and [`declare_partition!`](@ref).
 """
 function partition_field(handle::EmbeddedEngine)
+    _check_open(handle)
     parts = handle.partitions[]
     parts === nothing ? nothing : parts.field
 end
@@ -1725,6 +1751,7 @@ The number of indexed members from which a partition of this dense project has i
 `graph_min` of [`PartitionBy`](@ref).
 """
 function partition_graph_min(handle::EmbeddedEngine)
+    _check_open(handle)
     (handle.engine isa IndexEngine.DenseEngine && handle.partitions[] !== nothing) || return nothing
     return Persistence.load_field(handle.store, :partition_graph_min, DEFAULT_PARTITION_GRAPH_MIN)
 end
@@ -1743,6 +1770,7 @@ partition of a dense `SearchGraph` project with at least `graph_min` indexed mem
 A text partition has posting lists, and `graph` is `false`.
 """
 function partitions(handle::EmbeddedEngine)
+    _check_open(handle)
     parts = _partition_store(handle, :partitions)
     names = Persistence.partition_names(parts)
     counts = Persistence.partition_counts(parts)
@@ -1784,6 +1812,7 @@ handle.
 declare_partition!(handle::EmbeddedEngine, field::AbstractString) = declare_partition!(handle, PartitionBy(field))
 
 function declare_partition!(handle::EmbeddedEngine, by::PartitionBy)
+    _check_open(handle)
     field = by.field
     handle.read_only && unsupported_operation(:declare_partition!, "this project is open read-only")
     engine = handle.engine
@@ -2014,7 +2043,7 @@ it claims. Declaring is additive: an undeclared field is still accepted and stor
 arrives. See [`declare_meta_schema!`](@ref) to declare on a project that already exists, and
 [`Schema.MetaSchema`](@ref) for what a declaration is.
 """
-meta_schema(handle::EmbeddedEngine) = handle.meta_schema
+meta_schema(handle::EmbeddedEngine) = (_check_open(handle); handle.meta_schema)
 
 """
     declare_meta_schema!(handle::EmbeddedEngine, fields) -> Schema.MetaSchema
@@ -2031,6 +2060,7 @@ The version of the declaration increases with each call, so `MetadataRecord.sche
 of a record says which declaration was in force when it was written.
 """
 function declare_meta_schema!(handle::EmbeddedEngine, fields)
+    _check_open(handle)
     handle.read_only && unsupported_operation(:declare_meta_schema!, "this project is open read-only")
     declared = _as_meta_schema(fields)
     schema = Schema.MetaSchema(handle.meta_schema.version + 1, declared.fields)
@@ -2061,7 +2091,7 @@ would depend on whether it had already touched the imported binding. Extending k
 generic function whose methods cover an engine and a handle alike (the same reasoning as the
 `open_project` note in `SimilaritySearchEngine.jl`).
 """
-IndexEngine.text_profile(handle::EmbeddedEngine) = IndexEngine.text_profile(handle.engine)
+IndexEngine.text_profile(handle::EmbeddedEngine) = (_check_open(handle); IndexEngine.text_profile(handle.engine))
 
 """
     _count_oov!(handle::EmbeddedEngine, text)
@@ -2144,6 +2174,7 @@ Returns `nothing` for a project that does not hold text, and for one whose vocab
 not been fitted yet.
 """
 function vocabulary_report(handle::EmbeddedEngine; scan::Bool=false, sample::Int=DEFAULT_OOV_SCAN_SAMPLE)
+    _check_open(handle)
     engine = handle.engine
     IndexEngine.payload_kind(engine) === :text || return nothing
     voc = IndexEngine.text_vocabulary(engine)
@@ -2210,6 +2241,7 @@ Errors for a project whose text engine has not been trained yet, and for a dense
 (which has no query text to resolve).
 """
 function ftexplain(handle::EmbeddedEngine, text::AbstractString; policy::QueryPolicy=QueryPolicy())
+    _check_open(handle)
     engine = handle.engine
     IndexEngine.payload_kind(engine) === :text ||
         unsupported_operation(:ftexplain, "ftexplain is only meaningful for a text project (BM25InvertedFile/InvertedFile); this one is $(typeof(engine))")
@@ -2223,6 +2255,7 @@ Soft-deletes `_id` (future searches exclude it, the underlying index is untouche
 immediately persists just the `deleted_ids` field -- mirrors `Server.handle_delete_item`.
 """
 function delete_item!(handle::EmbeddedEngine, _id::Integer)
+    _check_open(handle)
     handle.wrote[] = true
     IndexEngine.mark_deleted!(handle.engine, _id)
     Persistence.save_field!(handle.store, :deleted_ids, handle.engine.deleted_ids)
@@ -2249,6 +2282,7 @@ return the payload at all: `"text"` was a reserved key stripped on the way in, s
 project's fetch answered with everything about a paragraph except the paragraph.
 """
 function fetch_items(handle::EmbeddedEngine, ids)
+    _check_open(handle)
     project = handle.project
     results = Schema.StoredItem[]
     for raw_id in ids
@@ -2284,6 +2318,7 @@ true when at least one record matched, and `deleted` is true only when *every* m
 soft-deleted, i.e. when asking for that id leaves nothing live to retrieve.
 """
 function exists(handle::EmbeddedEngine, ids)
+    _check_open(handle)
     project = handle.project
     engine = handle.engine
     results = ExistsResult[]
@@ -2334,6 +2369,7 @@ function calibrate!(handle::EmbeddedEngine; levels=IndexEngine.DEFAULT_MINRECALL
                     ksearch::Int=10, queries=nothing, tradeoff::Real=1.5, transition=(-1, 1),
                     nboot::Int=1000, confidence::Real=0.95, rng::AbstractRNG=Random.default_rng(),
                     partition::Union{Nothing,AbstractString}=nothing)
+    _check_open(handle)
     handle.wrote[] = true
     # The queries of a quantized project are evaluated against codes, as in `search`.
     if queries !== nothing && IndexEngine.isquantized(handle.engine)
@@ -2369,6 +2405,7 @@ A row can be shorter than `k`: the library pads unfilled neighbour slots with id
 stops at the first one rather than reporting a neighbour that does not exist.
 """
 function allknn(handle::EmbeddedEngine; k::Int=10)
+    _check_open(handle)
     engine = handle.engine
     IndexEngine.payload_kind(engine) === :dense ||
         unsupported_operation(:allknn, "allknn requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
@@ -2409,6 +2446,7 @@ hydrated with metadata -- look them up yourself (e.g. via [`fetch_items`](@ref))
 it. `assign[i]` is a position in `centers`, so item `i`'s center is `centers[assign[i]]`.
 """
 function fft(handle::EmbeddedEngine, k::Integer; start::Int=0, verbose::Bool=false)
+    _check_open(handle)
     engine = handle.engine
     IndexEngine.payload_kind(engine) === :dense ||
         unsupported_operation(:fft, "fft requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
@@ -2429,6 +2467,7 @@ approximately `length(db) ÷ k` elements. Errors if the project is not a dense i
 Returns a [`CenterSelectionResult`](@ref).
 """
 function dnet(handle::EmbeddedEngine, k::Integer; verbose::Bool=false)
+    _check_open(handle)
     engine = handle.engine
     IndexEngine.payload_kind(engine) === :dense ||
         unsupported_operation(:dnet, "dnet requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
@@ -2457,6 +2496,7 @@ whose distance rounds to a small positive value.
 Returns a [`NearDupResult`](@ref).
 """
 function neardup(handle::EmbeddedEngine, epsilon::Real; verbose::Bool=false, recall::Real=1.0)
+    _check_open(handle)
     engine = handle.engine
     epsilon >= 0 ||
         invalid_option(:epsilon, "neardup needs epsilon >= 0, a distance on the scale of the project's distance function; got $epsilon")
@@ -2482,6 +2522,7 @@ Returns up to `k` `(i, j, dist)` tuples, ascending by distance -- `i`/`j` are in
 `_id`s, not hydrated with metadata.
 """
 function closestpairs(handle::EmbeddedEngine; k::Int=1, min_k::Int=max(k, 8))
+    _check_open(handle)
     engine = handle.engine
     IndexEngine.payload_kind(engine) === :dense ||
         unsupported_operation(:closestpairs, "closestpairs requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")
@@ -2510,6 +2551,7 @@ own internal `_id` (in `idxA`), `j` is `B`'s own position (1-based, in `B`'s own
 *not* related to any project's `_id` space) -- neither is hydrated with metadata.
 """
 function bichromatic_kclosestpairs(handle::EmbeddedEngine, B; k::Int=1, min_k::Int=max(k, 8))
+    _check_open(handle)
     engine = handle.engine
     IndexEngine.payload_kind(engine) === :dense ||
         unsupported_operation(:bichromatic_kclosestpairs, "bichromatic_kclosestpairs requires a dense (vector) project; this one indexes $(IndexEngine.payload_kind(engine))")

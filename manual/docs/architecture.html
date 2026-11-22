@@ -861,12 +861,12 @@ window.Quarto = {
 <tr class="even">
 <td><code>NotFound</code></td>
 <td>something the call named does not exist</td>
-<td><code>ProfileNotInstalled</code></td>
+<td><code>ProfileNotInstalled</code>, <code>UnknownPartition</code></td>
 </tr>
 <tr class="odd">
 <td><code>ConflictingState</code></td>
 <td>the request is well formed but the project is not in a state that can serve it; the same call succeeds later</td>
-<td><code>PendingBacklog</code>, <code>NothingStaged</code>, <code>NoIndex</code>, <code>NotTrained</code>, <code>EmptyProject</code></td>
+<td><code>PendingBacklog</code>, <code>NothingStaged</code>, <code>NoIndex</code>, <code>NotTrained</code>, <code>EmptyProject</code>, <code>ProjectClosed</code></td>
 </tr>
 <tr class="even">
 <td><code>StorageFailure</code></td>
@@ -875,6 +875,7 @@ window.Quarto = {
 </tr>
 </tbody>
 </table>
+<p><code>ProjectClosed</code> is raised by every function that takes a handle after <code>close_project!</code> closed it. That handle stays closed, and the same call succeeds on a new handle from <code>open_project</code>.</p>
 <p>The concrete types carry the values a caller can use. <code>PendingBacklog</code> reports the number of staged items and the number of indexed items, <code>WrongDimension</code> reports the expected and the received length, and <code>InvalidOption</code> reports the keyword that was rejected.</p>
 <p><strong>The mapping is defined at each interface, not in the engine.</strong> The engine contains no reference to HTTP status codes or to process exit codes. Each consumer performs the translation:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="cf">try</span></span>

@@ -3,7 +3,7 @@ module Errors
 export EngineError, InvalidRequest, NotFound, ConflictingState, StorageFailure
 export PayloadMismatch, WrongDimension, UnknownBackend, InvalidOption, UnsupportedOperation
 export ProfileNotInstalled, UnknownPartition, PendingBacklog, NothingStaged, NoIndex, NotTrained
-export EmptyProject, CorruptedStorage
+export EmptyProject, ProjectClosed, CorruptedStorage
 
 """
     EngineError <: Exception
@@ -141,6 +141,15 @@ struct EmptyProject <: ConflictingState
     msg::String
 end
 
+"""
+An operation on a handle that `close_project!` already closed. The handle stays closed; a new one
+from `open_project` serves the same project.
+"""
+struct ProjectClosed <: ConflictingState
+    dataset::String
+    msg::String
+end
+
 # --- StorageFailure ------------------------------------------------------------------
 
 "Stored bytes or recorded state that this version cannot interpret."
@@ -158,7 +167,7 @@ Base.showerror(io::IO, e::EngineError) = print(io, e.msg)
 # a caller *catches* these types, it does not raise them, and the surface stays small.
 export payload_mismatch, wrong_dimension, unknown_backend, invalid_option, unsupported_operation
 export profile_not_installed, unknown_partition, pending_backlog, nothing_staged, no_index, not_trained
-export empty_project, corrupted_storage
+export empty_project, project_closed, corrupted_storage
 
 payload_mismatch(msg...) = throw(PayloadMismatch(string(msg...)))
 wrong_dimension(expected::Integer, got::Integer, msg...) =
@@ -176,6 +185,7 @@ nothing_staged(msg...) = throw(NothingStaged(string(msg...)))
 no_index(msg...) = throw(NoIndex(string(msg...)))
 not_trained(msg...) = throw(NotTrained(string(msg...)))
 empty_project(operation::Symbol, msg...) = throw(EmptyProject(operation, string(msg...)))
+project_closed(dataset, msg...) = throw(ProjectClosed(String(dataset), string(msg...)))
 corrupted_storage(msg...) = throw(CorruptedStorage(string(msg...)))
 
 end # module

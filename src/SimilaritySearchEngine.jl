@@ -109,7 +109,7 @@ export payload_kind
 export EngineError, InvalidRequest, NotFound, ConflictingState, StorageFailure
 export PayloadMismatch, WrongDimension, UnknownBackend, InvalidOption, UnsupportedOperation
 export ProfileNotInstalled, UnknownPartition, PendingBacklog, NothingStaged, NoIndex, NotTrained
-export EmptyProject, CorruptedStorage
+export EmptyProject, ProjectClosed, CorruptedStorage
 
 # ---------------------------------------------------------------------------------------
 # Precompilation workload.

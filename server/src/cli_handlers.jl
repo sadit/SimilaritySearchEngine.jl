@@ -425,7 +425,7 @@ function execute_describe(cmd_args::Dict)
             Dict("bsize" => Int(bs.bsize), "delta" => Float64(bs.Δ), "maxvisits" => Int(bs.maxvisits))
     end
 
-    Project.close_project(ds)
+    SSE.close_project!(handle; compact=false)
 
     out_json = JSON3.write(desc)
     if out_file === nothing
@@ -619,7 +619,7 @@ function execute_dump(cmd_args::Dict)
 
     if isempty(records)
         println("Error: dataset '$project_id' has no records to dump")
-        Project.close_project(ds)
+        SSE.close_project!(handle; compact=false)
         return 1
     end
 
@@ -637,7 +637,7 @@ function execute_dump(cmd_args::Dict)
         index_kind = wire_kind(engine)
         distance = string(nameof(typeof(SimilaritySearch.distance(engine.backend.index))))
     end
-    Project.close_project(ds)
+    SSE.close_project!(handle; compact=false)
 
     mkpath(output_dir)
     Persistence.write_dump_records(joinpath(output_dir, "dataset.avro"), records)
