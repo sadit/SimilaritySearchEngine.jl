@@ -15,7 +15,7 @@ export AbstractSearchEngine, DenseEngine, SparseEngine, FullTextEngine
 export GraphBackend, ExactBackend, SparseBackend, TextBackend, backend_tag, payload_kind
 export ReadWriteLock, read_lock, write_lock
 export ContextPool, checkout!, checkin!
-export create_engine, restore_engine, snapshot_state, extra_state_fields, add_item!, index!, search_live, mark_deleted!
+export create_engine, restore_engine, snapshot_state, extra_state_fields, build_exact_index, add_item!, index!, search_live, mark_deleted!
 export stored_payload
 export calibrate!, current_beamsearch, OptBeamSearch, CalibrationLevel, DEFAULT_MINRECALL_LEVELS
 export direct_neighbors, apply_searchgraph_vectors!, build_searchgraph
@@ -827,6 +827,21 @@ function apply_searchgraph_vectors!(index::SearchGraph, block)
 end
 
 """
+    build_exact_index(spec::DenseVectors, vector_blocks) -> Union{ExhaustiveSearch,ParallelExhaustiveSearch}
+
+The exact index of `spec` over the vectors of `vector_blocks`, as
+`Persistence.load_dense_vector_blocks` returns them. An exact index has no structure besides
+its vectors, so this is all an exact project of `Float32` vectors saves (issue #3).
+"""
+function build_exact_index(spec::DenseVectors, vector_blocks)
+    vectors = Vector{Float32}[]
+    for block in vector_blocks
+        append!(vectors, block.vectors)
+    end
+    return index_type(spec)(spec.distance, VectorDatabase(vectors))
+end
+
+"""
     build_searchgraph(distance, vector_blocks, load_neighbors::Function, graph_len::Integer) -> SearchGraph
 
 Rebuilds a `SearchGraph` against `distance`: replays each of `vector_blocks` (as returned
@@ -1292,9 +1307,10 @@ project holds, its index, its distance, `minrecall` and `dimension` are in the
 [`ProjectSpec`](@ref) the project saves in `:spec`, and they are not repeated here. Used for a
 full save right after `create_engine`; later mutations save the one or two fields they change.
 
-Only an exact dense engine of `Float32` vectors carries a plain `:index`: the whole brute-force
-index is a single value. The other engines carry what their `build_*` function needs to replay
-their saved insertion blocks:
+No engine carries its index. An exact dense engine of `Float32` vectors is rebuilt from the
+project's dense-vector file (issue #3). Until 2026-11-22 it saved its whole index in `:index`
+after each inserted item, which made an append of `n` items write `O(n²)` bytes. The other
+engines carry what their `build_*` function needs to replay their saved insertion blocks:
 
 - a graph-backed dense project: `opt_beamsearch`, `beamsearch` and `hints` (see
   [`direct_neighbors`](@ref) and [`build_searchgraph`](@ref));
@@ -1318,11 +1334,12 @@ function snapshot_state(engine::DenseEngine{GraphBackend})
     return (; base..., encoder=engine.quant.encoder)
 end
 
-# A quantized exact engine saves no `:index`: its codes are in their own file, which grows with
-# each `index!`, and the rest of the index is the encoder and the distance of the spec.
+# An exact engine saves no index. A quantized one keeps its codes in their own file, which grows
+# with each `index!`, and the rest of its index is the encoder and the distance of the spec. One of
+# `Float32` vectors is rebuilt from the dense-vector file (issue #3).
 snapshot_state(engine::DenseEngine{<:ExactBackend}) =
     isquantized(engine) ? (deleted_ids=engine.deleted_ids, encoder=engine.quant.encoder) :
-                          (index=engine.backend.index, deleted_ids=engine.deleted_ids)
+                          (deleted_ids=engine.deleted_ids,)
 snapshot_state(engine::SparseEngine) = (deleted_ids=engine.deleted_ids,)
 snapshot_state(engine::FullTextEngine) =
     (profile=engine.profile, fitspec=engine.fitspec, deleted_ids=engine.deleted_ids)
@@ -1334,11 +1351,11 @@ The field names [`snapshot_state`](@ref) includes for a saved project *beyond* `
 `:backend`, `:deleted_ids` and `:index` -- the static list a loader needs before an engine
 instance exists to call `snapshot_state` on.
 
-Only the exact dense backends are covered, and they need nothing: their whole index is a single
-`:index` field. Every other backend needs its own dedicated path instead -- a graph's
-distance/minrecall/beam plus its replayed insertion blocks, a sparse project's
-distance/dimension, a text project's profile and objects -- because none of them has a plain
-`:index` field to read back at all (see `snapshot_state`'s docstring).
+It returns an empty tuple for every kind. No backend has a plain `:index` field to read back
+(see `snapshot_state`'s docstring). Each one is rebuilt by its own path: a graph and an exact
+index from the dense-vector file (see [`build_searchgraph`](@ref) and
+[`build_exact_index`](@ref)), a sparse project from its objects, and a text project from its
+persisted inverted index.
 """
 extra_state_fields(::Symbol) = ()
 
@@ -1352,8 +1369,9 @@ including, for a `DenseEngine{GraphBackend}`, the `minrecall` target it was grow
 reopened project keeps autotuning toward the same target instead of reverting to some
 other default. `on_change`/`log_io` are as in [`create_engine`](@ref).
 
-Only an exact dense project's `state` carries a plain `index`; every other kind carries what its
-own `build_*` function needs instead:
+An exact dense project's `state` carries its `index`, built by [`build_exact_index`](@ref)
+from the dense-vector file, or read from the `:index` field of a project saved before
+2026-11-22 (issue #3). Every other kind carries what its own `build_*` function needs instead:
 - `DenseEngine{GraphBackend}`: `distance`, `vector_blocks` (`Persistence.load_dense_vector_blocks(dense_vectors_store)`),
   `load_neighbors` (typically `i -> Persistence.load_neighbors(adjacency_store, i)`),
   `graph_len` (`Persistence.load_field(store, :graph_len, 0)` -- may be `< length` of the

@@ -520,6 +520,8 @@ window.Quarto = {
 <li><strong><code>ExhaustiveSearch</code> and <code>InvertedFile</code> (Sparse Engine)</strong>:
 <ul>
 <li>An exact linear scan evaluates the database directly, and a sparse inverted file updates its posting lists on insertion. <code>append_items!</code> therefore makes an item searchable immediately, and <code>index!</code> performs no work.</li>
+<li>An exact project of <code>Float32</code> vectors writes its vectors to <code>dense_vectors.mmapdb</code>, as on <code>SearchGraph</code>. <code>open_project</code> rebuilds the exact index from that file. Nothing else of the index is saved (issue #3).</li>
+<li>Before 2026-11-22, an exact project saved its whole index in the engine field <code>:index</code> after each inserted item, so an append of <span class="math inline">\(n\)</span> items wrote <span class="math inline">\(O(n^2)\)</span> bytes. A writable <code>open_project</code> of such a project moves its vectors to <code>dense_vectors.mmapdb</code> and removes <code>:index</code>. A read-only open reads <code>:index</code>.</li>
 </ul></li>
 <li><strong>Quantized dense projects, on every dense backend</strong>:
 <ul>
@@ -758,7 +760,7 @@ window.Quarto = {
 <li><strong>Storage.</strong> The codes are in <code>dense_codes.mmapdb</code>, a memory-mapped file with one row of bytes per vector. The ranges of a per-vector quantizer are in <code>dense_code_ranges.mmapdb</code>, two <code>Float32</code> per vector. <code>index!</code> reads, encodes and inserts the staged vectors in blocks of <code>QUANT_ENCODE_BLOCK</code> (16,384). With <code>keep_vectors=false</code>, the default, <code>index!</code> then removes <code>dense_vectors.mmapdb</code>, and the next <code>append_items!</code> starts a new one. The engine field <code>:raw_offset</code> holds the number of items before its first row.</li>
 <li><strong>Reading back.</strong> <code>fetch_items</code> returns the vector of an item whose <code>Float32</code> vector is still on disk: every item with <code>keep_vectors=true</code>, and an item not yet encoded otherwise. It returns <code>nothing</code> as the payload of any other item, because the codes do not give back the vector that was appended.</li>
 <li><strong>Opening.</strong> <code>open_project</code> reads the encoder, maps the codes file, and on <code>SearchGraph</code> restores the graph from the adjacency store. The staged vectors not yet encoded are the rows of <code>dense_vectors.mmapdb</code> after <code>:raw_offset</code> plus the number of codes. A file whose rows are all encoded, in a project that does not keep them, is what an interrupted <code>index!</code> leaves, and it is removed.</li>
-<li><strong>Memory.</strong> The codes stay in the mapped file, and only the code sums (8 bytes per vector) and, for a per-vector quantizer, the ranges (8 bytes per vector) are in memory. A <code>Float32</code> project holds every vector in memory: an exact project deserializes its index, and a graph project copies the vectors out of <code>dense_vectors.mmapdb</code> when it is opened. Measured on 2026-11-20 with 200,000 vectors of dimension 256 (test <code>quantized project: resident memory follows the size of the codes</code>): opening the project and running one search added 403 MB of resident memory for the <code>Float32</code> vectors of a graph project, and 50 MB for the 8-bit codes, whose file holds 51 MB.</li>
+<li><strong>Memory.</strong> The codes stay in the mapped file, and only the code sums (8 bytes per vector) and, for a per-vector quantizer, the ranges (8 bytes per vector) are in memory. A <code>Float32</code> project holds every vector in memory: a graph project and an exact project copy the vectors out of <code>dense_vectors.mmapdb</code> when they are opened. Measured on 2026-11-20 with 200,000 vectors of dimension 256 (test <code>quantized project: resident memory follows the size of the codes</code>): opening the project and running one search added 403 MB of resident memory for the <code>Float32</code> vectors of a graph project, and 50 MB for the 8-bit codes, whose file holds 51 MB.</li>
 </ul>
 </section>
 <section id="external-identifier-resolution" class="level3">
@@ -782,7 +784,7 @@ window.Quarto = {
 </ul></li>
 <li><strong>Dense Vector Storage (<code>dense_vectors.mmapdb</code>)</strong>:
 <ul>
-<li>Dense vectors are stored in a dedicated memory-mapped binary file managed by <code>MMapMatrixDatabase</code>.</li>
+<li>Dense vectors are stored in a dedicated memory-mapped binary file managed by <code>MMapMatrixDatabase</code>. Every dense project writes it: a graph project, an exact project of <code>Float32</code> vectors, and a quantized project until <code>index!</code> encodes the vectors.</li>
 <li>Avoids key-value serialization. Appends are sequential, and random access reads the vector without copying it.</li>
 </ul></li>
 <li><strong>Quantized Code Storage (<code>dense_codes.mmapdb</code>, <code>dense_code_ranges.mmapdb</code>)</strong>:

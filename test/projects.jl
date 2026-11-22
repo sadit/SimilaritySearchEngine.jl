@@ -91,6 +91,9 @@ end
             h = create_project(workdir, name, spec)
             delete!(h.store.dict, "spec")
             SimilaritySearchEngine.Persistence.save_fields!(h.store, fields)
+            # An exact project of that time saved its whole index in `:index` (issue #3).
+            spec isa DenseVectors{Exhaustive} &&
+                SimilaritySearchEngine.Persistence.save_field!(h.store, :index, h.engine.backend.index)
             close_project!(h)
             h = open_project(workdir, name)
             got = project_spec(h)

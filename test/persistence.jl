@@ -96,6 +96,65 @@ end
     end
 end
 
+@testset "an exact project stores its vectors in the dense-vector file (issue #3)" begin
+    P = SimilaritySearchEngine.Persistence
+    mktempworkdir() do workdir
+        items = [JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:40]]
+        q = items[3]["vector"]
+        for (name, spec) in ("ex" => DenseVectors(; index=Exhaustive()),
+                             "pex" => DenseVectors(Dist.SqL2(); index=Exhaustive(parallel=true)))
+            h = create_project(workdir, name, spec)
+            # Several calls: until issue #3, each inserted item rewrote the whole index.
+            for chunk in Iterators.partition(dense_items(items), 10)
+                append_items!(h, collect(chunk))
+            end
+            path = joinpath(workdir, name, "dense_vectors.mmapdb")
+            @test isfile(path)
+            @test !P.has_field(h.store, :index)
+            before = [(r._id, r.distance) for r in search(h, q, 5)]
+            @test length(before) == 5
+            close_project!(h)
+
+            h2 = open_project(workdir, name)
+            @test [(r._id, r.distance) for r in search(h2, q, 5)] == before
+            @test fetch_items(h2, [items[7]["doc_id"]])[1].payload == Vector{Float32}(items[7]["vector"])
+            append_items!(h2, DenseItem(Float32.(q); doc_id="again"))
+            @test length(search(h2, q, 41)) == 41
+            close_project!(h2)
+
+            h3 = open_project(workdir, name; read_only=true)
+            @test search(h3, q, 2)[1].distance ≈ 0 atol=1e-5
+            @test length(search(h3, q, 50)) == 41
+            close_project!(h3)
+        end
+
+        # A project saved before 2026-11-22 holds its whole index in `:index` and has no file.
+        h = create_project(workdir, "legacy", DenseVectors(; index=Exhaustive()))
+        append_items!(h, dense_items(items))
+        before = [(r._id, r.distance) for r in search(h, q, 5)]
+        P.save_field!(h.store, :index, h.engine.backend.index)
+        close_project!(h)
+        path = joinpath(workdir, "legacy", "dense_vectors.mmapdb")
+        rm(path)
+
+        h_ro = open_project(workdir, "legacy"; read_only=true)
+        @test [(r._id, r.distance) for r in search(h_ro, q, 5)] == before
+        @test !isfile(path)                    # a read-only open does not move the vectors
+        close_project!(h_ro)
+
+        h2 = open_project(workdir, "legacy")
+        @test isfile(path)
+        @test !isfile(path * ".tmp")
+        @test !P.has_field(h2.store, :index)
+        @test [(r._id, r.distance) for r in search(h2, q, 5)] == before
+        close_project!(h2)
+
+        h3 = open_project(workdir, "legacy")
+        @test [(r._id, r.distance) for r in search(h3, q, 5)] == before
+        close_project!(h3)
+    end
+end
+
 @testset "compaction runs for a session that wrote and is skipped for one that did not" begin
     mktempworkdir() do workdir
         h = create_project(workdir, "compact_ds", DenseVectors())

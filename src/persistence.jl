@@ -9,7 +9,7 @@ using ..Schema
 import ..IndexEngine
 using ..Errors
 
-export EngineStore, ENGINE_CF, open_engine_store, save_field!, load_field, has_field, save_fields!
+export EngineStore, ENGINE_CF, open_engine_store, save_field!, load_field, has_field, delete_field!, save_fields!
 export AdjacencyStore, ADJACENCY_CF, open_adjacency_store, save_neighbors!, load_neighbors
 export DENSE_VECTORS_FILENAME, dense_vectors_path, open_dense_vectors, load_dense_vector_blocks
 export DENSE_CODES_FILENAME, DENSE_CODE_RANGES_FILENAME, dense_codes_path, dense_code_ranges_path, open_dense_codes
@@ -90,6 +90,16 @@ save_field!(store::EngineStore, field::Symbol, value) = _save_key!(store.dict, S
 Reads back the value last saved under `field`'s key, or `default` if it was never saved.
 """
 load_field(store::EngineStore, field::Symbol, default) = _load_key(store.dict, String(field), default)
+
+"""
+    delete_field!(store::EngineStore, field::Symbol)
+
+Removes the value saved under `field`. Does nothing when there is none.
+"""
+function delete_field!(store::EngineStore, field::Symbol)
+    haskey(store.dict, String(field)) && delete!(store.dict, String(field))
+    return nothing
+end
 
 """
     has_field(store::EngineStore, field::Symbol) -> Bool
@@ -194,7 +204,9 @@ load_neighbors(store::AdjacencyStore, object_id::Integer) = get(store.dict, stri
     DENSE_VECTORS_FILENAME
 
 Filename (relative to a project's directory, alongside its RocksDB files) of the
-`SimilaritySearch.MMapMatrixDatabase` file backing a `DenseEngine{GraphBackend}`'s dense vectors.
+`SimilaritySearch.MMapMatrixDatabase` file that holds the appended vectors of a dense project.
+Every dense project writes it: a graph, an exact index of `Float32` vectors (issue #3), and a
+quantized project until its vectors are encoded.
 """
 const DENSE_VECTORS_FILENAME = "dense_vectors.mmapdb"
 

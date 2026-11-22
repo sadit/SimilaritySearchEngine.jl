@@ -192,14 +192,8 @@ layout plus the live `Project.ProjectManager`/`IndexEngine.AbstractSearchEngine`
 `cli_handlers.jl`'s `_load_dataset_and_engine` already threads through separately for a
 single CLI command, plus the `Persistence.EngineStore` (a RocksDB column family shared
 with `project.db`, see `Persistence.open_engine_store`) that engine mutations persist
-into field-by-field, and `pending_flush` -- a flag a `DenseEngine{<:ExactBackend}`'s
-`SimilaritySearch.CallbackLog` callback sets (see [`create_project`](@ref)) that this module
-checks and clears from *outside* the engine's own insertion call, once it's known safe to
-do so (see [`_maybe_flush_index!`](@ref); unused by every backend that persists its index
-incrementally by itself, which is all of them except the exact ones -- see
-[`_searchgraph_on_change`](@ref)/[`_invertedfile_on_change`](@ref)) -- worth bundling here
-since an embedded-API caller makes many calls against the same open project instead of
-running once and exiting.
+into field-by-field -- worth bundling here since an embedded-API caller makes many calls
+against the same open project instead of running once and exiting.
 """
 mutable struct EmbeddedEngine
     workdir::String
@@ -208,7 +202,6 @@ mutable struct EmbeddedEngine
     project::Project.ProjectManager
     engine::IndexEngine.AbstractSearchEngine
     store::Persistence.EngineStore
-    pending_flush::Base.RefValue{Bool}
     schema_version::Int
     # What this project declares about `meta` (PLAN.md §4.5). Empty for a project that
     # declares nothing, which is every project written before this existed and every one
@@ -244,25 +237,6 @@ _check_open(handle::EmbeddedEngine) = handle.closed[] && project_closed(handle.d
     "project '", handle.dataset, "' was closed by close_project!; open it again with open_project")
 
 """
-    _maybe_flush_index!(handle::EmbeddedEngine)
-
-Persists `handle.engine.backend.index` if (and only if) `handle.pending_flush[]` is set, then
-clears the flag. Callers must only call this from a point where the just-finished mutation
-is fully done -- in particular, *not* from inside an `SimilaritySearch.CallbackLog` callback
-itself. Right after an `IndexEngine.add_item!`/`index!` call returns to this
-module is always safe. A no-op for `DenseEngine{GraphBackend}`/`FullTextEngine`:
-each has its own dedicated incremental `on_change` (see [`_searchgraph_on_change`](@ref)/
-[`_invertedfile_on_change`](@ref)) that never touches `pending_flush`; only `DenseEngine{<:ExactBackend}`
-(`ExhaustiveSearch`/`ParallelExhaustiveSearch`) still uses this whole-index path.
-"""
-function _maybe_flush_index!(handle::EmbeddedEngine)
-    if handle.pending_flush[]
-        handle.pending_flush[] = false
-        Persistence.save_field!(handle.store, :index, handle.engine.backend.index)
-    end
-end
-
-"""
     _searchgraph_on_change(store::Persistence.EngineStore, adj_store::Persistence.AdjacencyStore) -> Function
 
 The `on_change` callback for a `DenseEngine{GraphBackend}`: fires from *inside*
@@ -282,8 +256,7 @@ Raw vectors are *not* handled here -- unlike before, they're persisted directly 
 meaningful the moment they're staged, well before any graph-linking work happens; only
 adjacency and `:graph_len` genuinely need to wait for `SimilaritySearch.index!` itself to
 compute them, which is exactly what makes it safe to do this synchronously, right inside
-the callback (unlike the whole-graph save every other engine kind uses, see
-[`_maybe_flush_index!`](@ref)): this is exactly the direct-links-only slice
+the callback: this is exactly the direct-links-only slice
 `SimilaritySearch.CallbackLog` hands over at that point, and reconstruction
 (`IndexEngine.build_searchgraph`, used by [`open_project`](@ref)) reconnects every reverse
 link itself, once, up to the restored `:graph_len`, after replaying every staged vector
@@ -306,8 +279,7 @@ The `on_change` callback for a `FullTextEngine`: on every
 indexed objects (bags-of-words or `SparseVector`s -- see `IndexEngine.invertedfile_objects`)
 as a new, never-again-rewritten block in `obj_store` (`Persistence.append_objects!`) --
 never the whole (growing) index as one value. Safe to do synchronously, right inside the
-callback (unlike the whole-index save `DenseEngine{<:ExactBackend}` uses, see
-[`_maybe_flush_index!`](@ref)): an inverted file's `LOG` only fires after a call's
+callback: an inverted file's `LOG` only fires after a call's
 mutation is fully done, so there's no partial-state hazard here the way there is for a
 `SearchGraph` (see `SimilaritySearch.CallbackLog`'s docstring). Reconstruction
 (`IndexEngine.build_sparseinvertedfile`, used by [`open_project`](@ref)) rebuilds the whole
@@ -496,8 +468,8 @@ The keywords apply to every kind of project:
 The index is saved as it grows. A `SearchGraph` saves the links of each block that
 [`index!`](@ref index!(::EmbeddedEngine)) builds (see [`_searchgraph_on_change`](@ref)). An
 inverted file saves the objects of each insertion (see [`_invertedfile_on_change`](@ref)). An
-exact index of `Float32` vectors is saved whole after each `add_item!` (see
-[`_maybe_flush_index!`](@ref) and issue #3), and [`close_project!`](@ref) saves it once more.
+exact index of `Float32` vectors saves nothing besides its vectors, which
+[`append_items!`](@ref) writes to the dense-vector file of the project (issue #3).
 """
 function create_project(workdir::String, dataset::String, spec::ProjectSpec=DenseVectors();
                         meta_schema=nothing, partitions::Union{Nothing,PartitionBy}=nothing,
@@ -520,7 +492,6 @@ function create_project(workdir::String, dataset::String, spec::ProjectSpec=Dens
     mkpath(dir)
     project = Project.open_project(dir, dataset; extra_cf_names=_PROJECT_CFS)
     store = Persistence.open_engine_store(project.db)
-    pending_flush = Ref(false)
     dense_vectors = Ref{Union{Nothing,MMapMatrixDatabase}}(nothing)
     partitions_ref = Ref{Union{Nothing,Persistence.PartitionStore}}(nothing)
     if partition_by !== nothing
@@ -531,13 +502,13 @@ function create_project(workdir::String, dataset::String, spec::ProjectSpec=Dens
         _invfile_adj_factory(_invfile_store(project), partitions_ref; maxlists=runtime.postings_cache_max,
                              baselists=runtime.postings_cache_base) :
         nothing
-    eng = IndexEngine.create_engine(spec; on_change=_on_change(spec, store, project, pending_flush), log_io=nothing,
+    eng = IndexEngine.create_engine(spec; on_change=_on_change(spec, store, project), log_io=nothing,
                                     maxbatches=runtime.maxbatches, adj_factory, edit_correction=runtime.edit_correction)
     Persistence.save_field!(store, :spec, IndexEngine.spec_to_dict(spec))
     Persistence.save_fields!(store, IndexEngine.snapshot_state(eng))
     isempty(schema) || Persistence.save_field!(store, :meta_schema, schema)
     partition_by === nothing || Persistence.save_field!(store, :partition_by, partition_by)
-    handle = EmbeddedEngine(workdir, dataset, dir, project, eng, store, pending_flush, schema_version,
+    handle = EmbeddedEngine(workdir, dataset, dir, project, eng, store, schema_version,
                             schema, OOVCounters(), dense_vectors, false, Ref(true), partitions_ref,
                             (runtime.postings_cache_max, runtime.postings_cache_base), spec, Ref(false))
     if kind === :dense && partition_by !== nothing
@@ -548,19 +519,17 @@ function create_project(workdir::String, dataset::String, spec::ProjectSpec=Dens
 end
 
 # What a project saves as its index grows, by what its index reports per insertion: a graph
-# reports link blocks, an inverted file of sparse vectors reports encoded objects, and an exact
-# index of `Float32` vectors reports nothing useful, so its whole index is flushed instead. A
-# quantized exact index keeps its codes in their own file (see `_index_quantized!`), and a text
-# index is written a block at a time by `IndexEngine.index!` itself (see
-# `Persistence.InvertedIndexStore`).
-_on_change(::DenseVectors{Graph}, store, project, pending_flush) =
+# reports link blocks, and an inverted file of sparse vectors reports encoded objects. An exact
+# index has no structure besides its vectors, which `append_items!` writes to the dense-vector
+# file (issue #3). A quantized exact index keeps its codes in their own file (see
+# `_index_quantized!`), and a text index is written a block at a time by `IndexEngine.index!`
+# itself (see `Persistence.InvertedIndexStore`).
+_on_change(::DenseVectors{Graph}, store, project) =
     _searchgraph_on_change(store, Persistence.open_adjacency_store(project.db))
-_on_change(::DenseVectors{Exhaustive,Quantized}, store, project, pending_flush) = nothing
-_on_change(::DenseVectors{Exhaustive,Float32Vectors}, store, project, pending_flush) =
-    (_, __, ___) -> (pending_flush[] = true)
-_on_change(::SparseVectors, store, project, pending_flush) =
+_on_change(::DenseVectors{Exhaustive}, store, project) = nothing
+_on_change(::SparseVectors, store, project) =
     _invertedfile_on_change(Persistence.open_invertedfile_object_store(project.db))
-_on_change(::TextDocuments, store, project, pending_flush) = nothing
+_on_change(::TextDocuments, store, project) = nothing
 
 function _check_edit_correction(kind::Symbol, runtime::Runtime)
     kind === :text || !runtime.edit_correction ||
@@ -743,7 +712,6 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
     dir = joinpath(workdir, dataset)
     project = Project.open_project(dir, dataset; read_only, extra_cf_names=_PROJECT_CFS)
     store = Persistence.open_engine_store(project.db)
-    pending_flush = Ref(false)
     dense_vectors = Ref{Union{Nothing,MMapMatrixDatabase}}(nothing)
     partitions_ref = Ref{Union{Nothing,Persistence.PartitionStore}}(nothing)
     maxbatches = runtime.maxbatches
@@ -764,7 +732,7 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
     engine = if spec === nothing
         # Never saved: create the default project `create_project` would have, and save it.
         spec = DenseVectors()
-        engine = IndexEngine.create_engine(spec; on_change=_on_change(spec, store, project, pending_flush),
+        engine = IndexEngine.create_engine(spec; on_change=_on_change(spec, store, project),
                                            log_io=nothing, maxbatches, adj_factory=nothing, edit_correction=false)
         Persistence.save_field!(store, :spec, IndexEngine.spec_to_dict(spec))
         Persistence.save_fields!(store, IndexEngine.snapshot_state(engine))
@@ -789,14 +757,16 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
         )
         IndexEngine.restore_engine(state; on_change=_searchgraph_on_change(store, adj_store), log_io=nothing, maxbatches)
     elseif spec isa DenseVectors
-        # The exact backends are the one kind whose whole index is a single saved value, so they
-        # are also the one kind that still needs `pending_flush` (see `_maybe_flush_index!`).
+        dense_vectors[] = _open_exact_vectors(dir, store, read_only)
+        index = dense_vectors[] === nothing && Persistence.has_field(store, :index) ?
+            Persistence.load_field(store, :index, nothing) :
+            IndexEngine.build_exact_index(spec, Persistence.load_dense_vector_blocks(dense_vectors[]))
         state = (
             kind=:dense, backend=IndexEngine.backend_symbol(spec),
-            index=Persistence.load_field(store, :index, nothing),
+            index=index,
             deleted_ids=Persistence.load_field(store, :deleted_ids, nothing),
         )
-        IndexEngine.restore_engine(state; on_change=_on_change(spec, store, project, pending_flush), log_io=nothing, maxbatches)
+        IndexEngine.restore_engine(state; on_change=_on_change(spec, store, project), log_io=nothing, maxbatches)
     elseif spec isa SparseVectors
         obj_store = Persistence.open_invertedfile_object_store(project.db)
         state = (
@@ -833,13 +803,43 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
         )
         IndexEngine.restore_engine(state; on_change=nothing, log_io=nothing, maxbatches)
     end
-    handle = EmbeddedEngine(workdir, dataset, dir, project, engine, store, pending_flush, schema_version,
+    handle = EmbeddedEngine(workdir, dataset, dir, project, engine, store, schema_version,
                             Persistence.load_field(store, :meta_schema, Schema.MetaSchema()),
                             Persistence.load_field(store, :oov_counters, OOVCounters()),
                             dense_vectors, read_only, Ref(false), partitions_ref,
                             (runtime.postings_cache_max, runtime.postings_cache_base), spec, Ref(false))
     spec isa DenseVectors && partition_by !== nothing && _restore_dense_partitions!(handle)
     return handle
+end
+
+"""
+    _open_exact_vectors(dir, store, read_only) -> Union{Nothing,MMapMatrixDatabase}
+
+Opens the dense-vector file of an exact project of `Float32` vectors. A project saved before
+2026-11-22 has no file, and its whole index is in the field `:index` (issue #3). A writable
+open moves those vectors to the file, and then removes `:index`. The file is written under a
+temporary name and renamed when it is complete, so an interrupted move leaves `:index` as the
+only copy. A read-only open returns `nothing` for such a project, and the caller reads `:index`.
+"""
+function _open_exact_vectors(dir::String, store, read_only::Bool)
+    raw = Persistence.open_dense_vectors(dir; read_only)
+    read_only && return raw
+    if raw === nothing && Persistence.has_field(store, :index)
+        db = SimilaritySearch.database(Persistence.load_field(store, :index, nothing))
+        if length(db) > 0
+            path = Persistence.dense_vectors_path(dir)
+            tmp = path * ".tmp"
+            rm(tmp; force=true)
+            out = MMapMatrixDatabase(tmp, length(db[1]), Float32)
+            SimilaritySearch.append_items!(out, [Vector{Float32}(db[i]) for i in 1:length(db)])
+            close(out)
+            mv(tmp, path)
+            raw = Persistence.open_dense_vectors(dir; read_only)
+        end
+    end
+    # The file is complete here, or the project holds no vectors: `:index` is not needed.
+    Persistence.delete_field!(store, :index)
+    return raw
 end
 
 """
@@ -900,14 +900,13 @@ end
 """
     close_project!(handle::EmbeddedEngine; compact::Bool=true)
 
-Flushes the engine's index one final time and closes the project's RocksDB connection
-(and, for a `DenseEngine{GraphBackend}` that ever had a vector appended, its `MMapMatrixDatabase`
-file too -- see [`_searchgraph_on_change`](@ref)). For a graph-backed dense project and for the
-inverted-file backends (sparse and text) there is nothing left to flush -- every block was already
-saved the instant it was reported -- so this only does the final `:index` save for
-`DenseEngine{<:ExactBackend}`. Every other field (`deleted_ids`, `opt_beamsearch`, ...) is, for every
-kind, already persisted immediately by whichever call changed it (`delete_item!`,
-`calibrate!`, ...).
+Closes the project's RocksDB connection. A dense project that has vectors also has its
+`MMapMatrixDatabase` file, and this closes that file too.
+
+No index is saved here. Each block of an index was saved when it was built. Every other field
+(`deleted_ids`, `opt_beamsearch`, ...) is saved by the call that changed it (`delete_item!`,
+`calibrate!`, ...). Before it closes the project, this function saves one value: the count of
+query words not found in the vocabulary (see [`vocabulary_report`](@ref)).
 
 Then, unless `compact=false`, it compacts the project's storage through
 [`compact_project!`](@ref) -- a no-op for a read-only handle or a session that only read. That
@@ -919,21 +918,11 @@ After it, every other function that takes `handle` raises [`ProjectClosed`](@ref
 """
 function close_project!(handle::EmbeddedEngine; compact::Bool=true)
     handle.closed[] && return nothing
-    handle.pending_flush[] = false
     # The queries counted since the last write (see `OOVCounters`). A read-only handle counted
     # them for its own report and has nowhere to put them.
     if !handle.read_only && handle.oov.unflushed > 0
         handle.oov.unflushed = 0
         Persistence.save_field!(handle.store, :oov_counters, handle.oov)
-    end
-    # An exact index is saved whole at close. A read-only handle cannot write, and it changed
-    # nothing to save: until 2026-11-19 this raised, which made every job over an exact dataset
-    # fail when it closed its project.
-    # A quantized index keeps its codes in their own file, which `index!` already flushed.
-    if !handle.read_only && !IndexEngine.isquantized(handle.engine) &&
-            !(handle.engine isa Union{IndexEngine.DenseEngine{IndexEngine.GraphBackend},
-                                      IndexEngine.SparseEngine, IndexEngine.FullTextEngine})
-        Persistence.save_field!(handle.store, :index, handle.engine.backend.index)
     end
     handle.dense_vectors[] === nothing || close(handle.dense_vectors[])
     IndexEngine.isquantized(handle.engine) && IndexEngine.close_quantized!(handle.engine)
@@ -1205,8 +1194,9 @@ time, not via `on_change`, since an item is already durable-worthy the moment it
 long before any graph-linking/encoding happens. Once an [`index!`](@ref index!(::EmbeddedEngine))
 call actually encodes/indexes a text project's backlog, `SimilaritySearch.CallbackLog` persists
 each newly-encoded object incrementally (see [`_invertedfile_on_change`](@ref)).
-`DenseEngine{<:ExactBackend}` instead flags a pending whole-index save that happens right after each
-`add_item!` call returns (see [`_maybe_flush_index!`](@ref)).
+An exact dense project of `Float32` vectors indexes each vector at once, and it writes the
+vectors to the same file as a graph project. Its index is rebuilt from that file when the
+project is opened (issue #3).
 
 # Performance: batch size matters a lot for a `SearchGraph` (dense) project
 
@@ -1248,8 +1238,10 @@ function append_items!(handle::EmbeddedEngine, items::AbstractVector{<:Schema.Ab
     is_text = IndexEngine.payload_kind(engine) === :text
     is_dense_graph = engine isa IndexEngine.DenseEngine{IndexEngine.GraphBackend}
     # A graph project and a quantized project of any backend stage the vectors in the
-    # dense-vector file, and `index!` indexes them.
+    # dense-vector file, and `index!` indexes them. An exact project of `Float32` vectors indexes
+    # them here, and it writes them to the same file, from which its index is rebuilt (issue #3).
     stages_vectors = is_dense_graph || IndexEngine.isquantized(engine)
+    writes_vectors = IndexEngine.payload_kind(engine) === :dense
     staged_vectors = Vector{Float32}[]
     staged_texts = String[]
     text_sp = is_text ? _current_size(engine) + 1 : 0
@@ -1272,10 +1264,9 @@ function append_items!(handle::EmbeddedEngine, items::AbstractVector{<:Schema.Ab
         IndexEngine.add_item!(engine, p)
         if is_text
             push!(staged_texts, p)
-        elseif stages_vectors
+        elseif writes_vectors
             push!(staged_vectors, p)
         end
-        _maybe_flush_index!(handle)
 
         _id = Int32(_current_size(engine))
         # An empty `meta` is stored as nothing rather than as an empty JSON object: there is
@@ -1291,7 +1282,7 @@ function append_items!(handle::EmbeddedEngine, items::AbstractVector{<:Schema.Ab
         IndexEngine.add_partition_members!(engine, dense_sp, dense_members)
     end
 
-    if stages_vectors && !isempty(staged_vectors)
+    if writes_vectors && !isempty(staged_vectors)
         if handle.dense_vectors[] === nothing
             # The first row of a new file of a quantized project is the item after the ones
             # already encoded (see `_drop_encoded_vectors!`). Saved before the file exists, so

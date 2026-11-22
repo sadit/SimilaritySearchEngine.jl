@@ -215,6 +215,8 @@ The package separates the insertion of items from the construction of the index,
      - On subsequent invocations, `index!` encodes staged strings and inserts posting list entries.
 3. **`ExhaustiveSearch` and `InvertedFile` (Sparse Engine)**:
    - An exact linear scan evaluates the database directly, and a sparse inverted file updates its posting lists on insertion. `append_items!` therefore makes an item searchable immediately, and `index!` performs no work.
+   - An exact project of `Float32` vectors writes its vectors to `dense_vectors.mmapdb`, as on `SearchGraph`. `open_project` rebuilds the exact index from that file. Nothing else of the index is saved (issue #3).
+   - Before 2026-11-22, an exact project saved its whole index in the engine field `:index` after each inserted item, so an append of $n$ items wrote $O(n^2)$ bytes. A writable `open_project` of such a project moves its vectors to `dense_vectors.mmapdb` and removes `:index`. A read-only open reads `:index`.
 4. **Quantized dense projects, on every dense backend**:
    - `append_items!` writes the `Float32` vectors to `dense_vectors.mmapdb`, as on `SearchGraph`. An item is not searchable until `index!`, also on `ExhaustiveSearch`.
    - `index!` fits the quantizer on its first call, encodes the staged vectors, and inserts the codes into the index. On `SearchGraph` it then builds the graph connections of the new codes. See [Quantized Dense Indexes](#quantized-dense-indexes).
@@ -430,7 +432,7 @@ A dense project created with `storage=Quantized(SQ(bits))` stores the codes of a
 - **Storage.** The codes are in `dense_codes.mmapdb`, a memory-mapped file with one row of bytes per vector. The ranges of a per-vector quantizer are in `dense_code_ranges.mmapdb`, two `Float32` per vector. `index!` reads, encodes and inserts the staged vectors in blocks of `QUANT_ENCODE_BLOCK` (16,384). With `keep_vectors=false`, the default, `index!` then removes `dense_vectors.mmapdb`, and the next `append_items!` starts a new one. The engine field `:raw_offset` holds the number of items before its first row.
 - **Reading back.** `fetch_items` returns the vector of an item whose `Float32` vector is still on disk: every item with `keep_vectors=true`, and an item not yet encoded otherwise. It returns `nothing` as the payload of any other item, because the codes do not give back the vector that was appended.
 - **Opening.** `open_project` reads the encoder, maps the codes file, and on `SearchGraph` restores the graph from the adjacency store. The staged vectors not yet encoded are the rows of `dense_vectors.mmapdb` after `:raw_offset` plus the number of codes. A file whose rows are all encoded, in a project that does not keep them, is what an interrupted `index!` leaves, and it is removed.
-- **Memory.** The codes stay in the mapped file, and only the code sums (8 bytes per vector) and, for a per-vector quantizer, the ranges (8 bytes per vector) are in memory. A `Float32` project holds every vector in memory: an exact project deserializes its index, and a graph project copies the vectors out of `dense_vectors.mmapdb` when it is opened. Measured on 2026-11-20 with 200,000 vectors of dimension 256 (test `quantized project: resident memory follows the size of the codes`): opening the project and running one search added 403 MB of resident memory for the `Float32` vectors of a graph project, and 50 MB for the 8-bit codes, whose file holds 51 MB.
+- **Memory.** The codes stay in the mapped file, and only the code sums (8 bytes per vector) and, for a per-vector quantizer, the ranges (8 bytes per vector) are in memory. A `Float32` project holds every vector in memory: a graph project and an exact project copy the vectors out of `dense_vectors.mmapdb` when they are opened. Measured on 2026-11-20 with 200,000 vectors of dimension 256 (test `quantized project: resident memory follows the size of the codes`): opening the project and running one search added 403 MB of resident memory for the `Float32` vectors of a graph project, and 50 MB for the 8-bit codes, whose file holds 51 MB.
 
 ### External Identifier Resolution
 
@@ -450,7 +452,7 @@ Bulk writes leave a write-ahead log, and the next open must replay it. Compactio
    - `:hints` are the starting points of a search in the graph. `index!` picks them and saves them.
    - Mutations (e.g., updating deleted IDs or storing calibration results) rewrite only their specific keys.
 2. **Dense Vector Storage (`dense_vectors.mmapdb`)**:
-   - Dense vectors are stored in a dedicated memory-mapped binary file managed by `MMapMatrixDatabase`.
+   - Dense vectors are stored in a dedicated memory-mapped binary file managed by `MMapMatrixDatabase`. Every dense project writes it: a graph project, an exact project of `Float32` vectors, and a quantized project until `index!` encodes the vectors.
    - Avoids key-value serialization. Appends are sequential, and random access reads the vector without copying it.
 3. **Quantized Code Storage (`dense_codes.mmapdb`, `dense_code_ranges.mmapdb`)**:
    - The codes of a quantized project, and the ranges of a per-vector quantizer. See [Quantized Dense Indexes](#quantized-dense-indexes).
