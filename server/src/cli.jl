@@ -16,16 +16,108 @@ Mode "single source of truth" principle -- applied here to the one piece of meta
 const CLI_CHOICES = Dict(
     "index-kind" => ["searchgraph", "exhaustive_search", "parallel_exhaustive_search", "invfile", "bm25_invfile"],
     "distance" => ["L2", "Cosine", "Angle", "NormalizedCosine"],
+    # A key `command:argument` applies to that argument of that command only. `follower-create`
+    # has a `--distance` whose values are distances between sets, not the distances of a dense
+    # dataset.
+    "follower-create:kind" => ["partition", "keyword"],
+    "follower-create:distance" => ["jaccard", "dice", "intersection", "cosine_set"],
+    "follower-create:policy" => ["on_index", "on_write", "manual", "periodic"],
+    "migrate-partitions:disjoint" => ["true", "false"],
 )
 
 _choice_tester(name::String) = x -> x in CLI_CHOICES[name]
+
+"""
+    field_choices(cmd_name, dest_name) -> Union{Nothing, Vector{String}}
+
+The values that the argument `dest_name` of the command `cmd_name` accepts, from
+[`CLI_CHOICES`](@ref): the key `cmd_name:dest_name` first, then `dest_name`. `nothing` when the
+argument takes any value.
+"""
+field_choices(cmd_name::AbstractString, dest_name::AbstractString) =
+    get(CLI_CHOICES, "$cmd_name:$dest_name", get(CLI_CHOICES, dest_name, nothing))
+
+"""
+    add_follower_create_args!(table) -> table
+
+Adds the arguments of `follower-create` to `table`, the settings of that command in
+`similarity-search` or in `similarity-search-ctl` (PLAN.md §5.12). Both commands send the same
+request: [`follower_request`](@ref) turns the parsed arguments into it.
+"""
+function add_follower_create_args!(t::ArgParseSettings)
+    @add_arg_table! t begin
+        "--dataset"
+            help = "The leader: the dataset whose items the follower reads"
+            required = true
+        "--name"
+            help = "Name of the follower: letters, digits, '_' and '-', at most 128 characters"
+            required = true
+        "--kind"
+            help = "partition (a search restricted to the items of one key) or keyword (an inverted file of the keys)"
+            required = true
+            range_tester = _choice_tester("follower-create:kind")
+        "--source"
+            help = "Where the keys of an item come from: keywords, refs, doc_id, or meta:<field>"
+            required = true
+        "--non-disjoint"
+            help = "partition only: an item can have several keys and belong to several partitions"
+            action = :store_true
+        "--graph-min"
+            help = "partition of a dense dataset only: the number of members from which a partition has its own graph"
+            arg_type = Int
+        "--distance"
+            help = "keyword only: the distance between the keys of an item and the query (jaccard, dice, intersection, cosine_set; default jaccard)"
+            range_tester = _choice_tester("follower-create:distance")
+        "--policy"
+            help = "When the follower processes new items: on_index, on_write, manual, or periodic (processed by a running server)"
+            default = "on_index"
+            range_tester = _choice_tester("follower-create:policy")
+        "--periodic-seconds"
+            help = "--policy periodic: process the new items every this many seconds"
+            arg_type = Float64
+        "--periodic-items"
+            help = "--policy periodic: process the new items when this many are waiting"
+            arg_type = Int
+    end
+    return t
+end
+
+# The arguments `--dataset` and `--name` of a command on one follower.
+function _add_follower_name_args!(t::ArgParseSettings)
+    @add_arg_table! t begin
+        "--dataset"
+            help = "The leader: the dataset that lists the follower"
+            required = true
+        "--name"
+            help = "Name of the follower"
+            required = true
+    end
+    return t
+end
+
+# The arguments of `migrate-partitions`, in both command lines.
+function _add_migrate_partitions_args!(t::ArgParseSettings)
+    @add_arg_table! t begin
+        "--dataset"
+            help = "A dataset created with --partition-by"
+            required = true
+        "--name"
+            help = "Name of the new partition follower"
+            required = true
+        "--disjoint"
+            help = "true when each item has one value of the partition field, false when an item can have several. It has no default: the command does not choose the kind of partition"
+            required = true
+            range_tester = _choice_tester("migrate-partitions:disjoint")
+    end
+    return t
+end
 
 """
     build_settings() -> ArgParse.ArgParseSettings
 
 The `similarity-search` command line: every data-plane subcommand (`build`, `search`,
 `searchbatch`, `allknn`, `fft`, `neardup`, `hsp`, `closestpair`, `describe`, `rebuild`,
-`dump`, `load`) with its options. Built fresh on each call rather than held in a constant,
+`dump`, `load`, the follower commands of PLAN.md §5.12 and `postings`) with its options. Built fresh on each call rather than held in a constant,
 because `interactive.jl` introspects the same object to generate its guided forms.
 """
 function build_settings()
@@ -73,6 +165,27 @@ function build_settings()
             action = :command
         "add-token"
             help = "Create an access token directly in the workdir, without a running server -- the way the first token is created when [auth] enabled is true"
+            action = :command
+        "follower-create"
+            help = "Create a follower of a dataset (a partition or a keyword index of its items) and process every indexed item"
+            action = :command
+        "follower-list"
+            help = "Show the status of every follower of a dataset"
+            action = :command
+        "follower-sync"
+            help = "Process the items of the leader that a follower has not processed yet"
+            action = :command
+        "follower-rebuild"
+            help = "Build a follower again from every indexed item of its leader (needed after the leader is rebuilt)"
+            action = :command
+        "follower-delete"
+            help = "Delete a follower and remove it from the list of its leader"
+            action = :command
+        "migrate-partitions"
+            help = "Move the partitions of a dataset created with --partition-by to a partition follower"
+            action = :command
+        "postings"
+            help = "Print the ids of the items that hold one key: a token of a text dataset, a dimension of a sparse dataset, or a key of a keyword follower"
             action = :command
     end
 
@@ -123,6 +236,8 @@ function build_settings()
             action = :store_true
         "--partition"
             help = "Text or dense dataset: search one partition (a value of the dataset's partition field) instead of the whole dataset"
+        "--follower"
+            help = "Search through a follower: name=value searches one partition of a partition follower; the name of a keyword follower searches it with the 'keys' (and 't') of each query line"
     end
 
     @add_arg_table! s["allknn"] begin
@@ -241,6 +356,9 @@ function build_settings()
         "--workdir"
             help = "Working directory for the database"
             default = "data"
+        "--rebuild-followers"
+            help = "Also build every follower of the dataset again. Without it, the followers stay attached and stale until follower-rebuild"
+            action = :store_true
     end
 
     @add_arg_table! s["dump"] begin
@@ -265,6 +383,40 @@ function build_settings()
         "--workdir"
             help = "Working directory for the database"
             default = "data"
+    end
+
+    add_follower_create_args!(s["follower-create"])
+    for cmd in ("follower-sync", "follower-rebuild", "follower-delete")
+        _add_follower_name_args!(s[cmd])
+    end
+    _add_migrate_partitions_args!(s["migrate-partitions"])
+    @add_arg_table! s["follower-list"] begin
+        "--dataset"
+            help = "The leader"
+            required = true
+    end
+    @add_arg_table! s["postings"] begin
+        "--dataset"
+            help = "Dataset ID/name"
+            required = true
+        "--follower"
+            help = "A keyword follower of the dataset: the key is then one of its keys"
+        "--key"
+            help = "A token (text dataset), a dimension (sparse dataset), or a key of the follower"
+            required = true
+        "--limit"
+            help = "Return only the first N ids, in ascending order. A whole list of a frequent key in a large dataset can hold most of its items"
+            arg_type = Int
+        "--output"
+            help = "Output file (single JSON object). Prints to stdout if omitted"
+    end
+    for cmd in ("follower-create", "follower-list", "follower-sync", "follower-rebuild", "follower-delete",
+                "migrate-partitions", "postings")
+        @add_arg_table! s[cmd] begin
+            "--workdir"
+                help = "Working directory for the database"
+                default = "data"
+        end
     end
 
     return s

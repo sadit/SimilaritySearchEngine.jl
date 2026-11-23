@@ -125,16 +125,21 @@ function parse_follower_request(data::AbstractDict)
 end
 
 """
+    follower_status_dict(s::SSE.FollowerStatus) -> Dict
     follower_status_dict(app, s::SSE.FollowerStatus) -> Dict
 
-The wire form of a follower status: the fields of `SSE.FollowerStatus` by name, `stats` as an
-object, and `error`, the last error of a follower that could not be opened or processed.
+The wire form of a follower status: the fields of `SSE.FollowerStatus` by name, and `stats` as an
+object. With `app`, it adds `error`, the last error of a follower that `serve` could not open or
+process. The command lines print the form without `app`.
 """
-function follower_status_dict(app, s::SSE.FollowerStatus)
-    d = Dict{String,Any}("name" => s.name, "leader" => s.leader, "kind" => s.kind, "source" => s.source,
+follower_status_dict(s::SSE.FollowerStatus) =
+    Dict{String,Any}("name" => s.name, "leader" => s.leader, "kind" => s.kind, "source" => s.source,
         "policy" => s.policy, "plugin" => s.plugin, "position" => s.position, "leader_indexed" => s.leader_indexed,
         "lag" => s.lag, "synchronized" => s.synchronized, "stale" => s.stale, "missing" => s.missing,
         "open" => s.open, "stats" => s.stats === nothing ? nothing : Dict(string(k) => v for (k, v) in pairs(s.stats)))
+
+function follower_status_dict(app, s::SSE.FollowerStatus)
+    d = follower_status_dict(s)
     err = lock(() -> get(app.followers.errors, s.name, nothing), app.followers.lock)
     err === nothing || (d["error"] = err)
     return d

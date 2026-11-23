@@ -158,7 +158,8 @@ Prompts for one argument, choosing among four presentations, in this priority or
    dataset-creating field). Skipped entirely when `allow_dataset_discovery=false` (see
    `run_interactive_ctl` -- a `--dataset` field there names something on a *remote*
    server, not a local workdir this process can `readdir`).
-2. A fixed-choice menu (`CLI_CHOICES`) when `f.dest_name` has one declared.
+2. A fixed-choice menu (`CLI_CHOICES`) when `f.dest_name` has one declared, for this command
+   or for every command (`field_choices`).
 3. A Yes/No menu for a boolean (`:store_true` action) field.
 4. Free text via `readline`, pre-filled *as a shown default*, not an editable inline field
    -- accepted on a bare Enter, exactly PLAN.md's "shows and accepts its default" wording;
@@ -179,12 +180,16 @@ function _prompt_field(cmd_name::String, f::ArgParse.ArgParseField, workdir::Abs
         end
     end
 
-    choices = get(CLI_CHOICES, f.dest_name, nothing)
+    choices = field_choices(cmd_name, f.dest_name)
     if choices !== nothing
+        # An optional argument without a default can be left out: `follower-create --distance`
+        # applies to a keyword follower only.
+        omittable = !f.required && f.default === nothing
+        options = omittable ? vcat(choices, ["(omit)"]) : choices
         default_idx = default_str === nothing ? 1 : something(findfirst(==(default_str), choices), 1)
-        idx = request("Select --$(f.dest_name)$(default_str === nothing ? "" : " [default: $default_str]"):", RadioMenu(choices); cursor=default_idx)
+        idx = request("Select --$(f.dest_name)$(default_str === nothing ? "" : " [default: $default_str]"):", RadioMenu(options); cursor=default_idx)
         idx == -1 && error("interactive mode cancelled")
-        return choices[idx]
+        return idx > length(choices) ? nothing : choices[idx]
     end
 
     if f.action === :store_true
@@ -340,7 +345,7 @@ function run_interactive_ctl(base_url::String)
     println()
     println("-- $(join(path, " ")) --")
     for f in fields
-        cmd_args[f.dest_name] = _prompt_field("", f, ""; allow_dataset_discovery=false)
+        cmd_args[f.dest_name] = _prompt_field(last(path), f, ""; allow_dataset_discovery=false)
     end
 
     println()

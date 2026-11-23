@@ -30,7 +30,8 @@ using JSON3
     # `add-token` is here because it is a data-plane command like the rest: it acts on a
     # working directory, not on a running server, which is what the guided menu offers.
     @test names == ["build", "searchbatch", "allknn", "fft", "neardup", "hsp", "closestpair",
-                    "describe", "rebuild", "dump", "load", "add-token"]
+                    "describe", "rebuild", "dump", "load", "add-token", "follower-create", "follower-list",
+                    "follower-sync", "follower-rebuild", "follower-delete", "migrate-partitions", "postings"]
     @test "interactive" ∉ names
     @test "serve" ∉ names
 
@@ -93,6 +94,10 @@ using JSON3
 
     @test SimilaritySearchServer.CLI_CHOICES["index-kind"] == ["searchgraph", "exhaustive_search", "parallel_exhaustive_search", "invfile", "bm25_invfile"]
     @test SimilaritySearchServer.CLI_CHOICES["distance"] == ["L2", "Cosine", "Angle", "NormalizedCosine"]
+    # A choice list of one command does not apply to the argument of the same name elsewhere.
+    @test SimilaritySearchServer.field_choices("follower-create", "distance") == ["jaccard", "dice", "intersection", "cosine_set"]
+    @test SimilaritySearchServer.field_choices("build", "distance") == ["L2", "Cosine", "Angle", "NormalizedCosine"]
+    @test SimilaritySearchServer.field_choices("follower-create", "name") === nothing
 
     good = SimilaritySearchServer.parse_commandline(["build", "--dataset", "x", "--input", "y", "--index-kind", "searchgraph"])
     @test good["build"]["index-kind"] == "searchgraph"
@@ -127,7 +132,9 @@ using JSON3
 
     ctl_settings = SimilaritySearchServer.build_ctl_settings()
     ctl_names = SimilaritySearchServer._command_menu_names(ctl_settings)
-    @test Set(ctl_names) == Set(["list", "stats", "log", "jobs", "add-token", "del-token", "prune-tokens", "log-tokens", "dump", "load"])
+    @test Set(ctl_names) == Set(["list", "stats", "log", "jobs", "add-token", "del-token", "prune-tokens", "log-tokens", "dump", "load",
+                                 "followers", "follower-create", "follower-sync", "follower-rebuild", "follower-delete",
+                                 "migrate-partitions"])
     @test "interactive" ∉ ctl_names
 
     jobs_sub = ctl_settings["jobs"]

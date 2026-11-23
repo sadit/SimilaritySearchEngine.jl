@@ -69,3 +69,32 @@ function with_test_server(f::Function)
     srv = ensure_test_server()
     f(srv.base_url, srv.workdir)
 end
+
+# Runs `main(args)` in this process and returns its exit code and what it printed.
+function _capture_main(main::Function, args::Vector{String})
+    path = tempname()
+    code = open(path, "w") do io
+        redirect_stdout(io) do
+            main(args)
+        end
+    end
+    out = read(path, String)
+    rm(path, force=true)
+    return code, out
+end
+
+"""
+Runs `SimilaritySearchServer.main_ctl(args)` in-process against the shared test server and
+captures whatever it printed, instead of spawning a real `similarity-search-ctl` subprocess
+-- `main_ctl` is a thin, already-unit-testable wrapper (parse -> dispatch_ctl_command ->
+one HTTP call), and every one of its `ctl_*` handlers only ever `println`s its result, so
+capturing stdout is both faster and gives the assertions below direct string access.
+"""
+_run_ctl(args::Vector{String}) = _capture_main(SimilaritySearchServer.main_ctl, args)
+
+"""
+Runs `SimilaritySearchServer.main(args)`, the `similarity-search` command line, in this process.
+A subprocess starts Julia again for each command, which takes longer than the command for the
+small datasets of the tests. `cli/01` to `cli/06` run the real binary.
+"""
+_run_cli(args::Vector{String}) = _capture_main(SimilaritySearchServer.main, args)

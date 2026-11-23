@@ -2,9 +2,9 @@ using Test
 using HTTP
 using JSON3
 
-# Followers over HTTP (PLAN.md §5.12, issue #5, phase 5a). The engine's own tests check what a
-# follower computes; this file checks that the server creates, opens, processes, searches and
-# reports followers, and that it maps their errors.
+# Followers over HTTP (PLAN.md §5.12, issue #5, phases 5a and 5b). The engine's own tests check
+# what a follower computes; this file checks that the server creates, opens, processes, searches
+# and reports followers, that it maps their errors, and that similarity-search-ctl calls it.
 @testset "18. Followers" begin
     with_test_server() do base_url, workdir
         data_path = joinpath(@__DIR__, "..", "..", "..", "test", "data", "frankenstein.jsonl")
@@ -127,5 +127,37 @@ using JSON3
         @test failed(() -> HTTP.get("$base_url/datasets/fl_dense/postings?key=1")).status == 400
         @test HTTP.delete("$base_url/datasets/fl_dense/followers/group").status == 200
         @test HTTP.delete("$base_url/datasets/fl_dense").status == 200
+
+        # The follower commands of similarity-search-ctl (phase 5b) call the routes above.
+        port = string(HTTP.URI(base_url).port)
+        ctl(args...) = _run_ctl(String["--port", port, (string(a) for a in args)...])
+        @test HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "fl_ctl", "index_type" => "bm25_invfile"))).status == 201
+        @test HTTP.post("$base_url/datasets/fl_ctl/append", [], JSON3.write(Dict("items" => docs[1:60]))).status == 200
+        code, out = ctl("follower-create", "--dataset", "fl_ctl", "--name", "kw", "--kind", "keyword", "--source", "keywords",
+                        "--policy", "manual")
+        @test code == 0 && JSON3.read(out).position == 60
+        code, out = ctl("follower-create", "--dataset", "fl_ctl", "--name", "x", "--kind", "partition", "--source", "keywords",
+                        "--distance", "dice")
+        @test code == 2 && occursin("--distance applies to a keyword follower", out)
+        code, out = ctl("follower-create", "--dataset", "fl_ctl", "--name", "kw", "--kind", "keyword", "--source", "keywords")
+        @test code == 1 && occursin("400", out)
+        @test HTTP.post("$base_url/datasets/fl_ctl/append", [], JSON3.write(Dict("items" => docs[61:80]))).status == 200
+        code, out = ctl("followers", "--dataset", "fl_ctl")
+        @test code == 0 && only(JSON3.read(out).followers).lag == 20
+        code, out = ctl("follower-sync", "--dataset", "fl_ctl", "--name", "kw")
+        @test code == 0 && JSON3.read(out).processed == 20
+        code, out = ctl("follower-rebuild", "--dataset", "fl_ctl", "--name", "kw")
+        @test code == 0 && JSON3.read(out).position == 80
+        @test first(ctl("follower-delete", "--dataset", "fl_ctl", "--name", "kw")) == 0
+        code, out = ctl("follower-delete", "--dataset", "fl_ctl", "--name", "kw")
+        @test code == 1 && occursin("404", out)
+        @test HTTP.delete("$base_url/datasets/fl_ctl").status == 200
+        @test HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "fl_ctl_dense", "index_type" => "exhaustive_search",
+                                                                   "partition_by" => "group"))).status == 201
+        @test HTTP.post("$base_url/datasets/fl_ctl_dense/append", [], JSON3.write(Dict("items" => items))).status == 200
+        code, out = ctl("migrate-partitions", "--dataset", "fl_ctl_dense", "--name", "group", "--disjoint", "false")
+        @test code == 0 && JSON3.read(out).status == "migrated"
+        @test first(ctl("follower-delete", "--dataset", "fl_ctl_dense", "--name", "group")) == 0
+        @test HTTP.delete("$base_url/datasets/fl_ctl_dense").status == 200
     end
 end

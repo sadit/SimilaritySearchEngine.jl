@@ -383,8 +383,33 @@ of it exist.
       `MetaValue("repo")`, `OnIndex()`. The request uses the wire names of §5.12.
     - The calibration route of a partition takes `minrecall`, `numqueries` and `ksearch`.
     - Deleting a dataset also removes its directory of followers, which is empty by then.
-    - Not done yet: 5b (the command lines, `rebuild`, `dump` and `load` with followers), 5c (the
-      clients), 5d (the manual).
+
+    Phase 5b, the command lines, done on 2026-11-23 (`server/src/cli_handlers.jl`,
+    `server/src/ctl_handlers.jl`, `server/test/cli/test_07_followers.jl`, and the `-ctl` part of
+    `server/test/api/test_18_followers.jl`). What it implements, and what differs from §5.12:
+    - `similarity-search` has `follower-create`, `follower-list`, `follower-sync`,
+      `follower-rebuild`, `follower-delete`, `migrate-partitions` and `postings`.
+      `similarity-search-ctl` has `followers`, `follower-create`, `follower-sync`,
+      `follower-rebuild`, `follower-delete` and `migrate-partitions`. The two `follower-create`
+      commands share their arguments (`add_follower_create_args!`) and build the same request
+      (`follower_request`). `--policy periodic` takes `--periodic-seconds` and
+      `--periodic-items`.
+    - A command that writes a dataset opens it for writing. When another process holds it, such
+      as a running server, it exits with code 5 and says to use `similarity-search-ctl`.
+      `follower-list`, `postings`, `describe` and `searchbatch` open the dataset read-only.
+    - `searchbatch --follower name=value` searches one partition. `searchbatch --follower name`
+      of a keyword follower also exists, which §5.12 did not list: each query line gives `keys`
+      and, optionally, `t`.
+    - `rebuild` attaches the followers to the new project and prints the state of each one, with
+      the command that makes it ready. `--rebuild-followers` rebuilds them in the same command.
+    - `dump` copies the followers to `followers/` of the bundle before it copies the project, so
+      that a follower never holds items that the copy of the project does not have. The manifest
+      lists them. `load` copies them to `<id>.followers/` and attaches each one.
+    - An argument with a fixed list of values can have a list for one command only
+      (`CLI_CHOICES["follower-create:distance"]`, `field_choices`), because `--distance` of
+      `follower-create` takes distances between sets. The interactive mode offers `(omit)` for an
+      optional argument without a default.
+    - Not done yet: 5c (the clients), 5d (the manual).
 
 The stemmer registry of §5.3 and §9's phase 5 is not on this list: it was discarded. Stemming
 was the way this specification proposed to make a query match a word it does not equal. That

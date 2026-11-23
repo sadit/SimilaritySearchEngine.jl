@@ -288,6 +288,76 @@ function ctl_load(base_url::String, cmd_args::Dict)
     return status == "completed" ? 0 : 1
 end
 
+# --- Followers (PLAN.md §5.12, issue #5, phase 5b) ----------------------------------------
+
+_ctl_follower_url(base_url::String, cmd_args::AbstractDict) =
+    "$base_url/datasets/$(cmd_args["dataset"])/followers/$(HTTP.URIs.escapeuri(cmd_args["name"]))"
+
+function _ctl_print(resp)
+    resp === nothing && return 1
+    println(String(resp.body))
+    return 0
+end
+
+"""
+    ctl_followers(base_url::String, cmd_args::Dict) -> Int
+
+`similarity-search-ctl followers --dataset <id>` -> `GET /api/v1/datasets/{id}/group`: the
+dataset and the status of each of its followers.
+"""
+ctl_followers(base_url::String, cmd_args::AbstractDict) =
+    _ctl_print(_ctl_request(:get, "$base_url/datasets/$(cmd_args["dataset"])/group"))
+
+"""
+    ctl_follower_create(base_url::String, cmd_args::Dict) -> Int
+
+`similarity-search-ctl follower-create --dataset <id> --name <n> --kind <k> --source <s> ...` ->
+`POST /api/v1/datasets/{id}/followers`, with the body that [`follower_request`](@ref) builds
+from the same arguments as `similarity-search follower-create`.
+"""
+function ctl_follower_create(base_url::String, cmd_args::AbstractDict)
+    body = follower_request(cmd_args)
+    body isa String && (println("Error: ", body); return 2)
+    return _ctl_print(_ctl_request(:post, "$base_url/datasets/$(cmd_args["dataset"])/followers"; body))
+end
+
+"""
+    ctl_follower_sync(base_url::String, cmd_args::Dict) -> Int
+
+`similarity-search-ctl follower-sync --dataset <id> --name <n>` -> `POST
+/api/v1/datasets/{id}/followers/{n}/sync`.
+"""
+ctl_follower_sync(base_url::String, cmd_args::AbstractDict) =
+    _ctl_print(_ctl_request(:post, _ctl_follower_url(base_url, cmd_args) * "/sync"))
+
+"""
+    ctl_follower_rebuild(base_url::String, cmd_args::Dict) -> Int
+
+`similarity-search-ctl follower-rebuild --dataset <id> --name <n>` -> `POST
+/api/v1/datasets/{id}/followers/{n}/rebuild`.
+"""
+ctl_follower_rebuild(base_url::String, cmd_args::AbstractDict) =
+    _ctl_print(_ctl_request(:post, _ctl_follower_url(base_url, cmd_args) * "/rebuild"))
+
+"""
+    ctl_follower_delete(base_url::String, cmd_args::Dict) -> Int
+
+`similarity-search-ctl follower-delete --dataset <id> --name <n>` -> `DELETE
+/api/v1/datasets/{id}/followers/{n}`.
+"""
+ctl_follower_delete(base_url::String, cmd_args::AbstractDict) =
+    _ctl_print(_ctl_request(:delete, _ctl_follower_url(base_url, cmd_args)))
+
+"""
+    ctl_migrate_partitions(base_url::String, cmd_args::Dict) -> Int
+
+`similarity-search-ctl migrate-partitions --dataset <id> --name <n> --disjoint true|false` ->
+`POST /api/v1/datasets/{id}/migrate-partitions`.
+"""
+ctl_migrate_partitions(base_url::String, cmd_args::AbstractDict) =
+    _ctl_print(_ctl_request(:post, "$base_url/datasets/$(cmd_args["dataset"])/migrate-partitions";
+        body=Dict("name" => cmd_args["name"], "disjoint" => cmd_args["disjoint"] == "true")))
+
 """
     dispatch_ctl_command(parsed::AbstractDict, base_url::String) -> Int
 
@@ -309,6 +379,12 @@ function dispatch_ctl_command(parsed::AbstractDict, base_url::String)
     cmd == "prune-tokens" && return ctl_prune_tokens(base_url)
     cmd == "dump" && return ctl_dump(base_url, parsed["dump"])
     cmd == "load" && return ctl_load(base_url, parsed["load"])
+    cmd == "followers" && return ctl_followers(base_url, parsed["followers"])
+    cmd == "follower-create" && return ctl_follower_create(base_url, parsed["follower-create"])
+    cmd == "follower-sync" && return ctl_follower_sync(base_url, parsed["follower-sync"])
+    cmd == "follower-rebuild" && return ctl_follower_rebuild(base_url, parsed["follower-rebuild"])
+    cmd == "follower-delete" && return ctl_follower_delete(base_url, parsed["follower-delete"])
+    cmd == "migrate-partitions" && return ctl_migrate_partitions(base_url, parsed["migrate-partitions"])
 
     if cmd == "jobs"
         jparsed = parsed["jobs"]

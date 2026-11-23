@@ -51,13 +51,14 @@ const TEST_FILES = [
     TestFile("api/15", "api/test_15_meta_schema.jl"; tags=["api", "schema", "filter"], light=false),
     TestFile("api/16", "api/test_16_partitions.jl"; tags=["api", "partitions", "text"], light=false),
     TestFile("api/17", "api/test_17_julia_client.jl"; tags=["api", "client", "jobs", "cursors"], light=false),
-    TestFile("api/18", "api/test_18_followers.jl"; tags=["api", "followers", "partitions", "text", "dense"], light=false),
+    TestFile("api/18", "api/test_18_followers.jl"; tags=["api", "followers", "partitions", "text", "dense", "ctl"], light=false),
     TestFile("cli/01", "cli/test_01_build.jl"; tags=["cli", "build"], light=false),
     TestFile("cli/02", "cli/test_02_search.jl"; tags=["cli", "search"], light=false),
     TestFile("cli/03", "cli/test_03_describe_rebuild_closestpair.jl"; tags=["cli", "rebuild"], light=false),
     TestFile("cli/04", "cli/test_04_dump_load.jl"; tags=["cli", "dump"], light=false),
     TestFile("cli/05", "cli/test_05_interactive.jl"; tags=["cli", "interactive"], light=false),
     TestFile("cli/06", "cli/test_06_partitions.jl"; tags=["cli", "partitions"], light=false),
+    TestFile("cli/07", "cli/test_07_followers.jl"; tags=["cli", "followers", "partitions", "dump"], light=false),
 ]
 
 const CHOSEN = selected_files(SELECTION, TEST_FILES)

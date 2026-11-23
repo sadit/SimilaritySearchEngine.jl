@@ -291,6 +291,24 @@ function execute_searchbatch(cmd_args::Dict)
     handle === nothing && return 1
     kind = SSE.payload_kind(handle.engine)
     partition = get(cmd_args, "partition", nothing)
+    # `--follower name=value` searches one partition of a partition follower, and `--follower
+    # name` a keyword follower with the keys of each query (PLAN.md §5.12).
+    fname = get(cmd_args, "follower", nothing)
+    target = handle
+    if fname !== nothing
+        if partition !== nothing
+            println("Error: --partition and --follower both restrict the search; give one of them")
+            SSE.close_project!(handle; compact=false)
+            return Cint(2)
+        end
+        target = @cli_engine_call SSE.open_follower(handle, fname)
+        if target isa SSE.Follower && SSE.follower_status(target).kind != "KeywordFollower"
+            println("Error: '$fname' is a $(SSE.follower_status(target).kind); search one of its partitions with ",
+                    "--follower $fname=<value>")
+            target = Cint(2)
+        end
+        target isa Cint && (SSE.close_project!(handle; compact=false); return target)
+    end
 
     # The exit code of the first query the engine refused, or 0. A `return` inside the `do`
     # block below would leave only the block, not this function: the command then exited 0
@@ -300,12 +318,18 @@ function execute_searchbatch(cmd_args::Dict)
             isempty(strip(line)) && continue
             item = JSON3.read(codeunits(line), Dict{String, Any})
 
-            hits = if kind === :text
+            hits = if target isa SSE.Follower
+                haskey(item, "keys") || continue
+                @cli_engine_call SSE.search(target, String.(item["keys"]), k; t=Int(get(item, "t", 1)))
+            elseif kind === :text
                 haskey(item, "text") || continue
-                @cli_engine_call SSE.ftsearch(handle, item["text"], k; partition)
+                @cli_engine_call(target isa SSE.FollowerView ? SSE.ftsearch(target, item["text"], k) :
+                                 SSE.ftsearch(handle, item["text"], k; partition))
             else
                 haskey(item, "vector") || continue
-                @cli_engine_call SSE.search(handle, convert(Vector{Float32}, item["vector"]), k; partition)
+                vector = convert(Vector{Float32}, item["vector"])
+                @cli_engine_call(target isa SSE.FollowerView ? SSE.search(target, vector, k) :
+                                 SSE.search(handle, vector, k; partition))
             end
             hits isa Cint && return hits
 
@@ -424,6 +448,8 @@ function execute_describe(cmd_args::Dict)
         desc["beamsearch_baseline"] = bs === nothing ? nothing :
             Dict("bsize" => Int(bs.bsize), "delta" => Float64(bs.Δ), "maxvisits" => Int(bs.maxvisits))
     end
+    # The followers are read from their saved fields: none is open, so `stats` is null.
+    desc["followers"] = [Server.follower_status_dict(s) for s in SSE.followers(handle)]
 
     SSE.close_project!(handle; compact=false)
 
@@ -437,6 +463,27 @@ function execute_describe(cmd_args::Dict)
         println("Description saved to $out_file")
     end
     return 0
+end
+
+# The name of a follower without its leader: "repos/by_repo" -> "by_repo".
+_follower_short_name(canonical::AbstractString) = String(last(split(canonical, '/'; limit=2)))
+
+"""
+    _report_followers(project_id, statuses)
+
+Prints one line per follower after `rebuild` or `load`: whether it is ready, and the command
+that makes it ready when it is not.
+"""
+function _report_followers(project_id::String, statuses::Vector{SSE.FollowerStatus})
+    for st in statuses
+        name = _follower_short_name(st.name)
+        args = "--dataset $project_id --name $name"
+        state = st.missing ? "its directory does not exist; remove the name with similarity-search follower-delete $args" :
+                st.stale ? "stale; build it again with similarity-search follower-rebuild $args" :
+                st.synchronized ? "synchronized" :
+                "$(st.lag) item(s) behind its leader; process them with similarity-search follower-sync $args"
+        println("  follower $(st.name): $state")
+    end
 end
 
 """
@@ -524,6 +571,14 @@ function execute_rebuild(cmd_args::Dict)
     partitions = partition_by === nothing ? nothing :
                  SSE.PartitionBy(partition_by; graph_min=SSE.partition_graph_min(handle))
 
+    # The followers stay in `<dir>.followers`, beside the project, and are attached to the new
+    # project (PLAN.md §5.12). A follower whose directory is missing is not kept.
+    old_followers = SSE.followers(handle)
+    follower_names = [_follower_short_name(st.name) for st in old_followers if !st.missing]
+    for st in old_followers
+        st.missing && println("The follower '$(st.name)' has no directory and is not kept.")
+    end
+
     all_ids, live = _live_items(handle.project, engine)
     live_valid = [(id, item) for (id, item) in live if haskey(item, field)]
     dropped_missing_field = length(live) - length(live_valid)
@@ -551,6 +606,18 @@ function execute_rebuild(cmd_args::Dict)
     fresh = SSE.create_project(root, name, spec; partitions)
     reindexed = isempty(items) ? 0 : SSE.append_items!(fresh, items)
     reindexed > 0 && SSE.index!(fresh)
+    # The new project has a new generation: an attached follower is stale until it is rebuilt,
+    # here with --rebuild-followers or later with `follower-rebuild`.
+    code = Cint(0)
+    for fname in follower_names
+        r = @cli_engine_call SSE.attach_follower!(fresh, fname)
+        r isa Cint && (code = r; continue)
+        if get(cmd_args, "rebuild-followers", false)
+            r = @cli_engine_call SSE.rebuild_follower!(fresh, fname)
+            r isa Cint && (code = r)
+        end
+    end
+    statuses = SSE.followers(fresh)
     SSE.close_project!(fresh)
     # `descriptor.json` is the HTTP server's own sidecar (index kind, distance, join group,
     # meta schema), written next to the project rather than inside it, and `create_project`
@@ -562,7 +629,8 @@ function execute_rebuild(cmd_args::Dict)
     rm(stale; recursive=true)
 
     println("Rebuild completed for '$project_id': $reindexed item(s) reindexed into $dir")
-    return 0
+    _report_followers(project_id, statuses)
+    return code
 end
 
 """
@@ -625,6 +693,7 @@ function execute_dump(cmd_args::Dict)
 
     descriptor_file = joinpath(dir, "descriptor.json")
     descriptor = isfile(descriptor_file) ? JSON3.read(read(descriptor_file), Dict{String, Any}) : nothing
+    follower_names = [_follower_short_name(st.name) for st in SSE.followers(handle) if !st.missing]
 
     is_text = SSE.payload_kind(engine) === :text
     if descriptor !== nothing
@@ -642,6 +711,15 @@ function execute_dump(cmd_args::Dict)
     mkpath(output_dir)
     Persistence.write_dump_records(joinpath(output_dir, "dataset.avro"), records)
 
+    # The followers are copied before the project (PLAN.md §5.12). A server can append to the
+    # dataset while this runs. A follower copied first has processed at most the items of the
+    # copied project, and processes the rest after `load`. A follower copied after the project
+    # could hold items that the copy of the project does not have.
+    isempty(follower_names) || mkpath(joinpath(output_dir, "followers"))
+    for fname in follower_names
+        cp(SSE.follower_dir(dirname(dir), project_id, fname), joinpath(output_dir, "followers", fname))
+    end
+
     # The project directory, copied whole: it is the index (posting lists, document vectors,
     # the adjacency of the graph, the dense vector file). A bundle therefore restores only into
     # an engine that reads this on-disk layout, and `dataset.avro` beside it remains the
@@ -656,11 +734,12 @@ function execute_dump(cmd_args::Dict)
         "distance" => distance,
         "edit_correction" => descriptor === nothing ? false : get(descriptor, "edit_correction", false),
         "record_count" => length(records),
+        "followers" => follower_names,
         "dumped_at" => string(now(UTC)),
     )
     write(joinpath(output_dir, "manifest.json"), JSON3.write(manifest))
 
-    println("Dump completed: $(length(records)) record(s) from '$project_id'. Saved to $output_dir")
+    println("Dump completed: $(length(records)) record(s) and $(length(follower_names)) follower(s) from '$project_id'. Saved to $output_dir")
     return 0
 end
 
@@ -747,11 +826,18 @@ function execute_load(cmd_args::Dict)
         println("Error: target dataset '$target_id' already exists at $target_path")
         return 1
     end
+    followers_src = joinpath(bundle_dir, "followers")
+    followers_dst = target_path * ".followers"
+    if isdir(followers_src) && ispath(followers_dst)
+        println("Error: $followers_dst exists. It holds the followers of an earlier dataset '$target_id'; remove it first")
+        return 1
+    end
     # The project comes back whole, then the Avro records are replayed over it: the copy
     # carries the index, and the replay is what makes a hand-edited `dataset.avro` (the
     # documented way to fix metadata in a bundle) take effect.
     mkpath(dirname(target_path))   # `cp` creates the project directory itself, not its parent
     cp(project_src, target_path)
+    isdir(followers_src) && cp(followers_src, followers_dst)
 
     # Opened through the engine, not `Project.open_project`: a restored project carries the
     # engine's own column families too, and RocksDB refuses an open that does not list every
@@ -764,6 +850,17 @@ function execute_load(cmd_args::Dict)
         Project.put_metadata!(handle.project, meta_record, meta)
         restored += 1
     end
+    # The project lists its followers already. Attaching each one writes the new id of its
+    # leader in it. The project and its followers come from the same bundle, so they have the
+    # same generation and the followers are not stale (PLAN.md §5.12).
+    code = Cint(0)
+    if isdir(followers_dst)
+        for fname in sort(readdir(followers_dst))
+            r = @cli_engine_call SSE.attach_follower!(handle, fname)
+            r isa Cint && (code = r)
+        end
+    end
+    statuses = SSE.followers(handle)
     SSE.close_project!(handle)
 
     descriptor = Dict(
@@ -776,7 +873,242 @@ function execute_load(cmd_args::Dict)
     write(joinpath(target_path, "descriptor.json"), JSON3.write(descriptor))
 
     println("Load completed: $restored record(s) restored into '$target_id' from bundle '$bundle_dir'. Saved to $target_path")
-    return 0
+    _report_followers(target_id, statuses)
+    return code
+end
+
+# --- Followers (PLAN.md §5.12, issue #5, phase 5b) ----------------------------------------
+
+"""
+    follower_request(cmd_args) -> Union{Dict{String,Any}, String}
+
+The body of `POST /api/v1/datasets/{id}/followers` that the arguments of `follower-create`
+describe (PLAN.md §5.12), or the message of an invalid combination. `similarity-search` reads it
+with `Server.parse_follower_request`, and `similarity-search-ctl` sends it to the server.
+"""
+function follower_request(cmd_args::AbstractDict)
+    d = Dict{String,Any}("name" => cmd_args["name"], "kind" => cmd_args["kind"], "source" => cmd_args["source"])
+    kind = cmd_args["kind"]
+    if get(cmd_args, "non-disjoint", false)
+        kind == "partition" || return "--non-disjoint applies to a partition follower"
+        d["disjoint"] = false
+    end
+    graph_min = get(cmd_args, "graph-min", nothing)
+    if graph_min !== nothing
+        kind == "partition" || return "--graph-min applies to a partition follower"
+        d["graph_min"] = graph_min
+    end
+    distance = get(cmd_args, "distance", nothing)
+    if distance !== nothing
+        kind == "keyword" || return "--distance applies to a keyword follower"
+        d["distance"] = distance
+    end
+    policy = get(cmd_args, "policy", "on_index")
+    seconds, items = get(cmd_args, "periodic-seconds", nothing), get(cmd_args, "periodic-items", nothing)
+    if policy == "periodic"
+        seconds === nothing && items === nothing &&
+            return "--policy periodic needs --periodic-seconds, --periodic-items, or both"
+        p = Dict{String,Any}()
+        seconds === nothing || (p["seconds"] = seconds)
+        items === nothing || (p["items"] = items)
+        d["policy"] = Dict{String,Any}("periodic" => p)
+    else
+        seconds === nothing && items === nothing ||
+            return "--periodic-seconds and --periodic-items apply to --policy periodic"
+        d["policy"] = policy
+    end
+    return d
+end
+
+"""
+    _open_writable(project_id, workdir) -> Union{SSE.EmbeddedEngine, Cint}
+
+Opens a dataset for writing, for a command that changes it or its followers. Returns the exit
+code of the failure: `1` when the dataset does not exist, and `5` when another process holds
+it open, such as a server that has it loaded. RocksDB allows one writer per database.
+"""
+function _open_writable(project_id::String, workdir::String)
+    handle = try
+        _open_handle(project_id, workdir)
+    catch e
+        e isa SSE.EngineError && rethrow()
+        occursin("lock", lowercase(sprint(showerror, e))) || rethrow()
+        println("Error: the dataset '$project_id' is open in another process, such as a running server. ",
+                "With a server, run the same command with similarity-search-ctl. Otherwise, stop the other process first.")
+        return Cint(5)
+    end
+    return handle === nothing ? Cint(1) : handle
+end
+
+"""
+    _with_dataset(f, cmd_args; read_only) -> Cint
+
+Opens the dataset `cmd_args["dataset"]`, calls `f(handle)`, and closes it. An engine error
+inside `f` prints its message and exits with its code (`cli_exit_code`). `f` returns `nothing`,
+or the exit code of a failure that it printed itself.
+"""
+function _with_dataset(f::Function, cmd_args::AbstractDict; read_only::Bool)
+    project_id, workdir = cmd_args["dataset"], cmd_args["workdir"]
+    handle = @cli_engine_call(read_only ? _open_handle(project_id, workdir; read_only=true) :
+                              _open_writable(project_id, workdir))
+    handle === nothing && return Cint(1)
+    handle isa Cint && return handle
+    try
+        r = @cli_engine_call f(handle)
+        r isa Cint && return r
+        return Cint(0)
+    finally
+        SSE.close_project!(handle; compact=false)
+    end
+end
+
+_print_follower_status(s::SSE.FollowerStatus) = println(JSON3.write(Server.follower_status_dict(s)))
+
+# A command on one follower takes its name, not `name=value`.
+function _plain_follower_name(cmd_args::AbstractDict)
+    name = cmd_args["name"]
+    occursin('=', name) || return name
+    println("Error: --name is the name of the follower, without '=value'; got $(repr(name))")
+    return Cint(2)
+end
+
+"""
+    execute_follower_create(cmd_args) -> Cint
+
+`follower-create` (PLAN.md §5.12): creates a follower of the dataset, processes every indexed
+item, and prints its status. A follower with `--policy periodic` is processed by a running
+server; this command line processes it with `follower-sync`.
+"""
+function execute_follower_create(cmd_args::AbstractDict)
+    req = follower_request(cmd_args)
+    req isa String && (println("Error: ", req); return Cint(2))
+    parsed = Server.parse_follower_request(req)
+    parsed isa String && (println("Error: ", parsed); return Cint(2))
+    _with_dataset(cmd_args; read_only=false) do handle
+        f = SSE.create_follower(handle, parsed.name, parsed.spec; policy=parsed.policy)
+        st = SSE.follower_status(f)
+        println("Created the follower '$(st.name)': $(st.position) item(s) processed.")
+        _print_follower_status(st)
+        nothing
+    end
+end
+
+"""
+    execute_follower_list(cmd_args) -> Cint
+
+`follower-list` (PLAN.md §5.12): prints the status of every follower of the dataset, as one JSON
+object. It opens the dataset read-only, so it runs while a server holds the dataset.
+"""
+function execute_follower_list(cmd_args::AbstractDict)
+    _with_dataset(cmd_args; read_only=true) do handle
+        println(JSON3.write(Dict("id" => cmd_args["dataset"],
+                                 "followers" => [Server.follower_status_dict(s) for s in SSE.followers(handle)])))
+        nothing
+    end
+end
+
+"""
+    execute_follower_sync(cmd_args) -> Cint
+
+`follower-sync` (PLAN.md §5.12): processes the indexed items of the leader that the follower has
+not processed yet, and prints its status.
+"""
+function execute_follower_sync(cmd_args::AbstractDict)
+    name = _plain_follower_name(cmd_args)
+    name isa Cint && return name
+    _with_dataset(cmd_args; read_only=false) do handle
+        f = SSE.open_follower(handle, name)
+        n = SSE.sync!(f)
+        st = SSE.follower_status(f)
+        println("Synchronized the follower '$(st.name)': $n item(s) processed; its position is $(st.position).")
+        _print_follower_status(st)
+        nothing
+    end
+end
+
+"""
+    execute_follower_rebuild(cmd_args) -> Cint
+
+`follower-rebuild` (PLAN.md §5.12): builds the follower again from every indexed item of its
+leader, with the spec and the policy it was created with. A follower is stale after its leader is
+rebuilt, and this command is what makes it usable again.
+"""
+function execute_follower_rebuild(cmd_args::AbstractDict)
+    name = _plain_follower_name(cmd_args)
+    name isa Cint && return name
+    _with_dataset(cmd_args; read_only=false) do handle
+        st = SSE.follower_status(SSE.rebuild_follower!(handle, name))
+        println("Rebuilt the follower '$(st.name)': $(st.position) item(s) processed.")
+        _print_follower_status(st)
+        nothing
+    end
+end
+
+"""
+    execute_follower_delete(cmd_args) -> Cint
+
+`follower-delete` (PLAN.md §5.12): deletes the directory of the follower and its name in the list
+of the leader.
+"""
+function execute_follower_delete(cmd_args::AbstractDict)
+    name = _plain_follower_name(cmd_args)
+    name isa Cint && return name
+    _with_dataset(cmd_args; read_only=false) do handle
+        SSE.delete_follower!(handle, name)
+        println("Deleted the follower '$(cmd_args["dataset"])/$name'.")
+        nothing
+    end
+end
+
+"""
+    execute_migrate_partitions(cmd_args) -> Cint
+
+`migrate-partitions` (PLAN.md §5.11): moves the partitions of a dataset created with
+`--partition-by` to a partition follower named `--name`. `--disjoint` is required: the command
+does not choose between disjoint and non-disjoint partitions.
+"""
+function execute_migrate_partitions(cmd_args::AbstractDict)
+    _with_dataset(cmd_args; read_only=false) do handle
+        f = SSE.migrate_partitions!(handle, cmd_args["name"]; disjoint=cmd_args["disjoint"] == "true")
+        st = SSE.follower_status(f)
+        println("Migrated the partitions of '$(cmd_args["dataset"])' to the follower '$(st.name)'. ",
+                "Search one partition with searchbatch --follower $(cmd_args["name"])=<value>.")
+        _print_follower_status(st)
+        nothing
+    end
+end
+
+"""
+    execute_postings(cmd_args) -> Cint
+
+`postings` (PLAN.md §5.11): prints the ids of the items that hold one key, in ascending order,
+as one JSON object. The key is a token of a text dataset, a dimension of a sparse dataset, or,
+with `--follower`, a key of a keyword follower. `--limit N` returns the first `N` ids. It opens
+the dataset read-only, so it runs while a server holds the dataset.
+"""
+function execute_postings(cmd_args::AbstractDict)
+    out_file = get(cmd_args, "output", nothing)
+    _with_dataset(cmd_args; read_only=true) do handle
+        key, limit = cmd_args["key"], get(cmd_args, "limit", nothing)
+        fname = get(cmd_args, "follower", nothing)
+        ids = if fname === nothing
+            k = SSE.payload_kind(handle.engine) === :sparse ? tryparse(Int, key) : key
+            k === nothing && (println("Error: the key of a sparse dataset is a dimension, an integer; got $(repr(key))");
+                              return Cint(2))
+            SSE.posting_list(handle, k; limit)
+        else
+            SSE.posting_list(SSE.open_follower(handle, fname), key; limit)
+        end
+        body = Dict{String,Any}("id" => cmd_args["dataset"], "key" => key, "ids" => ids)
+        fname === nothing || (body["follower"] = fname)
+        if out_file === nothing
+            println(JSON3.write(body))
+        else
+            open(io -> println(io, JSON3.write(body)), out_file, "w")
+            println("$(length(ids)) id(s) saved to $out_file")
+        end
+        nothing
+    end
 end
 
 """
@@ -801,5 +1133,12 @@ function dispatch_command(cmd_name::String, cmd_args::AbstractDict)
     cmd_name == "dump" && return execute_dump(cmd_args)
     cmd_name == "load" && return execute_load(cmd_args)
     cmd_name == "add-token" && return execute_add_token(cmd_args)
+    cmd_name == "follower-create" && return execute_follower_create(cmd_args)
+    cmd_name == "follower-list" && return execute_follower_list(cmd_args)
+    cmd_name == "follower-sync" && return execute_follower_sync(cmd_args)
+    cmd_name == "follower-rebuild" && return execute_follower_rebuild(cmd_args)
+    cmd_name == "follower-delete" && return execute_follower_delete(cmd_args)
+    cmd_name == "migrate-partitions" && return execute_migrate_partitions(cmd_args)
+    cmd_name == "postings" && return execute_postings(cmd_args)
     error("dispatch_command: unknown command '$cmd_name'")
 end

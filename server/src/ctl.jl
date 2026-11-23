@@ -29,8 +29,8 @@
     build_ctl_settings() -> ArgParse.ArgParseSettings
 
 The `similarity-search-ctl` command line: the control-plane subcommands that talk to a
-running server over HTTP (`list`, `stats`, `log`, the token commands, and the `jobs`
-subtree). The counterpart of [`build_settings`](@ref), which is the data plane against a
+running server over HTTP (`list`, `stats`, `log`, the token commands, the `jobs` subtree, and
+the follower commands of PLAN.md §5.12). The counterpart of [`build_settings`](@ref), which is the data plane against a
 working directory, and introspected by `interactive.jl` the same way.
 """
 function build_ctl_settings()
@@ -73,6 +73,24 @@ function build_ctl_settings()
             action = :command
         "load"
             help = "Import a dataset from a bundle produced by dump (submits a load job and waits for it)"
+            action = :command
+        "followers"
+            help = "Show a dataset and the status of each of its followers (the group view)"
+            action = :command
+        "follower-create"
+            help = "Create a follower of a dataset and process every indexed item"
+            action = :command
+        "follower-sync"
+            help = "Process the items of the leader that a follower has not processed yet"
+            action = :command
+        "follower-rebuild"
+            help = "Build a follower again from every indexed item of its leader"
+            action = :command
+        "follower-delete"
+            help = "Delete a follower"
+            action = :command
+        "migrate-partitions"
+            help = "Move the partitions of a dataset created with partition_by to a partition follower"
             action = :command
         "interactive"
             help = "Guided interactive mode (menu-driven command builder)"
@@ -188,6 +206,17 @@ function build_ctl_settings()
             help = "Target dataset ID/name (must not already exist on the server)"
             required = true
     end
+
+    @add_arg_table! s["followers"] begin
+        "--dataset"
+            help = "The leader"
+            required = true
+    end
+    add_follower_create_args!(s["follower-create"])
+    for cmd in ("follower-sync", "follower-rebuild", "follower-delete")
+        _add_follower_name_args!(s[cmd])
+    end
+    _add_migrate_partitions_args!(s["migrate-partitions"])
 
     return s
 end

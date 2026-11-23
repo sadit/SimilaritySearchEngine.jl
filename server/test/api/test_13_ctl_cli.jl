@@ -2,24 +2,7 @@ using Test
 using HTTP
 using JSON3
 
-"""
-Runs `SimilaritySearchServer.main_ctl(args)` in-process against the shared test server and
-captures whatever it printed, instead of spawning a real `similarity-search-ctl` subprocess
--- `main_ctl` is a thin, already-unit-testable wrapper (parse -> dispatch_ctl_command ->
-one HTTP call), and every one of its `ctl_*` handlers only ever `println`s its result, so
-capturing stdout is both faster and gives the assertions below direct string access.
-"""
-function _run_ctl(args::Vector{String})
-    path = tempname()
-    code = open(path, "w") do io
-        redirect_stdout(io) do
-            SimilaritySearchServer.main_ctl(args)
-        end
-    end
-    out = read(path, String)
-    rm(path, force=true)
-    return code, out
-end
+# `_run_ctl` is in `test_server_helpers.jl`.
 
 @testset "13. similarity-search-ctl CLI (admin control-plane client)" begin
     with_test_server() do base_url, workdir
