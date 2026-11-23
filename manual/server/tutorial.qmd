@@ -51,8 +51,12 @@ curl -s -X POST localhost:8080/api/v1/datasets \
 curl -s -X POST localhost:8080/api/v1/datasets/demo/append \
      -H 'Content-Type: application/json' \
      -d '{"items": [
-           {"doc_id": "d1", "text": "el gato duerme sobre el tejado", "keywords": ["gato"]},
-           {"doc_id": "d2", "text": "un perro ladra en la calle", "year": 2024}
+           {"doc_id": "d1", "text": "el gato duerme sobre el tejado", "keywords": ["gato"],
+            "section": "casa"},
+           {"doc_id": "d2", "text": "un perro ladra en la calle", "keywords": ["perro"],
+            "year": 2024, "section": "calle"},
+           {"doc_id": "d3", "text": "el gato y el perro juegan en la calle",
+            "keywords": ["gato", "perro"], "section": "calle"}
          ]}'
 ```
 
@@ -60,7 +64,7 @@ curl -s -X POST localhost:8080/api/v1/datasets/demo/append \
 `searchgraph` for dense vectors, which is the default; `bm25_invfile` or `invfile` for text;
 and `sparse_invfile` for sparse vectors encoded by the caller, which also requires `dimension`.
 Any field other than `doc_id`, `keywords`, `refs`, `text`, `vector`, `indices` and `values`
-becomes metadata of the item, such as `year` in the example above.
+becomes metadata of the item, such as `year` and `section` in the example above.
 
 The insertion indexes the documents, so they can be searched when the call returns.
 
@@ -158,7 +162,46 @@ result = run_job(client, kind="allknn", command=["--dataset", ds_id, "--k", "5"]
 python stress_client.py --jobs 3
 ```
 
-## Step 9: Require a token
+## Step 9: Organize the items with followers
+
+A follower reads the items of a dataset and organizes them by keys. A partition follower
+restricts a search to the items with one key. Here the key is the metadata field `section`:
+
+```bash
+curl -s -X POST localhost:8080/api/v1/datasets/demo/followers \
+     -H 'Content-Type: application/json' \
+     -d '{"name": "by_section", "kind": "partition", "source": "meta:section"}'
+
+curl -s -X POST localhost:8080/api/v1/datasets/demo/followers/by_section=calle/ftsearch \
+     -H 'Content-Type: application/json' \
+     -d '{"text": "gato", "k": 5}'
+```
+
+The search returns `d3` only. `d1` also contains `gato`, but its section is `casa`.
+
+A keyword follower indexes the `keywords` of each item:
+
+```bash
+curl -s -X POST localhost:8080/api/v1/datasets/demo/followers \
+     -H 'Content-Type: application/json' \
+     -d '{"name": "kw", "kind": "keyword", "source": "keywords"}'
+
+curl -s -X POST localhost:8080/api/v1/datasets/demo/followers/kw/search \
+     -H 'Content-Type: application/json' \
+     -d '{"keys": ["gato", "perro"], "k": 5}'
+
+curl -s 'localhost:8080/api/v1/datasets/demo/followers/kw/postings?key=gato'
+```
+
+The search ranks `d3` first, at Jaccard distance 0, because it holds both keys. `d1` and `d2`
+follow at distance 0.5. `postings` returns `[1, 3]`, the `_id`s of the items that hold `gato`.
+
+Each `append` to `demo` processes both followers before it answers.
+`GET /api/v1/datasets/demo/followers` reports the position and the lag of each one. A dataset
+with followers cannot be deleted until its followers are deleted. The
+[server manual](manual.qmd#followers) describes the policies, the routes and the command lines.
+
+## Step 10: Require a token
 
 Everything above answered without credentials, which is the default. To require a token on
 every `/api/v1` endpoint, create the first token against the working directory and enable

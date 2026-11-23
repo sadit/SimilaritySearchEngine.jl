@@ -430,7 +430,13 @@ of it exist.
       as the calibration route of a dataset does, because the `CalibrationLevel` of the Julia
       client needs them.
     - `manual/server/julia-client.qmd` has a section on followers.
-    - Not done yet: 5d (the server manual and tutorial).
+
+    Phase 5d, the documentation, done on 2026-11-23. The server manual has a section
+    "Followers" (what a follower is, the request, the policies, the routes, real responses, the
+    errors, `partition_by` and `migrate-partitions`, the command lines, `rebuild`, `dump` and
+    `load`), and `[followers] check_seconds` in its configuration section. The server tutorial
+    has a step that creates a partition follower and a keyword follower over HTTP. §5.12 has
+    "As built". Phase 5 is complete. Not done yet: phase 6, plugins in the server.
 
 The stemmer registry of §5.3 and §9's phase 5 is not on this list: it was discarded. Stemming
 was the way this specification proposed to make a query match a word it does not equal. That
@@ -1621,6 +1627,8 @@ Status: designed on 2026-11-22 for issue #5, phase 5. Phases 1 to 4 of the issue
 the engine (§0, item 15): the framework of followers, the partition follower, the keyword
 follower and `posting_list`. This section designs how the server, the two command lines and
 the two clients expose them. Phase 6, plugins in the server, has its own section later.
+Implemented on 2026-11-22 and 2026-11-23 in phases 5a to 5d. "As built", at the end of this
+section, lists what differs from the design.
 
 #### What the server does today
 
@@ -1814,6 +1822,37 @@ view), `follower-create`, `follower-delete`, `follower-sync`, `follower-rebuild`
 - Processing a follower outside the request that wrote the leader, for `OnIndex` and
   `OnWrite`. It would shorten the response of `append`, and it is worth adding if a
   measurement shows that the processing of a follower dominates the time of `append`.
+
+#### As built (2026-11-23)
+
+What differs from the design above, from phases 5a to 5d. §0, item 15, has the details of each
+phase.
+
+- **Engine.** Three functions were added so that the server does not read the fields of a
+  leader handle: `attach_follower!`, `close_follower!(leader, name)` and `open_followers(leader)`.
+- **Status.** `kind`, `source` and `policy` are the text of the engine (`PartitionFollower`,
+  `MetaValue("repo")`, `OnIndex()`), not the wire names of the request. The server adds
+  `error`, the last failure of a follower that it could not open or process, and the Julia
+  client has that field too.
+- **Calibration of a partition.** It takes `minrecall`, `numqueries` and `ksearch`, and answers
+  with the `baseline` and the `calibration` of the calibration of a dataset.
+- **Delete.** Deleting a dataset also removes its directory of followers, which is empty by
+  then.
+- **Command lines.** `--policy periodic` takes `--periodic-seconds` and `--periodic-items`. A
+  command that writes a dataset held by another process exits with code 5 and names
+  `similarity-search-ctl`. `searchbatch --follower name` also searches a keyword follower with
+  the `keys` of each query line. `dump` copies the followers before the project.
+- **Julia client.** `open_follower(h, "name=value")` does not check the value; the first
+  search with an unknown value raises `UnknownPartition`.
+- **`on_write` in the server.** `append` calls `append_items!` and then `index!`, and an
+  `OnWrite` follower processes indexed items only. On an exact dense dataset, which indexes
+  when it stores, the follower processes the items of an `append` in the same request. On a
+  `searchgraph` or text dataset, which stages its items until `index!`, it processes them at
+  the next `append`. The engine documents and tests this behavior; the server manual states it.
+- **Tests.** A restart of the server is not tested on its own. `serve` opens the datasets at
+  start with `_reload_one_dataset!`, the function of `POST .../reload`, and
+  `server/test/api/test_18_followers.jl` tests that followers are open after `unload` and
+  `reload`.
 
 ## 6. Hybrid Search Readiness (Suggestions & Specifications)
 

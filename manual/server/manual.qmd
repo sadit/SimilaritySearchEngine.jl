@@ -21,8 +21,9 @@ are described here.
 | file | what it does |
 | :--- | :--- |
 | `config.jl`, `cli.jl`, `ctl.jl` | TOML configuration, and the two `ArgParse` command lines (`similarity-search`, `similarity-search-admin`) |
-| `cli_handlers.jl`, `ctl_handlers.jl` | one function per subcommand: `build`, `search`, `searchbatch`, `allknn`, `fft`, `neardup`, `hsp`, `closestpair`, `describe`, `rebuild`, `dump`, `load` |
+| `cli_handlers.jl`, `ctl_handlers.jl` | one function per subcommand: `build`, `search`, `searchbatch`, `allknn`, `fft`, `neardup`, `hsp`, `closestpair`, `describe`, `rebuild`, `dump`, `load`, the follower commands and `postings` |
 | `server.jl` | the HTTP API (Oxygen), one `EmbeddedEngine` per dataset, and the request/response mapping |
+| `followers_api.jl` | the routes of followers, and the task of `serve` that processes the periodic followers |
 | `jobs.jl`, `executors.jl` | the job spool: an atomic directory tree (`queued/`, `running/`, `completed/`, `failed/`) of `.job.toml` files, dispatched as independent Julia subprocesses |
 | `tokens.jl`, `telemetry.jl`, `cursors.jl` | access tokens, the `op_log` operation history, and server-side result cursors for pagination |
 | `interactive.jl` | guided invocation through `REPL.TerminalMenus` |
@@ -111,8 +112,10 @@ is read through `GET /api/v1/datasets/{id}/log`.
   `holds_metadata` and `key` were removed on 2026-11-10, and a request that contains one of
   them answers `400` (see "Searching Several Text Fields").
 - `GET /api/v1/datasets?offset=&limit=` — every dataset on disk, loaded or not.
-- `GET /api/v1/datasets/{id}` — one of them.
-- `DELETE /api/v1/datasets/{id}` — destroys it.
+- `GET /api/v1/datasets/{id}` — one of them. A dataset with followers also has `followers`,
+  the status of each one (see "Followers").
+- `DELETE /api/v1/datasets/{id}` — destroys it. A dataset with followers answers `409` with
+  the kind `HasFollowers`: its followers are deleted first.
 - `POST /api/v1/admin/datasets/{id}/unload` and `/reload` — closes or reopens a dataset
   without restarting the server. The `rebuild` subcommand of the command line requires this,
   because the RocksDB write lock is exclusive per process. `/reload` accepts an optional body
@@ -218,6 +221,10 @@ The command line has `similarity-search build --partition-by <field>`,
 `similarity-search build --partition-graph-min <n>` for a dense dataset, and
 `similarity-search searchbatch --partition <name>`.
 
+A partition follower (see "Followers") divides the items in the same way, outside the project.
+A dataset can have several, and `migrate-partitions` moves the partitions of `partition_by` to
+one.
+
 ### Search and indexing
 
 - `POST /api/v1/datasets/{id}/append` — inserts items. A dense item contains `vector`, a text
@@ -289,6 +296,193 @@ An operation on one dataset is addressed under that dataset. The two queries tha
 than one are under `/api/v1/search/`, which is the only place where a route is not about a
 single dataset. The earlier prefix `/api/v1/simsearch/` was removed on 2026-09-13: it marked a
 distinction that the API stopped making.
+
+### Followers
+
+A **follower** is a dataset that organizes the items of another dataset, its **leader**. It
+reads the items of the leader and does not copy them. It is stored in
+`<workdir>/datasets/<leader>.followers/<name>/`, outside the directory of the leader, and it is
+created and deleted without a change to the items of the leader. There are two kinds:
+
+- A **partition follower** divides the items of a text or a dense dataset into partitions, one
+  per key. A search in one partition evaluates only the items of that partition. Each result
+  has the score or the distance that the search over the whole dataset gives it.
+- A **keyword follower** indexes the keys of each item in an inverted file. It searches the
+  items by a set of keys, and it returns the posting list of one key: the `_id`s of the items
+  that hold it. The leader can be a dataset of any kind.
+
+The **source** of a follower says where the keys of an item come from: `keywords`, `refs`,
+`doc_id`, or `meta:<field>`, a field of the metadata of the item. A key is a non-empty string.
+A follower cannot process an item whose source holds another value, such as a number. When the
+follower is created, the request answers `400` with the kind `PayloadMismatch`, and the
+follower is not created. When such an item arrives after the follower exists, the leader
+stores it, and the processing of the follower answers that error: `append` for `on_index`, or
+`sync`. The follower stays at the item before it. The
+[architecture page](../architecture.qmd#leader-and-follower-datasets) describes how the engine
+stores and processes followers.
+
+`POST /api/v1/datasets/{id}/followers` creates a follower and processes every indexed item of
+the leader before it answers:
+
+```json
+{"name": "by_section", "kind": "partition", "source": "meta:section",
+ "disjoint": true, "policy": "on_index"}
+```
+
+| field | values |
+| :--- | :--- |
+| `name` | letters, digits, `_` and `-`, at most 128 characters |
+| `kind` | `partition` or `keyword` |
+| `source` | `keywords`, `refs`, `doc_id`, or `meta:<field>` |
+| `disjoint` | a partition follower only. `true` (the default): an item has at most one key, and an item with several keys raises `PayloadMismatch`, as a value that is not a string does. `false`: an item belongs to the partition of each of its keys |
+| `graph_min` | a partition follower of a dense dataset only: the number of members from which a partition has its own graph, as `partition_graph_min` |
+| `distance` | a keyword follower only: `jaccard` (the default), `dice`, `intersection` or `cosine_set` |
+| `policy` | `on_index` (the default), `on_write`, `manual`, or `{"periodic": {"seconds": 60, "items": 1000}}` |
+
+A field or a value that the server does not know answers `400`. A follower accepts no direct
+write: `append` and `delete` go to the leader. A deleted item stays in the structures of a
+follower, and the server removes it from each result, as it does for the leader.
+
+The **position** of a follower is the last `_id` of the leader that it processed, and its
+**lag** is the number of indexed items of the leader after that position. A follower that lags
+answers with the items it has processed. The policy says when it processes the new items:
+
+| policy | when |
+| :--- | :--- |
+| `on_index` | inside each `append`, after the leader indexes the new items. The response of `append` comes after the follower is processed |
+| `on_write` | inside each `append`, after the leader stores the new items and before it indexes them. A follower processes indexed items only. An exact dense dataset indexes its items when it stores them, so the follower processes them in the same request. A `searchgraph` or text dataset indexes them after, so the follower processes them at the next `append` |
+| `manual` | only at `POST .../followers/{name}/sync` |
+| `periodic` | in a task of `serve`, when `seconds` have passed since its last processing, or when its lag reaches `items`. The task checks every `[followers] check_seconds` seconds (section 6) |
+
+A follower that fails during an `append` does not undo the write of the leader. The response is
+the error of the follower, and the follower lags until its next processing.
+
+The routes of a follower are under its leader. `{f}` is the name of a follower, or
+`name=value` for one partition, with a character that a path segment does not allow encoded
+with `%`. The permission is the one of the leader:
+
+| route | permission | what it does |
+| :--- | :--- | :--- |
+| `POST /datasets/{id}/followers` | admin | creates a follower; `201` with its status |
+| `GET /datasets/{id}/followers` | read | the status of every follower |
+| `GET /datasets/{id}/followers/{f}` | read | the status of one follower |
+| `DELETE /datasets/{id}/followers/{f}` | admin | deletes a follower |
+| `POST /datasets/{id}/followers/{f}/sync` | write | processes the new items now |
+| `POST /datasets/{id}/followers/{f}/rebuild` | admin | builds the follower again from every indexed item |
+| `GET /datasets/{id}/followers/{f}/partitions` | read | the partitions of a partition follower |
+| `POST /datasets/{id}/followers/{f}=value/search` | read | `search` in one partition of a dense dataset: `vector`, `k`, `filter`, `minrecall`, `page_size` |
+| `POST /datasets/{id}/followers/{f}=value/ftsearch` | read | `ftsearch` in one partition of a text dataset: `text`, `k`, `filter` |
+| `POST /datasets/{id}/followers/{f}=value/calibrate` | write | calibrates the graph of one partition: `minrecall`, `numqueries`, `ksearch` |
+| `POST /datasets/{id}/followers/{f}/search` | read | a keyword follower: `keys`, `k`, `t`, `filter`, `page_size` |
+| `GET /datasets/{id}/followers/{f}/postings?key=&limit=` | read | the posting list of one key of a keyword follower |
+| `GET /datasets/{id}/postings?key=&limit=` | read | the posting list of a token of a text dataset, or of a dimension of a sparse dataset |
+| `POST /datasets/{id}/migrate-partitions` | admin | moves the partitions of `partition_by` to a partition follower: `name`, `disjoint` |
+| `GET /datasets/{id}/group` | read | the leader and the status of every follower |
+
+All routes are under `/api/v1`. The searches answer in the shape of the searches of a dataset.
+`t` is the number of keys of the query that an item must hold to be a candidate; the default is
+`1`. A posting list holds the `_id`s in ascending order, and `limit=n` returns the first `n`.
+A posting list of a frequent key in a large dataset can hold most of the items of the dataset,
+and it is sent in one response. There is no route that lists the keys of a keyword follower.
+
+```json
+POST /api/v1/datasets/demo/followers  [201]
+{"status":"created","name":"demo/kw","leader":"demo","kind":"KeywordFollower",
+ "source":"Keywords()","policy":"OnIndex()","plugin":null,"position":3,
+ "leader_indexed":3,"lag":0,"synchronized":true,"stale":false,"missing":false,"open":true,
+ "stats":{"keys":2,"postings":4,"items_without_keys":0,"shortest":2,"median":2,"longest":2}}
+
+POST .../followers/by_section=calle/ftsearch   {"text": "gato", "k": 5}
+{"status":"searched","id":"demo","insufficient_results":true,
+ "results":[{"doc_id":"d3","_id":3,"distance":-0.8908208}]}
+
+POST .../followers/kw/search   {"keys": ["gato", "perro"], "k": 5}
+{"status":"searched","id":"demo","insufficient_results":true,
+ "results":[{"doc_id":"d3","_id":3,"distance":0.0},{"doc_id":"d1","_id":1,"distance":0.5},
+            {"doc_id":"d2","_id":2,"distance":0.5}]}
+
+GET .../followers/kw/postings?key=gato   {"id":"demo","follower":"kw","key":"gato","ids":[1,3]}
+GET .../postings?key=calle&limit=10      {"id":"demo","key":"calle","ids":[2,3]}
+
+GET .../followers/by_section/partitions
+{"id":"demo","follower":"by_section",
+ "partitions":[{"name":"calle","items":2,"graph":false},{"name":"casa","items":1,"graph":false}]}
+
+POST .../followers/m/sync
+{"status":"synchronized","processed":1,"name":"demo/m","position":4,"lag":0, ...}
+```
+
+A status has the fields of the engine's `FollowerStatus`. `kind`, `source` and `policy` are
+the text of the engine, such as `PartitionFollower`, `MetaValue("section")` and
+`Periodic(seconds=60.0, items=nothing)`. `stale` is `true` when the leader was rebuilt after
+the follower processed its items. `missing` is `true` when the leader lists the follower and its
+directory does not exist. `stats` holds the statistics of the kind: for a partition follower,
+`partitions`, `memberships`, `smallest`, `median`, `largest` and `graphs`. A follower that
+`serve` could not open or process has `error`, the message of its last failure.
+`GET /api/v1/datasets/{id}` has `followers`, the status of each follower.
+
+`serve` opens the followers of each dataset when it loads or reloads the dataset. A follower
+that cannot be opened stays closed, its status has `error`, and the leader stays available.
+`DELETE /api/v1/datasets/{id}` of a leader with followers answers `409` with the kind
+`HasFollowers`, and the message names each follower. Each one is deleted first.
+
+The errors of a follower have kinds of their own:
+
+| kind | status | when |
+| :--- | ---: | :--- |
+| `UnknownFollower` | 404 | the leader has no follower with that name |
+| `UnknownPartition` | 404 | the partition follower has no partition with that value; the message lists the closest names |
+| `PluginNotLoaded` | 404 | the follower needs a plugin that this server has not loaded |
+| `StaleFollower` | 409 | the leader was rebuilt after the follower processed its items; `rebuild` of the follower builds it again |
+| `HasFollowers` | 409 | a leader with followers cannot be deleted |
+
+A partition follower is an alternative to `partition_by`. The partitions of `partition_by` are
+in the project of the dataset, and an item has one partition per value. A partition follower is
+outside the project, a dataset can have several, and a non-disjoint one puts an item in each
+partition it names. `POST /api/v1/datasets/{id}/migrate-partitions` moves the partitions of
+`partition_by` to a partition follower over `meta:<field>`, with the same `partition_graph_min`.
+`disjoint` has no default. After the migration the dataset has no partition field, and a search
+with `partition` answers `400` with a message that names the followers.
+
+The command line `similarity-search` has the same operations on a working directory:
+
+```bash
+similarity-search follower-create --dataset demo --name kw --kind keyword --source keywords
+similarity-search follower-create --dataset demo --name by_section --kind partition \
+      --source meta:section [--non-disjoint] [--graph-min N] [--policy manual]
+similarity-search follower-list --dataset demo
+similarity-search follower-sync --dataset demo --name kw
+similarity-search follower-rebuild --dataset demo --name kw
+similarity-search follower-delete --dataset demo --name kw
+similarity-search migrate-partitions --dataset vec --name group --disjoint true
+similarity-search postings --dataset demo --follower kw --key gato [--limit N]
+similarity-search searchbatch --dataset demo --queries q.jsonl --output out.jsonl --follower by_section=calle
+```
+
+`searchbatch --follower name=value` searches one partition. `searchbatch --follower name` of a
+keyword follower reads `keys`, and optionally `t`, from each query line. `describe` lists the
+followers. `follower-list`, `postings`, `describe` and `searchbatch` open the dataset read-only,
+so they run while a server holds it. The other commands write the dataset: when another process
+holds it, such as a running server, they exit with code 5 and say to use
+`similarity-search-ctl`. `similarity-search-ctl` has `followers` (the group view),
+`follower-create`, `follower-sync`, `follower-rebuild`, `follower-delete` and
+`migrate-partitions`, with the same arguments, and calls the routes above.
+
+`rebuild` creates a new project, so the `_id`s of the items can change. It attaches the
+followers to the new project and prints the state of each one. A follower of the new project is
+stale until it is rebuilt, and `--rebuild-followers` rebuilds every one in the same command:
+
+```text
+Rebuild completed for 'demo': 4 item(s) reindexed into ./workdir/datasets/demo
+  follower demo/by_section: stale; build it again with similarity-search follower-rebuild --dataset demo --name by_section
+  follower demo/kw: stale; build it again with similarity-search follower-rebuild --dataset demo --name kw
+```
+
+`dump` copies the followers to `followers/` of the bundle, and `manifest.json` lists them. It
+copies them before the project. A server can append items during a `dump`, and this order
+ensures that a follower in the bundle has not processed an item that the project in the bundle
+does not have. `load` copies the followers next to the new dataset and attaches them to it. The
+project and its followers come from the same bundle, so the followers are not stale.
 
 ### Searching Several Text Fields
 
@@ -507,7 +701,15 @@ port = 8080
 query_threads_pct = 80
 batch_threads_pct = 20
 max_concurrent_queries = 0
+
+[followers]
+check_seconds = 10
 ```
+
+`check_seconds` is how often the task of `serve` looks for periodic followers to process (see
+"Followers"). A follower with `{"periodic": {"seconds": 60}}` is therefore processed between 60
+and 70 seconds after its last processing. A value that is not a positive number is replaced by
+the default, 10.
 
 `max_concurrent_queries` bounds how many searches run at once. `0` derives it from the split
 below: the threads that job execution did not reserve. A request that arrives when every slot
@@ -546,13 +748,13 @@ The number of threads the server itself has is the one given to Julia when it st
 
 The suite has two levels. A run can also select some of its files.
 
-- **light** (219 assertions, approximately 15 s, measured on 2026-11-20): the interface with
+- **light** (255 assertions, approximately 17 s, measured on 2026-11-23): the interface with
   the engine. It verifies the mapping from the names used in requests to engine types, from
   engine errors to status codes and exit codes, and from the items of a request to engine
   items. It also verifies that the Julia client has every error type of the engine. No server
   is started and no subprocess is created. This level detects a change in the engine on the
   day it is made.
-- **full** (999 assertions, approximately 30 minutes, measured on 2026-11-20): the end-to-end
+- **full** (1,182 assertions, approximately 35 minutes, measured on 2026-11-23): the end-to-end
   suites for the API, the jobs, the command lines and the Julia client. They start servers and
   execute subprocesses. Near the end, the run produces no output for about ten minutes, while
   the command-line suite waits for jobs to expire. The run has not stopped.
@@ -564,8 +766,8 @@ julia --project=server -e 'using Pkg; Pkg.test(test_args=["full"])'
 
 Each test file has a name and a list of tags. The table `TEST_FILES` in
 `server/test/runtests.jl` lists them. The names are `config`, `boundary`, `dispatcher`, `e2e`, `api/01` to
-`api/17` and `cli/01` to `cli/06`. Examples of tags are `jobs`, `cursors`, `client`,
-`partitions`, `auth` and `cli`. A run that receives names or tags includes only the files that
+`api/18` and `cli/01` to `cli/07`. Examples of tags are `jobs`, `cursors`, `client`,
+`partitions`, `followers`, `auth` and `cli`. A run that receives names or tags includes only the files that
 match one of them. The word `light` adds the files of the light level.
 
 ```bash
@@ -581,8 +783,8 @@ engine's suite uses the same selection: its files are `dense`, `text`, `persiste
 
 ## 8. Where to go next
 
-- The [server tutorial](tutorial.qmd): the same interface in use, in eight steps. A dataset is
-  created, indexed and queried, and a job is executed.
+- The [server tutorial](tutorial.qmd): the same interface in use, in ten steps. A dataset is
+  created, indexed and queried, a job is executed, and the items are organized with followers.
 - The [architecture of the engine](../architecture.qmd): the storage layout, the engine
   hierarchy, the concurrency model, and the typed errors this package maps.
 - The [Julia client](julia-client.qmd): the engine's functions over the HTTP API of a remote

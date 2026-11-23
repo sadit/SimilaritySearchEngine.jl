@@ -81,9 +81,12 @@ using JSON3
         @test vocab.live_oov_rate == 0.0
         @test vocab.live_tokens > 0
 
-        # A dataset that holds no text has no vocabulary to report on
+        # A dataset that holds no text has no vocabulary to report on. This file creates its
+        # own dense dataset, so that it runs without `api/01`.
+        @test HTTP.post("$base_url/datasets", [],
+                        JSON3.write(Dict("id" => "vocab_dense_ds", "index_type" => "exhaustive_search"))).status == 201
         resp = try
-            HTTP.get("$base_url/datasets/metric_ds/vocab")
+            HTTP.get("$base_url/datasets/vocab_dense_ds/vocab")
         catch e
             e.response
         end
