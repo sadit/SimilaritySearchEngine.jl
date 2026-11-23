@@ -96,7 +96,7 @@ export DEFAULT_PROFILE_NICKNAMES, default_profile_path, train_profile
 # `ProjectSpec` built from these types, and `project_spec` returns it.
 export ProjectSpec, DenseVectors, SparseVectors, TextDocuments, project_spec
 export DenseIndex, Graph, Exhaustive, TextIndex, BM25, VectorSpace
-export DenseStorage, Float32Vectors, Quantized, SQ, QuantRange, GlobalRange, PerVectorRange
+export DenseStorage, Float32Vectors, Quantized, SQ, QuantRange, GlobalRange, PerVectorRange, Sketched
 export Rotation, NoRotation, QRRotation, HadamardRotation
 export PartitionBy, Runtime
 
@@ -105,6 +105,8 @@ export Dist
 
 # What an open quantized project reports (issue #1), and the explicit fit of its encoder.
 export QuantizerInfo, fit_quantizer!, quantizer_info
+# What an open sketched project reports (PLAN.md §5.14).
+export SketchInfo, sketch_info
 
 # For asking an *open* project what it holds -- which a Julia caller needs, because the item
 # type it must build follows from it (`:dense` takes DenseItem, `:sparse` SparseItem, `:text`

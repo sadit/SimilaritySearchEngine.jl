@@ -1068,6 +1068,9 @@ function _index_quantized!(handle::EmbeddedEngine, rng::AbstractRNG)
     engine = handle.engine
     q = engine.quant
     _fit_quantizer!(handle, rng)
+    # A sketched project with 64 staged vectors or fewer has no encoder yet: its vectors stay
+    # staged until an `index!` has more of them (PLAN.md §5.14).
+    q.encoder === nothing && return handle
     raw = handle.dense_vectors[]
     parts = handle.partitions[]
     is_graph = engine isa IndexEngine.DenseEngine{IndexEngine.GraphBackend}
@@ -1097,27 +1100,41 @@ function _index_quantized!(handle::EmbeddedEngine, rng::AbstractRNG)
     return handle
 end
 
-# Fits the encoder of a quantized project on a sample of its staged vectors, saves it, creates
-# the files of the codes, and installs the index over them. Does nothing when the encoder exists.
+# Fits the encoder of a quantized or sketched project on a sample of its staged vectors, saves it,
+# creates the files of the codes, and installs the index over them. Does nothing when the encoder
+# exists. Returns whether the project has an encoder: a sketched project needs more than 64
+# staged vectors, and with fewer it is left without one.
 function _fit_quantizer!(handle::EmbeddedEngine, rng::AbstractRNG)
     engine = handle.engine
     q = engine.quant
-    q.encoder === nothing || return nothing
+    q.encoder === nothing || return true
     raw = handle.dense_vectors[]
     (raw === nothing || length(raw) == 0) &&
-        nothing_staged("this quantized project has nothing staged yet -- append_items! at least one vector " *
-                       "before index!; the quantizer is fitted on a sample of the staged vectors")
+        nothing_staged("this project has nothing staged yet -- append_items! at least one vector " *
+                       "before index!; its encoder is fitted on a sample of the staged vectors")
     n = length(raw)
-    s = min(q.spec.quantizer.range.samplesize, n)
+    q.spec isa Sketched && n <= 64 && return false
+    s = min(IndexEngine.fit_samplesize(q.spec), n)
     rows = s == n ? (1:n) : sort!(Random.shuffle(rng, collect(1:n))[1:s])
-    sample = reduce(hcat, (Vector{Float32}(raw[i]) for i in rows))
+    # Filled column by column: `reduce(hcat, generator)` copies the whole matrix at each step,
+    # which took 77 s for a sample of 16,384 vectors of dimension 384.
+    sample = Matrix{Float32}(undef, length(raw[first(rows)]), length(rows))
+    for (j, i) in enumerate(rows)
+        sample[:, j] .= raw[i]
+    end
     encoder = IndexEngine.fit_encoder(q.spec, q.distance, sample, rng)
     # The encoder is saved before the files exist: a project reopened after an interruption
     # between the two creates empty files, and never holds codes without their encoder.
     Persistence.save_field!(handle.store, :encoder, encoder)
     codes, ranges = _create_code_files(handle.dir, encoder)
     IndexEngine.install_encoder!(engine, encoder, codes, ranges, ScalarQuant.SQMinC[])
-    return nothing
+    return true
+end
+
+function _create_code_files(dir::String, encoder::IndexEngine.SketchEncoder)
+    cpath = Persistence.dense_codes_path(dir)
+    rm(cpath; force=true)
+    return IndexEngine.create_sketch_codes(cpath, encoder), nothing
 end
 
 function _create_code_files(dir::String, encoder)
@@ -1147,18 +1164,20 @@ end
 """
     fit_quantizer!(handle::EmbeddedEngine; rng=Random.default_rng()) -> EmbeddedEngine
 
-Fits the encoder of a quantized project on a sample of its staged vectors (issue #1), without
-encoding them. [`index!`](@ref index!(::EmbeddedEngine)) fits it on its first call, so this is
-needed only to choose the `rng` of the sample and of a random rotation, or to fit before the
-whole collection is staged. Does nothing when the encoder exists. Raises `NothingStaged` when
-nothing is staged, and `InvalidOption` for a project that is not quantized.
+Fits the encoder of a quantized (issue #1) or sketched (PLAN.md §5.14) project on a sample of
+its staged vectors, without encoding them. [`index!`](@ref index!(::EmbeddedEngine)) fits it on
+its first call, so this is needed only to choose the `rng` of the sample and of a random
+rotation, or to fit before the whole collection is staged. Does nothing when the encoder exists.
+Raises `NothingStaged` when nothing is staged, `NotTrained` for a sketched project with 64
+staged vectors or fewer, and `InvalidOption` for a project that stores `Float32` vectors.
 """
 function fit_quantizer!(handle::EmbeddedEngine; rng::AbstractRNG=Random.default_rng())
     _check_open(handle)
     IndexEngine.isquantized(handle.engine) ||
-        invalid_option(:quantizer, "fit_quantizer! applies to a project with Quantized storage; this one stores Float32 vectors")
+        invalid_option(:quantizer, "fit_quantizer! applies to a project with Quantized or Sketched storage; this one stores Float32 vectors")
     handle.wrote[] = true
-    _fit_quantizer!(handle, rng)
+    _fit_quantizer!(handle, rng) || not_trained("a sketched project fits its encoder on more than 64 staged vectors; ",
+        "this one has $(handle.engine.quant.npending)")
     return handle
 end
 
@@ -1169,7 +1188,17 @@ The quantizer of a dense project (issue #1), or `nothing` for a project that sto
 vectors. See [`QuantizerInfo`](@ref) for the fields.
 """
 quantizer_info(handle::EmbeddedEngine) = (_check_open(handle);
-    IndexEngine.isquantized(handle.engine) ? IndexEngine.quantizer_info(handle.engine.quant) : nothing)
+    IndexEngine.isquantized(handle.engine) && handle.engine.quant.spec isa Quantized ?
+        IndexEngine.quantizer_info(handle.engine.quant) : nothing)
+
+"""
+    sketch_info(handle::EmbeddedEngine) -> Union{SketchInfo,Nothing}
+
+The sketches of a dense project (PLAN.md §5.14), or `nothing` for a project that does not store
+sketches. See [`SketchInfo`](@ref) for the fields.
+"""
+sketch_info(handle::EmbeddedEngine) = (_check_open(handle);
+    IndexEngine.issketched(handle.engine) ? IndexEngine.sketch_info(handle.engine.quant) : nothing)
 
 """
     append_items!(handle::EmbeddedEngine, items) -> Int
@@ -1470,8 +1499,13 @@ whatever the values happened to be.
 """
 function _search_query(engine::IndexEngine.AbstractSearchEngine, vector)
     kind = IndexEngine.payload_kind(engine)
-    kind === :dense && IndexEngine.isquantized(engine) &&
+    if kind === :dense && IndexEngine.isquantized(engine)
+        q = engine.quant
+        q.encoder === nothing && q.spec isa Sketched && q.npending > 0 && not_trained(
+            "this sketched project holds $(q.npending) staged vector(s) and no encoder: the encoder is fitted at an ",
+            "index! with more than 64 staged vectors, and until then the project has nothing to search")
         return IndexEngine.prepare_query(engine, convert(Vector{Float32}, vector))
+    end
     kind === :dense && return convert(Vector{Float32}, vector)
     kind === :sparse || payload_mismatch("search(handle, vector) needs a dense or sparse project; this one holds $kind")
     vector isa AbstractSparseVector ||
@@ -1536,16 +1570,27 @@ partition with a graph is searched with the `BeamSearch` its construction tuned.
 `NotTrained` if the partition was never calibrated: a search does not calibrate a partition.
 `filter` and `candidates` apply to the results of the partition. A name the project does not
 hold raises `UnknownPartition`.
+
+A project with [`Sketched`](@ref) storage (PLAN.md §5.14) answers with the distance between
+sketches, which orders the results and is not the distance of the project. With `rerank > 0`,
+it asks the sketches for `rerank * k` candidates and scores them again with its own distance
+and its `Float32` vectors, so the results have the distance of the project. Before its encoder
+exists, a sketched project raises `NotTrained`.
 """
 function search(handle::EmbeddedEngine, vector, k::Int=10; filter=nothing, minrecall=nothing, candidates::Int=2k,
                 stats::Union{Nothing,SearchStats}=nothing, partition::Union{Nothing,AbstractString}=nothing)
     _check_open(handle)
     query = _search_query(handle.engine, vector)
-    partition === nothing || return _search_partition(handle, query, k, partition; filter, minrecall, candidates, stats)
+    partition === nothing || return _search_partition(handle, query, k, partition; filter, minrecall, candidates, stats, vector)
     needs_save = minrecall !== nothing && handle.engine isa IndexEngine.DenseEngine{IndexEngine.GraphBackend} && isempty(handle.engine.backend.opt_beamsearch)
+    # A sketched project with a second evaluation asks the sketches for `rerank * k`
+    # candidates, and scores them again with its own distance (PLAN.md §5.14).
+    r = _rerank_factor(handle.engine)
+    kk = r == 0 ? k : r * k
     res_knn = filter === nothing ?
-        IndexEngine.search_live(handle.engine, query, k; bs_override=nothing, minrecall, policy=nothing) :
-        _search_with_filter(handle.engine, handle.project, query, k, filter; minrecall, candidates)
+        IndexEngine.search_live(handle.engine, query, kk; bs_override=nothing, minrecall, policy=nothing) :
+        _search_with_filter(handle.engine, handle.project, query, kk, filter; minrecall, candidates=max(candidates, kk))
+    r == 0 || (res_knn = _rerank(handle, vector, res_knn, k))
     if needs_save
         Persistence.save_field!(handle.store, :opt_beamsearch, handle.engine.backend.opt_beamsearch)
         _save_search_state!(handle)
@@ -1555,21 +1600,26 @@ function search(handle::EmbeddedEngine, vector, k::Int=10; filter=nothing, minre
 end
 
 """
-    _search_partition(handle, query, k, partition; filter, minrecall, candidates, stats) -> Vector{SearchResult}
+    _search_partition(handle, query, k, partition; filter, minrecall, candidates, stats, vector) -> Vector{SearchResult}
 
 [`search`](@ref) in one partition of a dense project (PLAN.md §5.10). `filter` and
 `candidates` apply to the results of the partition.
 """
 function _search_partition(handle::EmbeddedEngine, query, k::Int, partition::AbstractString; filter, minrecall,
-                           candidates::Int, stats::Union{Nothing,SearchStats})
+                           candidates::Int, stats::Union{Nothing,SearchStats}, vector)
     engine = handle.engine
     engine isa IndexEngine.DenseEngine ||
         invalid_option(:partition, "search with a partition needs a dense project; this one holds " *
               "$(IndexEngine.payload_kind(engine)) items")
     number = _partition_number(handle, partition)
-    n = filter === nothing ? k : max(candidates, k)
+    # `vector` is the query as the caller gave it, for the second evaluation of a sketched
+    # project; `query` is its sketch.
+    r = _rerank_factor(engine)
+    kk = r == 0 ? k : r * k
+    n = filter === nothing ? kk : max(candidates, kk)
     raw = IndexEngine.search_partition_live(engine, number, query, n, minrecall)
-    res_knn = filter === nothing ? raw : _filter_hits(handle.project, raw, k, filter)
+    res_knn = filter === nothing ? raw : _filter_hits(handle.project, raw, kk, filter)
+    r == 0 || (res_knn = _rerank(handle, vector, res_knn, k))
     _record_stats!(stats, res_knn)
     return _hydrate_results(handle.project, res_knn)
 end
@@ -1597,7 +1647,8 @@ function _batch_query_database(engine::IndexEngine.AbstractSearchEngine, queries
         all(q -> length(q) == dim, prepared) ||
             wrong_dimension(dim, length(first(prepared)),
                   "every query in a batch must have the project's dimension ($dim)")
-        M = Matrix{Float32}(undef, dim, length(prepared))
+        # The codes of a sketched project are `UInt64` or `UInt8`, not `Float32`.
+        M = Matrix{eltype(first(prepared))}(undef, dim, length(prepared))
         for (j, q) in enumerate(prepared)
             M[:, j] = q
         end
@@ -1632,7 +1683,60 @@ one at a time -- so call [`ftsearch`](@ref) in a loop.
 function searchbatch(handle::EmbeddedEngine, queries, k::Int=10)
     _check_open(handle)
     Q = _batch_query_database(handle.engine, queries)
-    IndexEngine.searchbatch_live(handle.engine, Q, k)
+    r = _rerank_factor(handle.engine)
+    r == 0 && return IndexEngine.searchbatch_live(handle.engine, Q, k)
+    ids, dists = IndexEngine.searchbatch_live(handle.engine, Q, r * k)
+    return _rerank_batch(handle, queries, ids, dists, k)
+end
+
+# --- The second evaluation of a sketched project (PLAN.md §5.14) -------------------------
+
+# The number of candidates per result that a sketched project scores again with its own
+# distance and its `Float32` vectors, or 0.
+_rerank_factor(engine) = IndexEngine.issketched(engine) ? engine.quant.spec.rerank : 0
+
+# The kept vectors of a sketched project with a second evaluation, and the `_id` of their first
+# row. `Sketched` refuses `rerank > 0` without `keep_vectors`, so the file exists once an item
+# was appended. They are read as `fetch_items` reads them.
+function _kept_vectors(handle::EmbeddedEngine)
+    raw = handle.dense_vectors[]
+    raw === nothing && corrupted_storage("this sketched project keeps its Float32 vectors for the second evaluation, ",
+                                         "and their file is missing")
+    return raw, Persistence.load_field(handle.store, :raw_offset, 0)
+end
+
+# The `k` candidates of `res` nearest to `vector` under the distance of the project, in that
+# order and with that distance.
+function _rerank(handle::EmbeddedEngine, vector, res, k::Int)
+    raw, offset = _kept_vectors(handle)
+    dist = handle.engine.quant.distance
+    q = convert(Vector{Float32}, vector)
+    n = length(res.id)
+    d = Float32[SimilaritySearch.evaluate(dist, q, raw[Int(res.id[i]) - offset]) for i in 1:n]
+    order = sortperm(d)[1:min(k, n)]
+    out = (id=res.id[order], dist=d[order], deleted=res.deleted[order], distance_evaluations=res.distance_evaluations + n)
+    return hasproperty(res, :candidates) ? merge(out, (candidates=res.candidates,)) : out
+end
+
+# `_rerank` for the matrices of `searchbatch`: each column keeps its `k` nearest candidates,
+# padded with `0` ids and `typemax(Float32)` distances.
+function _rerank_batch(handle::EmbeddedEngine, queries, ids::AbstractMatrix, dists::AbstractMatrix, k::Int)
+    raw, offset = _kept_vectors(handle)
+    dist = handle.engine.quant.distance
+    m = size(ids, 2)
+    out_ids = zeros(eltype(ids), k, m)
+    out_dists = fill(typemax(Float32), k, m)
+    for j in 1:m
+        q = convert(Vector{Float32}, queries[j])
+        cand = [ids[i, j] for i in axes(ids, 1) if ids[i, j] != 0]
+        d = Float32[SimilaritySearch.evaluate(dist, q, raw[Int(c) - offset]) for c in cand]
+        order = sortperm(d)
+        for (r, o) in enumerate(order[1:min(k, length(order))])
+            out_ids[r, j] = cand[o]
+            out_dists[r, j] = d[o]
+        end
+    end
+    return out_ids, out_dists
 end
 
 """

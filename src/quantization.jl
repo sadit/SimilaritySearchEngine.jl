@@ -49,18 +49,19 @@ end
 """
     QuantState
 
-The quantizer of a dense engine: the specification it was created with, the distance the caller
-asked for, the encoder once it is fitted, the files that hold the codes, and how many staged
-vectors are not encoded yet.
+The codes of a dense engine whose vectors are not stored as `Float32` values: the storage it
+was created with, [`Quantized`](@ref) or [`Sketched`](@ref) (`sketches.jl`), the distance the
+caller asked for, the encoder once it is fitted (an `SQEncoder` or a `SketchEncoder`), the files
+that hold the codes, and how many staged vectors are not encoded yet.
 
 `codes` is the `MMapMatrixDatabase{UInt8}` of the codes. `params` is the
 `MMapMatrixDatabase{Float32}` of the `(min, c)` pair of each vector of a per-vector quantizer,
 and `nothing` for a global one. Both are `nothing` before the encoder exists.
 """
 mutable struct QuantState
-    spec::Quantized
+    spec::Union{Quantized,Sketched}
     distance::SimilaritySearch.PreMetric
-    encoder::Union{Nothing,SQEncoder}
+    encoder::Any
     codes::Union{Nothing,MMapMatrixDatabase}
     params::Union{Nothing,MMapMatrixDatabase}
     npending::Int
@@ -83,9 +84,9 @@ quantized_distance(d) =
           "$(nameof(typeof(d))) has no distance over codes")
 
 """
-    enable_quantization!(engine::AbstractSearchEngine, spec::Quantized, distance) -> DenseEngine
+    enable_quantization!(engine::AbstractSearchEngine, spec::Union{Quantized,Sketched}, distance) -> DenseEngine
 
-Returns `engine` as a quantized engine. `engine` must be empty and have no partitions yet, and
+Returns `engine` as an engine that stores codes: a quantized or a sketched engine. `engine` must be empty and have no partitions yet, and
 `distance` is the distance it was created with.
 
 An exact engine is rebuilt around an `ExactBackend` whose type names the index type without its
@@ -93,8 +94,8 @@ parameters (`ExactBackend{ExhaustiveSearch}`). `install_encoder!` replaces the e
 `Float32` vectors with an index over codes, whose concrete type is different, and the field of a
 backend whose parameter is concrete cannot hold it.
 """
-function enable_quantization!(engine::AbstractSearchEngine, spec::Quantized, distance)
-    quantized_distance(distance)
+function enable_quantization!(engine::AbstractSearchEngine, spec::Union{Quantized,Sketched}, distance)
+    spec isa Quantized && quantized_distance(distance)
     if engine.backend isa ExactBackend
         b = engine.backend
         T = b.index isa ParallelExhaustiveSearch ? ParallelExhaustiveSearch : ExhaustiveSearch
@@ -238,17 +239,22 @@ stage_quantized!(engine::AbstractSearchEngine) = write_lock(() -> (engine.quant.
 """
     prepare_query(engine, vector) -> AbstractVector
 
-The query a quantized `engine` evaluates against its codes: the vector rotated and prepared by
-`encodequery`. Before the encoder exists the index is empty, and the vector is returned as it
-is.
+The query a quantized or sketched `engine` evaluates against its codes: for a quantizer, the
+vector rotated and prepared by `encodequery`; for a sketch, its sketch. Before the encoder exists
+the index is empty, and the vector is returned as it is.
 """
 function prepare_query(engine::AbstractSearchEngine, vector::AbstractVector{Float32})
     enc = engine.quant.encoder
     enc === nothing && return vector
     length(vector) == enc.dim ||
         wrong_dimension(enc.dim, length(vector), "query dimension $(length(vector)) does not match the project's $(enc.dim)")
-    return encodequery(enc, vector)
+    return _prepare_query(enc, vector)
 end
+
+_prepare_query(enc::SQEncoder, vector::AbstractVector{Float32}) = encodequery(enc, vector)
+
+"The number of staged vectors that the first `index!` samples to fit the encoder."
+fit_samplesize(spec::Quantized) = spec.quantizer.range.samplesize
 
 """
     quantizer_info(q::QuantState) -> QuantizerInfo

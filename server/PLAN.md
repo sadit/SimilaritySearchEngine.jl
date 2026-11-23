@@ -474,7 +474,65 @@ of it exist.
     Hamming distance. The engine has scalar quantization since 2026-11-20 (commit 1dc5e62,
     `Quantized(SQ(...))` in `DenseVectors`); it has no sketches, and the server exposes neither
     quantization nor sketches. The scope (the engine, the server, reranking with the original
-    vectors) is designed before it is implemented.
+    vectors) is designed before it is implemented: §5.14, proposed on 2026-11-23.
+
+    Phase 7a, the engine, implemented on 2026-11-23 (`src/sketches.jl`, `Sketched` in
+    `src/specs.jl`, `test/sketches.jl`). What it implements, and what differs from §5.14:
+    - A sketched project keeps the state of a quantized one (`QuantState`, the file
+      `dense_codes.mmapdb`, the fitting at the first `index!`, `keep_vectors`), with a
+      `SketchEncoder` in place of an `SQEncoder`. `isquantized(engine)` is true for both, and
+      `issketched(engine)` for a sketched one. `fit_quantizer!` fits either encoder.
+    - The encoder saves only the anchors that its hyperplanes use, not the fitting sample that
+      `AnchoredDistantHyperplanes` keeps. A fitting that keeps fewer hyperplanes than asked
+      raises `InvalidOption`, which names `hsel` and `entquantile`.
+    - The second evaluation applies to `search`, `search` with a partition, `searchbatch` and
+      the `search` of a view of a partition follower. It reads the kept vectors as
+      `fetch_items` does, outside the lock of the engine, as an `append_items!` writes them.
+    - Before the encoder exists, `search` of a sketched project raises `NotTrained`; a quantized
+      project answers with no results.
+    - `AnchoredDistantHyperplanes` and `QuantSketch` draw their samples from the default random
+      generator of Julia, so the `rng` of `fit_quantizer!` selects only the rows of the sample,
+      and two fittings of the same data can select other anchors.
+    - Distances between sketches tie often at 1 and 2 bits. A graph reopened from disk can
+      order tied results differently, because it visits the neighbors of a vertex in another
+      order; the distances are the same. The test compares distances for a graph.
+    - The measurements of item 7 of §5.14, taken on 2026-11-23 on SISAP 2025 `ccnews` (dev):
+      603,664 vectors of dimension 384, `NormCosine`, the first 1,000 `otest` queries, the gold
+      top 10 of the file, 32 threads of geoint0. Recall@10 without the second evaluation:
+
+      | bytes per vector | `AnchoredDistantHyperplanes` | Gaussian projection | random rotation | PCA |
+      |---|---|---|---|---|
+      | 64 (2 bits × 256) | 0.388 | 0.500 | 0.580 | 0.579 |
+      | 128 (4 bits × 256) | 0.430 | 0.571 | 0.714 | 0.805 |
+      | 256 (8 bits × 256) | 0.432 | 0.583 | 0.734 | 0.929 |
+      | 384 (8 bits × 384) | 0.456 | 0.652 | 0.988 | 0.951 |
+
+      The hyperplanes used the provisional options in this table (`hsel=16m`, `henc=4096`,
+      `entquantile=0.9`). The rotations are `QuantSketch` over `RandomProjections`: a random
+      orthogonal matrix (QR of a matrix of normal values), and PCA fitted on the sample. At the
+      same memory, the hyperplanes gave the lowest recall at every width. Through the engine,
+      `Quantized(SQ(8))` (384 bytes) gave 0.988 and `Quantized(SQ(4))` (192 bytes) 0.909. The
+      user decided on 2026-11-23 that hyperplane sketches are not the quantization for the
+      vectors of language models; `Sketched` gets defaults that are good and scale, without more
+      tuning.
+    - Options of the fitting, at 8 bits × 256 and 1 bit × 1,024: `henc` (1,024 to 8,192) and
+      `samplesize` (4,096 to 65,536) changed recall@10 by less than 0.015. `entquantile=0.5`
+      raised it by 0.061 and 0.075 at the same cost. `hsel=64m` raised it by 0.055 and 0.062,
+      with a fitting 2.4 and 5 times as long. The defaults are now `hsel=16hyperplanes`, `henc=1024` and
+      `entquantile=0.5`; over 3 seeds, recall@10 was 0.483 to 0.493 at 8 bits × 256, and the
+      fitting took 0.1 s at 256 hyperplanes, 0.8 s at 1,024, 2.6 to 3.9 s at 2,048 and 8.2 to
+      11.9 s at 4,096. The fitting does not depend on the size of the collection.
+      `Sketched` checks that `hsel * (1 - entquantile) >= hyperplanes` when it is created.
+      SimilaritySearch issue #153 (2026-11-23) proposes the same defaults for
+      `AnchoredDistantHyperplanes`: its defaults (`hsel=1024m`, `henc=8192`, `entquantile=0.9`)
+      gave 0.03 to 0.04 more recall@10 with a fitting 100 to 140 times as long (10 s at 256
+      hyperplanes, 41 s at 1,024).
+    - The engine with the defaults: `index!` of the 603,664 vectors took 5 s, recall@10 was
+      0.490, and `rerank=4` (with `keep_vectors=true`) gave 0.734. Before that, `index!` took 55
+      to 66 s for a sketched project and 5 to 7 s for a quantized one: `_fit_quantizer!` built
+      its sample with `reduce(hcat, generator)`, which copies the matrix at each column. The
+      sample is now filled column by column, and a quantized `index!` takes 2 to 3 s.
+    - Not done yet: 7b (the server and the clients), 7c (the documentation).
 
     The order of the queue, set on 2026-11-23: phase 6b of issue #5; then binary sketches; then
     the decisions after phase 5 of issue #5 (§5.12, "Decided after phase 5": the event
@@ -2118,6 +2176,137 @@ phase.
 - **Clients.** The Julia client has `plugins(conn) -> Vector{Dict{String,Any}}`, and
   `create_follower` sends a `Dict` given as `kind` or `source` as it is. The Python client has
   `list_plugins()`; it was checked on 2026-11-23 against a server started with the test plugin.
+
+### 5.14. Sketched Dense Projects (design, 2026-11-23)
+
+Status: designed on 2026-11-23, item 16 of §0. Issue #1 listed binary sketches under "Later,
+not required for a first version"; on 2026-11-23 they became required. This section designs
+them in the engine and in the server. It also covers the part of issue #1 that the server does
+not have yet, scalar quantization on the wire, because both are a storage of a dense project.
+
+#### What exists
+
+- **In the engine.** A dense project has a storage: `Float32Vectors()` or
+  `Quantized(SQ(bits); rotation, keep_vectors)` (issue #1, commit 1dc5e62, 2026-11-20). A
+  quantized project stages the `Float32` vectors at `append_items!`; the first `index!` fits
+  the encoder on a sample, and every `index!` encodes the staged vectors and inserts the codes
+  into the index of the project (`Graph` or `Exhaustive`), built over the codes. The codes are
+  a memory-mapped file. `prepare_query` encodes the query. `keep_vectors=false` removes the
+  `Float32` vectors once they are encoded.
+- **In SimilaritySearch.**
+  - `AnchoredDistantHyperplanes(dist, X, m)` selects `m` hyperplanes, each a pair of anchor
+    objects of `X`, by the entropy and the diversity of the sides they give to a sample. An
+    object is on one side of a hyperplane `(a, b)` when it is closer to `a` than to `b` under
+    `dist`, so the model works with any distance. A reference object orients every pair, so
+    that plain Hamming distance compares the hyperplanes. `m` is a multiple of 64.
+  - `QuantSketch(model, bits, X)` encodes the signed margin of an object against each
+    hyperplane, `d(obj, b) - d(obj, a)`, divided by the width `d(a, b)`, at `bits` = 1, 2, 4
+    or 8 bits per hyperplane. At 1 bit it is the sign, packed in `UInt64` words and compared
+    with the Hamming distance. At 2, 4 and 8 bits the codes share one global range, fitted on
+    a sample, and are compared with the squared Euclidean distance of `SQgu2`, `SQgu4` and
+    `SQgu8`, evaluated on the codes. A sketch takes `m * bits / 8` bytes.
+  - `SketchedSearch` is the pipeline with a second evaluation of `factor * k` candidates with
+    the original distance and vectors. It is fitted once and does not grow.
+- **In the server.** `POST /api/v1/datasets` has no field for the storage, so a dataset of the
+  server stores `Float32` vectors. The nested specification of a dataset over HTTP is the open
+  part of issue #2.
+
+#### Decisions (2026-11-23)
+
+1. **One model: `AnchoredDistantHyperplanes`.** Projections with signs (SimHash),
+   `DistantHyperplanes`, `RandomHyperplanes` and RaBitQ are not part of this work.
+2. **Multibit sketches are part of it,** 1, 2, 4 and 8 bits per hyperplane. At 8 bits a sketch
+   is precise enough that a second evaluation with the original vectors adds little.
+3. **The second evaluation (rerank) is optional, and off by default.** The purpose is the
+   reduction of memory: the common use keeps only the sketches.
+4. **Rotation and centering are off by default, and documented.** The embeddings of language
+   models seldom need them. The manual says what each one changes, so that the user decides
+   with that information. `Quantized` already has `rotation=NoRotation()` by default.
+5. **`QuantSketch` is part of this work** (decision 2), and RaBitQ is not.
+
+#### Proposal
+
+1. **A storage `Sketched` of `DenseVectors`, next to `Quantized`.**
+
+   ```julia
+   DenseVectors(Dist.L2(); index=Exhaustive(),
+                storage=Sketched(256; bits=8, rerank=0, keep_vectors=false))
+   ```
+
+   - `hyperplanes`: the number of hyperplanes `m`, a multiple of 64.
+   - `bits`: 1, 2, 4 or 8 bits per hyperplane. A sketch takes `m * bits / 8` bytes: 1024 at 1
+     bit, 512 at 2, 256 at 4 and 128 at 8 all take 128 bytes, against 4,096 bytes for a
+     `Float32` vector of dimension 1024.
+   - `rerank`: `0`, or the number of candidates, as a multiple of `k`, that a second
+     evaluation scores with the distance of the project and the `Float32` vectors. A value
+     above 0 needs `keep_vectors=true`.
+   - `keep_vectors`: keep the `Float32` vectors on disk, as in `Quantized`. With `false`, they
+     are removed once they are encoded.
+   - `center`: subtract the mean of the fitting sample from every vector and every query,
+     `false` by default. The hyperplanes depend only on distances, so centering changes
+     nothing under the L2 family, which does not change when every vector moves by the same
+     amount; under the cosine family it changes the angles. A rotation changes neither, so
+     `Sketched` has no rotation.
+   - The options of the fitting, with their own defaults (see item 3).
+2. **The distance of the results.** Without a second evaluation, a result has the distance
+   between sketches: the number of different bits at 1 bit, the squared Euclidean distance
+   between codes at 2, 4 and 8 bits. It orders the results, and it is not the distance of the
+   project. With `rerank > 0`, a result has the distance of the project.
+3. **Fitting and growth, as in `Quantized`.** `append_items!` stages; the first `index!` fits
+   the hyperplanes and, above 1 bit, the range, on a sample of the staged vectors; every later
+   `index!` encodes with the same encoder. The project saves the `2m` anchor vectors, the
+   pairs, the widths and the range, not the sample. `rebuild` fits the encoder again. Fitting
+   evaluates `hsel` candidate pairs on `henc` sample objects, `2 * hsel * henc` distances; the
+   defaults of SimilaritySearch (`hsel = 1024 m`, `henc = 8192`) give 4.3 × 10⁹ distances for
+   `m = 256`, too many for an `index!`. The engine takes smaller defaults, fixed by the
+   measurements of item 7. `henc` must be a multiple of 64 and smaller than the sample, so the
+   encoder needs more than 64 staged items: before that, `index!` keeps the items staged, and a
+   search raises `NotTrained`.
+4. **Encoding a vector or a query costs `2m` distances** to the anchors, then the
+   quantization. The index over the sketches is the index of the spec: `Exhaustive()` scans
+   them; `Graph()` builds a graph under the distance between sketches.
+5. **`sketch_info(h)`,** as `quantizer_info(h)`: `m`, `bits`, `rerank`, whether it is fitted,
+   the options of the fitting, and the bytes per vector in memory and on disk. Partitions and
+   partition followers of a sketched project work as with a quantized one.
+6. **The server exposes the storage of a dense dataset,** quantized and sketched, with wire
+   names validated as `index_type`:
+
+   ```json
+   {"id": "papers", "index_type": "exhaustive_search", "distance": "L2",
+    "storage": {"kind": "sketched", "hyperplanes": 256, "bits": 8}}
+
+   {"id": "papers_q", "index_type": "searchgraph",
+    "storage": {"kind": "quantized", "bits": 8, "range": "global", "rotation": "qr"}}
+   ```
+
+   `GET /api/v1/datasets/{id}` reports the storage and the information of the encoder. A
+   search sends a `Float32` vector, as before. The command line has `build --storage JSON`,
+   and the clients a `storage` argument of `create_project`.
+7. **Measurements before the defaults are fixed.** For `bits` = 1, 2, 4 and 8 at the same
+   memory, and for the options of the fitting: the overlap with the exact top 10, the time to
+   fit, the time per query and the memory in use, on the collections of issue #1. Taken on
+   2026-11-23 on SISAP 2025 `ccnews`; the results are in item 16 of §0.
+
+#### Phases
+
+7a. The engine: `Sketched`, fitting, persistence, search with and without the second
+    evaluation, `sketch_info`, tests, and the measurements of item 7.
+7b. The server: `storage` for quantized and sketched datasets, the descriptor, `build
+    --storage`, and the clients.
+7c. The manual, the tutorial, and this section with what differs.
+
+#### Tests
+
+- A sketched project round-trips: create, append, index, close, reopen, search, with the same
+  results before and after reopening, at each value of `bits`.
+- Its results equal those of an `ExhaustiveSearch` over `quantsketch` codes built with the
+  saved encoder, for `Exhaustive()` and `rerank=0`.
+- With `rerank > 0`, the results have the distance of the project.
+- A test reports the overlap with the exact top 10 on the same data, next to the exact answer.
+- A sketched project grows: items appended after the first `index!` are encoded with the saved
+  encoder and found.
+- The server creates a quantized and a sketched dataset, and `dump`, `load` and `rebuild` keep
+  their storage.
 
 ## 6. Hybrid Search Readiness (Suggestions & Specifications)
 

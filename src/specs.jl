@@ -7,7 +7,7 @@
 
 export ProjectSpec, DenseVectors, SparseVectors, TextDocuments
 export DenseIndex, Graph, Exhaustive, TextIndex, BM25, VectorSpace
-export DenseStorage, Float32Vectors, Quantized, SQ, QuantRange, GlobalRange, PerVectorRange
+export DenseStorage, Float32Vectors, Quantized, SQ, QuantRange, GlobalRange, PerVectorRange, Sketched
 export Rotation, NoRotation, QRRotation, HadamardRotation
 
 """
@@ -70,8 +70,8 @@ Exhaustive(; parallel::Bool=false) = Exhaustive(parallel)
 """
     DenseStorage
 
-How a [`DenseVectors`](@ref) project stores its vectors: [`Float32Vectors`](@ref) or
-[`Quantized`](@ref).
+How a [`DenseVectors`](@ref) project stores its vectors: [`Float32Vectors`](@ref),
+[`Quantized`](@ref) or [`Sketched`](@ref).
 """
 abstract type DenseStorage end
 
@@ -211,6 +211,99 @@ end
 Quantized(quantizer::SQ=SQ(); rotation::Rotation=NoRotation(), keep_vectors::Bool=false) =
     Quantized(quantizer, rotation, keep_vectors)
 
+"""
+    Sketched(hyperplanes=256; bits=8, rerank=0, keep_vectors=false, center=false,
+             samplesize=16_384, hsel=16hyperplanes, henc=1024, entquantile=0.5,
+             anchorpolicy=:random)
+
+Each vector is stored as a sketch of `hyperplanes` components at `bits` bits each, instead of
+its `Float32` values (PLAN.md §5.14). The sketch is built by `SimilaritySearch.Projections`: an
+`AnchoredDistantHyperplanes` model selects `hyperplanes` pairs of anchor vectors, and a
+`QuantSketch` encodes the signed margin of a vector against each pair, `d(v, b) - d(v, a)`,
+divided by `d(a, b)`. The anchors are selected under the distance of the project, so any
+distance of SimilaritySearch works.
+
+A sketch takes `hyperplanes * bits / 8` bytes: 1024 hyperplanes at 1 bit, 512 at 2, 256 at 4
+and 128 at 8 all take 128 bytes, against 4,096 bytes for a `Float32` vector of dimension 1024.
+At 1 bit, sketches are compared with the Hamming distance; at 2, 4 and 8 bits, with the squared
+Euclidean distance between their codes.
+
+- `hyperplanes`: a multiple of 64.
+- `bits`: 1, 2, 4 or 8.
+- `rerank`: `0`, or the number of candidates, as a multiple of `k`, that a second evaluation
+  scores with the distance of the project and the `Float32` vectors. Without it, a result has
+  the distance between sketches, which orders the results and is not the distance of the
+  project. A value above 0 needs `keep_vectors=true`.
+- `keep_vectors`: keep the `Float32` vectors on disk. With `false`, they are removed once they
+  are encoded, which is the reduction of memory and disk that this storage exists for.
+- `center`: subtract the mean of the fitting sample from every vector and every query before
+  the distances are computed. The anchors depend only on distances, so centering changes
+  nothing under `L2` or `SqL2`, which do not change when every vector moves by the same amount;
+  under `Cosine` or `NormCosine` it changes the angles. Vectors of a language model seldom need
+  it. A rotation changes none of these distances, so this storage has no rotation.
+
+The first [`index!`](@ref) fits the encoder on a sample of at most `samplesize` staged vectors,
+and later ones encode with it. The fitting evaluates `hsel` candidate pairs on `henc` vectors of
+the sample, `2 * hsel * henc` distances, and keeps the `hyperplanes` most diverse of the pairs
+whose sides have an entropy above the `entquantile` quantile. About `hsel * (1 - entquantile)`
+pairs pass that cutoff, and they must be at least `hyperplanes`. `henc` is a multiple of 64, and
+it is lowered to the largest multiple of 64 below the size of the sample, so the encoder needs
+more than 64 staged vectors. `anchorpolicy` (`:random` or `:extremal`) selects the vector that
+orients the pairs.
+
+Measured on 2026-11-23 on SISAP 2025 `ccnews` (603,664 vectors of dimension 384, `NormCosine`,
+1,000 queries, 32 threads). With the defaults, a sketch takes 256 bytes, the fitting took 0.1 s,
+and recall@10 was 0.49; with `rerank=4` it was 0.73. With 2,048 hyperplanes at 1 bit, also 256
+bytes, the fitting took 2.6 to 3.9 s and recall@10 was 0.56. On the same data, `Quantized(SQ(8))`
+takes 384 bytes per vector and gave 0.989, and `Quantized(SQ(4))` takes 192 bytes and gave 0.901.
+For the vectors of a language model, use [`Quantized`](@ref). A sketched project works with any
+`SemiMetric` distance, which a scalar quantizer does not.
+"""
+struct Sketched <: DenseStorage
+    hyperplanes::Int
+    bits::Int
+    rerank::Int
+    keep_vectors::Bool
+    center::Bool
+    samplesize::Int
+    hsel::Int
+    henc::Int
+    entquantile::Float64
+    anchorpolicy::Symbol
+
+    function Sketched(hyperplanes::Integer, bits::Integer, rerank::Integer, keep_vectors::Bool, center::Bool,
+                      samplesize::Integer, hsel::Integer, henc::Integer, entquantile::Real, anchorpolicy::Symbol)
+        hyperplanes >= 64 && hyperplanes % 64 == 0 ||
+            invalid_option(:sketch, "`hyperplanes` must be a positive multiple of 64; got $hyperplanes")
+        bits in (1, 2, 4, 8) || invalid_option(:sketch, "a sketch has 1, 2, 4 or 8 bits per hyperplane; got $bits")
+        rerank >= 0 || invalid_option(:sketch, "`rerank` must be 0 or a positive number of candidates per result; got $rerank")
+        rerank == 0 || keep_vectors || invalid_option(:sketch,
+            "`rerank` = $rerank evaluates the candidates with the Float32 vectors, which `keep_vectors=false` removes; " *
+            "pass keep_vectors=true, or rerank=0")
+        henc >= 64 && henc % 64 == 0 || invalid_option(:sketch, "`henc` must be a positive multiple of 64; got $henc")
+        hsel >= hyperplanes || invalid_option(:sketch, "`hsel` ($hsel) must be at least `hyperplanes` ($hyperplanes)")
+        samplesize > 64 || invalid_option(:sketch, "`samplesize` must be above 64; got $samplesize")
+        0 < entquantile < 1 || invalid_option(:sketch, "`entquantile` must be between 0 and 1; got $entquantile")
+        # The fitting keeps the candidate pairs above the `entquantile` quantile of the entropies,
+        # about `hsel * (1 - entquantile)` of them, and selects the hyperplanes among those. The
+        # product is rounded: 1280 * (1 - 0.9) is 127.99999999999997 in Float64.
+        kept = round(hsel * (1 - entquantile); digits=6)
+        kept >= hyperplanes || invalid_option(:sketch,
+            "`hsel` ($hsel) keeps about $(floor(Int, kept)) candidate pairs above the `entquantile` " *
+            "($entquantile) quantile, fewer than `hyperplanes` ($hyperplanes); raise `hsel` to at least " *
+            "$(ceil(Int, hyperplanes / (1 - entquantile))) or lower `entquantile`")
+        anchorpolicy in (:random, :extremal) ||
+            invalid_option(:sketch, "`anchorpolicy` must be :random or :extremal; got $(repr(anchorpolicy))")
+        new(Int(hyperplanes), Int(bits), Int(rerank), keep_vectors, center, Int(samplesize), Int(hsel), Int(henc),
+            Float64(entquantile), anchorpolicy)
+    end
+end
+
+Sketched(hyperplanes::Integer=256; bits::Integer=8, rerank::Integer=0, keep_vectors::Bool=false, center::Bool=false,
+         samplesize::Integer=16_384, hsel::Integer=16hyperplanes, henc::Integer=1024, entquantile::Real=0.5,
+         anchorpolicy::Symbol=:random) =
+    Sketched(hyperplanes, bits, rerank, keep_vectors, center, samplesize, hsel, henc, entquantile, anchorpolicy)
+
 # ---------------------------------------------------------------------------------------
 # What a project holds
 
@@ -232,6 +325,8 @@ struct DenseVectors{I<:DenseIndex,S<:DenseStorage} <: ProjectSpec
 
     function DenseVectors(distance::SimilaritySearch.PreMetric, index::I, storage::S) where {I<:DenseIndex,S<:DenseStorage}
         storage isa Quantized && quantized_distance(distance)
+        storage isa Sketched && (distance isa SimilaritySearch.SemiMetric || invalid_option(:sketch,
+            "a sketched project selects its anchors with a SemiMetric distance; $(nameof(typeof(distance))) is not one"))
         new{I,S}(distance, index, storage)
     end
 end
@@ -328,7 +423,8 @@ backend_symbol(::SparseVectors) = :inverted_file
 backend_symbol(::TextDocuments{BM25}) = :bm25
 backend_symbol(::TextDocuments{VectorSpace}) = :text_inverted_file
 
-isquantized(s::ProjectSpec) = s isa DenseVectors && s.storage isa Quantized
+# A project whose vectors are stored as codes: `Quantized` or `Sketched`.
+isquantized(s::ProjectSpec) = s isa DenseVectors && (s.storage isa Quantized || s.storage isa Sketched)
 
 text_distance(s::TextDocuments{BM25}) = nothing
 text_distance(s::TextDocuments{VectorSpace}) = s.index.distance
@@ -367,6 +463,10 @@ function _dict(q::Quantized)
         "rotation" => _rotation_name(q.rotation),
         "keep_vectors" => q.keep_vectors))
 end
+_dict(s::Sketched) = Dict{String,Any}("sketched" => Dict{String,Any}(
+    "hyperplanes" => s.hyperplanes, "bits" => s.bits, "rerank" => s.rerank, "keep_vectors" => s.keep_vectors,
+    "center" => s.center, "samplesize" => s.samplesize, "hsel" => s.hsel, "henc" => s.henc,
+    "entquantile" => s.entquantile, "anchorpolicy" => String(s.anchorpolicy)))
 _dict(::BM25) = Dict{String,Any}("bm25" => Dict{String,Any}())
 _dict(v::VectorSpace) = Dict{String,Any}("vector_space" => Dict{String,Any}("distance" => v.distance))
 _dict(m::DefaultProfile) = Dict{String,Any}("default_profile" => Dict{String,Any}(
@@ -423,7 +523,9 @@ end
 function _dense_storage(d::AbstractDict)
     k, v = _only(d, "dense storage")
     k == "float32" && return Float32Vectors()
-    k == "quantized" || corrupted_storage("unknown dense storage $(repr(k)) in the saved spec; expected float32 or quantized")
+    k == "sketched" && return Sketched(v["hyperplanes"], v["bits"], v["rerank"], v["keep_vectors"], v["center"],
+                                       v["samplesize"], v["hsel"], v["henc"], v["entquantile"], Symbol(v["anchorpolicy"]))
+    k == "quantized" || corrupted_storage("unknown dense storage $(repr(k)) in the saved spec; expected float32, quantized or sketched")
     range = v["range"] == "global" ? GlobalRange(v["minmax"] === nothing ? nothing : Tuple(v["minmax"]), v["samplesize"]) :
             PerVectorRange(v["samplesize"])
     rot = v["rotation"]

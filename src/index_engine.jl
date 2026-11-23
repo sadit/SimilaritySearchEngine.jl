@@ -569,6 +569,7 @@ include("specs.jl")
 # The quantizer of a dense project (issue #1): its types, and the functions that fit it, encode
 # with it and install an index over its codes. Included before `DenseEngine`, which holds one.
 include("quantization.jl")
+include("sketches.jl")
 
 """
     persist_block!(adj, base::Int, docvecs, postings::Dict{UInt32,Vector{UInt32}})
@@ -672,8 +673,9 @@ being defined-but-inert on the other.
 - `lock::ReadWriteLock`: see its docstring for why a reader/writer lock and not a mutex.
 - `partitions::Union{Nothing,DensePartitions}`: the partitions of the project (PLAN.md §5.10),
   or `nothing` when it declares no partition field.
-- `quant::Union{Nothing,QuantState}`: the quantizer of the project (issue #1), or `nothing` for
-  a project of `Float32` vectors. See [`Quantized`](@ref).
+- `quant::Union{Nothing,QuantState}`: the codes of the project, quantized (issue #1) or sketched
+  (PLAN.md §5.14), or `nothing` for a project of `Float32` vectors. See [`Quantized`](@ref) and
+  [`Sketched`](@ref).
 """
 mutable struct DenseEngine{B} <: AbstractSearchEngine
     backend::B
@@ -683,8 +685,8 @@ mutable struct DenseEngine{B} <: AbstractSearchEngine
     # The partitions of the project (PLAN.md §5.10), or `nothing` when it declares no partition
     # field. Set by `enable_partitions!`.
     partitions::Union{Nothing,DensePartitions}
-    # The quantizer of the project (issue #1), or `nothing` for a project of `Float32` vectors.
-    # Set by `enable_quantization!`.
+    # The codes of the project, quantized (issue #1) or sketched (PLAN.md §5.14), or `nothing`
+    # for a project of `Float32` vectors. Set by `enable_quantization!`.
     quant::Union{Nothing,QuantState}
 end
 
@@ -694,7 +696,9 @@ DenseEngine(backend::B, search_ctx_pool::ContextPool, deleted_ids::Set{UInt32}, 
 """
     isquantized(engine) -> Bool
 
-Whether `engine` is a dense engine that stores the codes of a scalar quantizer (issue #1).
+Whether `engine` is a dense engine that stores codes instead of `Float32` vectors: the codes of
+a scalar quantizer (issue #1) or sketches (PLAN.md §5.14, see `issketched`). Both stage the
+vectors at `append_items!` and encode them at `index!`.
 """
 isquantized(engine::AbstractSearchEngine) = engine isa DenseEngine && engine.quant !== nothing
 
@@ -1271,7 +1275,7 @@ encoder until the first `index!` (see [`enable_quantization!`](@ref)).
 function create_engine(spec::DenseVectors; on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO},
                        maxbatches::Union{Nothing,Integer}, adj_factory::Union{Nothing,Function}, edit_correction::Bool)
     engine = _create_dense_engine(spec.index, index_type(spec), spec.distance, on_change, log_io, maxbatches)
-    spec.storage isa Quantized && (engine = enable_quantization!(engine, spec.storage, spec.distance))
+    isquantized(spec) && (engine = enable_quantization!(engine, spec.storage, spec.distance))
     return engine
 end
 

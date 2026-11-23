@@ -197,9 +197,14 @@ function search(v::FollowerView, vector, k::Int=10; filter=nothing, minrecall=no
     engine isa IndexEngine.DenseEngine || invalid_option(:query,
         "search takes a vector; the leader '", leader.dataset, "' holds text, so search its partitions with ftsearch")
     query = _search_query(engine, vector)
-    n = filter === nothing ? k : max(candidates, k)
+    # A sketched leader with a second evaluation scores `rerank * k` candidates again with its
+    # own distance, as its `search` does (PLAN.md §5.14).
+    r = _rerank_factor(engine)
+    kk = r == 0 ? k : r * k
+    n = filter === nothing ? kk : max(candidates, kk)
     raw = IndexEngine.search_partition_live(engine, st.dense, number, query, n, minrecall)
-    res = filter === nothing ? raw : _filter_hits(leader.project, raw, k, filter)
+    res = filter === nothing ? raw : _filter_hits(leader.project, raw, kk, filter)
+    r == 0 || (res = _rerank(leader, vector, res, k))
     _record_stats!(stats, res)
     return _hydrate_results(leader.project, res)
 end
