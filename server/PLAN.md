@@ -584,8 +584,16 @@ of it exist.
 
     The order of the queue, set on 2026-11-23: phase 6b of issue #5; then binary sketches; then
     the decisions after phase 5 of issue #5 (§5.12, "Decided after phase 5": the event
-    dispatcher in place of the policies). Scalar quantization in the server (issue #1) is
-    pending and not ordered yet.
+    dispatcher in place of the policies). Scalar quantization in the server (issue #1), pending
+    when the queue was set, was done in phase 7b with the sketches.
+
+17. **Events of a project** — the event dispatcher of decision 1 of "Decided after phase 5"
+    (§5.12), next in the queue after the sketches. Designed on 2026-11-23 in §5.15: one event
+    per call of the engine that changes the leader, with the range of the `_id`s it affects,
+    and the followers as observers of those events. The user decided the six questions on
+    2026-11-23 (§5.15, "Decided"): `ItemsIndexed` only, errors of observers do not fail the
+    leader, `OnWrite` stays as a name of `OnIndex`, `Periodic(items)` is processed in
+    `on_event`, and the API is public. Next: phase 8a, the engine.
 
 The stemmer registry of §5.3 and §9's phase 5 is not on this list: it was discarded. Stemming
 was the way this specification proposed to make a query match a word it does not equal. That
@@ -2377,6 +2385,174 @@ each phase implements and the measurements. What differs from this design:
 - Item 5's `sketch_info(h)` reports the storage, whether the encoder is fitted, the dimension,
   the range, and the bytes per vector in memory and on disk. The options of the fitting are in
   the storage that it reports.
+
+### 5.15. Events of a Project (design, 2026-11-23)
+
+Status: proposed on 2026-11-23, item 17 of §0; the decisions are in "Decided (2026-11-23)". Decision 1 of "Decided
+after phase 5" (§5.12) asks for an event dispatcher in place of the policies of the followers,
+like the two logs of SimilaritySearch, and leaves open what an event is, so that the dispatch
+consumes few resources. This section proposes an answer and lists the decisions it needs.
+
+#### What exists
+
+- **In SimilaritySearch.** A context has two lists of logs. `ctx.reporters` receive `INFORM`:
+  messages for a person, throttled, whose text is built only when a reporter prints it.
+  `ctx.observers` receive `OBSERVE(ctx, event, index, sp, ep)`: structural events, with a
+  contract. There is one event, `:add!`: the ids `sp:ep` were added to the index. The function
+  that adds them emits it once per call, never once per item. Ids are assigned in increasing
+  order and never removed, so the stream of `:add!` events tells a consumer which ids exist.
+  Observers run in the calling task, and their errors propagate, because the observers of an
+  index persist it. The engine uses one, a `CallbackLog` that saves the adjacency lists of a
+  graph as they are added.
+- **In the engine.** A follower has a `SyncPolicy`. `append_items!` ends with
+  `_sync_followers!(h, OnWrite)`, and `index!` with `_sync_followers!(h, OnIndex)`: each calls
+  `sync!` on the open followers with that policy, in the calling task. `sync!` processes the
+  items from the position of the follower to `indexed_length` of the leader, in blocks, and
+  saves the position after each block. `Manual` is processed only by `sync!`. The engine treats
+  `Periodic` as `Manual`. The server processes it with a task that checks, every
+  `check_seconds`, whether the period has passed or the lag has reached `items`.
+- **Errors.** A follower that fails stays at its position, writes the error to the log, and
+  holds it in `error` (decision 2 of §5.12). `_sync_followers!` tries every follower and raises
+  the first error afterwards, so `append_items!` or `index!` raises it after the leader saved
+  its items. In the server, `append` answers that error, `400 PayloadMismatch` for example, for
+  items that were stored. A client that sends the request again stores them twice.
+- **`OnWrite` and `OnIndex` do the same work.** A follower processes indexed items only. At
+  `append_items!`, a leader that stages its items (a graph, a text dataset, a quantized
+  dataset) has no new indexed items, and an exact or sparse leader indexes them in
+  `append_items!`. In the server, `append` calls `index!` right after `append_items!`, so the
+  two policies process the same items in the same request.
+
+#### What an event is
+
+Proposal: an event is a change of the leader that a consumer can need to act on. The engine
+reports it once per call that makes the change, after the change is saved. It carries the `_id`s
+it affects, as a range when they are consecutive, and nothing else: no items, no payloads, no
+metadata. A consumer that needs an item reads it by its `_id`, as `sync!` does. Three kinds,
+named by what happened and not by the function that was called:
+
+| event | emitted by | carries |
+| :--- | :--- | :--- |
+| `ItemsIndexed(sp, ep)` | `index!`, and `append_items!` of a leader that indexes on insertion (exact dense, sparse) | the `_id`s that became searchable |
+| `ItemsStaged(sp, ep)` | `append_items!` of a leader that stages its items | the `_id`s that are saved and not searchable yet |
+| `ItemsDeleted(ids)` | `delete_item!` | the `_id`s marked as deleted |
+
+Each `_id` is reported at most once in each kind, as in the rule of `OBSERVE`: the function that
+makes the change emits it, and a function that calls it does not emit it again. `rebuild` emits
+nothing: it creates a new project with a new generation, and a follower of the old one is stale
+(§5.12).
+
+The dispatch consumes few resources for these reasons:
+- One event per call, whatever the number of items: an `append` of 10,000 items is one event.
+- An event holds two integers, or the vector of `_id`s that `delete_item!` already received.
+- With no observer, the cost is one check of an empty list per call.
+- The work is done by the consumer, and the consumer decides when to do it (see below).
+
+Events are not a durable queue. A consumer with state, such as a follower, saves its own
+position. When it opens, it processes what the leader indexed after that position. An event
+lost when the process stops is therefore not a lost item: the event says that there is something
+new, and the position says what.
+
+#### Observers of a project
+
+```julia
+abstract type ProjectObserver end
+on_event(o::ProjectObserver, leader::EmbeddedEngine, e::ProjectEvent) = nothing   # ignores the event
+observe!(h::EmbeddedEngine, o::ProjectObserver) -> o
+unobserve!(h::EmbeddedEngine, o::ProjectObserver) -> h
+observers(h::EmbeddedEngine) -> Vector{ProjectObserver}
+```
+
+- An observer adds methods of `on_event` for the kinds it needs. The type of the event selects
+  the method.
+- `on_event` runs in the task that called the engine, after the leader saved its change and
+  released its write lock, in the order in which the observers were added.
+- An error of an observer does not fail the call of the leader, whose change is saved. The
+  engine writes the error to the log with `@error`, with the observer and the event, and keeps
+  it for the status of the observer. This replaces the rethrow of `_sync_followers!`, and an
+  `append` of the server answers `200` for the items it stored.
+- An observer with slow work does not do it in `on_event`. It records what is pending, and
+  another task does the work. The task of the server waits on a `Channel`, for example.
+- The information log does not change: Julia's `Logging` (`@info`, `@error`) for the engine and
+  the server, and the reporters of SimilaritySearch for the progress of an index. This design
+  adds only the second channel, the events.
+
+#### Followers as observers
+
+An open follower is an observer of its leader. `create_follower` and `open_follower` add it,
+and `close_follower!` removes it. Its policy says what it does with an `ItemsIndexed`:
+
+| policy | on `ItemsIndexed(sp, ep)` |
+| :--- | :--- |
+| `OnIndex()`, the default | `sync!` in `on_event` |
+| `Periodic(items=n)` | when its lag reaches `n`, it signals the task that processes it |
+| `Periodic(seconds=s)` | nothing: the task of the server processes it every `s` seconds, as now |
+| `Manual()` | nothing |
+| `OnWrite()` | the same as `OnIndex()` (decision 4) |
+
+The task of the server no longer reads the lag of every periodic follower every
+`check_seconds` to find the ones that reached `items`: the event says which one did.
+
+#### Other consumers
+
+Each is a separate decision, and none needs a change in the engine once the events exist:
+- counters of the items staged, indexed and deleted in each dataset, for the telemetry, without
+  reading the operation log;
+- the invalidation of the cursors of a dataset (§5.4) when it changes;
+- a notification from the server to another system;
+- a kind of observer added by a plugin (§5.13), as a plugin adds kinds of follower.
+
+#### Decisions
+
+1. **Granularity.** One event per call of the engine, with its range of `_id`s (proposed). The
+   alternatives are one event per block of `FOLLOWER_SYNC_BLOCK` items, or one per item.
+2. **Kinds of the first version.** `ItemsIndexed` only, which is what followers need, or the
+   three.
+3. **Errors.** An error of an observer does not fail the call of the leader (proposed). Today it
+   does, and the server answers an error for items it stored.
+4. **`OnWrite`.** Removed, or kept as a second name of `OnIndex`. The wire name `on_write`
+   follows the same decision.
+5. **`Periodic(items=n)` without the server.** The engine has no task of its own. The follower
+   can process in `on_event` when its lag reaches `n`, or the engine can treat it as `Manual`,
+   as now.
+6. **Public API.** `observe!` public in the first version, so that a user of the engine adds
+   observers, or internal to the followers until a second consumer exists.
+
+#### Decided (2026-11-23)
+
+The user accepted the recommendations:
+
+1. One event per call of the engine, with its range of `_id`s.
+2. The first version has `ItemsIndexed` only. `ItemsStaged` and `ItemsDeleted` are added when a
+   consumer needs them.
+3. An error of an observer does not fail the call of the leader. It goes to the log and to the
+   status of the observer.
+4. `OnWrite` stays as a second name of `OnIndex`, so that the followers already created keep
+   working. The wire name `on_write` stays too.
+5. `Periodic(items=n)` is processed in `on_event` when the lag of the follower reaches `n`, in
+   the engine and in the server. The task of the server processes only `Periodic(seconds=s)`.
+6. `observe!`, `unobserve!`, `observers`, `on_event`, `ProjectObserver`, `ProjectEvent` and
+   `ItemsIndexed` are public from the first version, with no more than that.
+
+#### Phases
+
+8a. The engine: the events, `observe!`, the followers as observers, the rule for errors, and
+    the tests.
+8b. The server: the periodic task woken by the events, `append` with the rule for errors, and
+    the tests. The routes and the clients do not change.
+8c. The manual, the architecture page, and "As built".
+
+#### Tests
+
+- An `append_items!` of `n` items emits one event with the range of their `_id`s. An `index!`
+  emits one `ItemsIndexed` for the items it indexed. An exact leader emits `ItemsIndexed` in
+  `append_items!`.
+- Across appends, `index!` calls and a reopen, each `_id` is reported once in each kind.
+- A leader without observers emits no event.
+- A follower with `OnIndex` processes the items of each `ItemsIndexed`. An observer that fails
+  leaves the change of the leader saved, the call of the leader returns, and the error is in the
+  log and in the status.
+- A follower that was closed while its leader indexed items processes them when it opens.
+- `Periodic(items=n)` is processed when the lag reaches `n`, and not before.
 
 ## 6. Hybrid Search Readiness (Suggestions & Specifications)
 
