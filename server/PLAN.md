@@ -458,6 +458,20 @@ of it exist.
       then calls `run_serve` with `invokelatest`, so `serve` itself did not need it.
     - Not done yet: 6b (the command lines, the clients, the manual).
 
+16. **Binary sketches (`bitsketch`, Hamming distance)** — recorded as necessary on 2026-11-23,
+    in the queue after phase 6 of issue #5. Issue #1 lists them under "Later, not required for
+    a first version"; they are now required. A binary sketch is a projection of each dense
+    vector to a vector of bits (`SimilaritySearch.Projections.bitsketch`), searched with the
+    Hamming distance. The engine has scalar quantization since 2026-11-20 (commit 1dc5e62,
+    `Quantized(SQ(...))` in `DenseVectors`); it has no sketches, and the server exposes neither
+    quantization nor sketches. The scope (the engine, the server, reranking with the original
+    vectors) is designed before it is implemented.
+
+    The order of the queue, set on 2026-11-23: phase 6b of issue #5; then binary sketches; then
+    the decisions after phase 5 of issue #5 (§5.12, "Decided after phase 5": the event
+    dispatcher in place of the policies). Scalar quantization in the server (issue #1) is
+    pending and not ordered yet.
+
 The stemmer registry of §5.3 and §9's phase 5 is not on this list: it was discarded. Stemming
 was the way this specification proposed to make a query match a word it does not equal. That
 is now the work of the query pipeline of `TextSearch.jl`, which the engine exposes through the
