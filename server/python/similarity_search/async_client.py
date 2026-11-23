@@ -139,6 +139,9 @@ class AsyncSimilaritySearchClient:
     async def get_group(self, index):
         return await self._call(*p.get_group(index))
 
+    async def list_plugins(self):
+        return await self._call(*p.list_plugins())
+
     # --- jobs -------------------------------------------------------------------------
 
     async def submit_job(self, kind, command=None, **params):

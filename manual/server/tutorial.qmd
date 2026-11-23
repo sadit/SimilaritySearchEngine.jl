@@ -201,7 +201,58 @@ Each `append` to `demo` processes both followers before it answers.
 with followers cannot be deleted until its followers are deleted. The
 [server manual](manual.qmd#followers) describes the policies, the routes and the command lines.
 
-## Step 10: Require a token
+## Step 10: Add a key source with a plugin
+
+The keys of a follower come from `keywords`, `refs`, `doc_id` or a field of `meta`. A plugin
+adds other key sources. A plugin is a Julia module. This one makes the decade of the field
+`year` a key. Save it as `plugins/decades.jl`, in the directory of `config.toml`:
+
+```julia
+module Decades
+
+using SimilaritySearchEngine
+const SSE = SimilaritySearchEngine
+
+"The decade of an integer field of `meta`: 1987 is 1980s."
+struct Decade <: SSE.KeySource
+    field::String
+end
+
+function SSE.keys_of(s::Decade, item::SSE.StoredItem)
+    year = get(item.meta, s.field, nothing)
+    year isa Integer ? string(10 * fld(year, 10), "s") : nothing
+end
+
+const KEY_SOURCES = Dict{String,Function}("decade" => opts -> Decade(opts["field"]))
+
+end
+```
+
+Declare it in `config.toml`, then stop the server and start it again:
+
+```toml
+[plugins.Decades]
+path = "plugins/decades.jl"
+```
+
+The server loads the plugin before it opens the datasets, and `GET /api/v1/plugins` lists it.
+A request names the key source as `Decades.decade`, with its options in an object:
+
+```bash
+curl -s -X POST localhost:8080/api/v1/datasets/demo/followers \
+     -H 'Content-Type: application/json' \
+     -d '{"name": "by_decade", "kind": "partition",
+          "source": {"name": "Decades.decade", "field": "year"}}'
+
+curl -s localhost:8080/api/v1/datasets/demo/followers/by_decade/partitions
+```
+
+The only partition is `2020s`, with one item: `d2` has the year 2024, and `d1` and `d3` have no
+year, so they have no key. A plugin that cannot be loaded stops the start of the server, and
+the message names the plugin. The [server manual](manual.qmd#plugins) describes the plugins,
+their kinds of follower and the command lines.
+
+## Step 11: Require a token
 
 Everything above answered without credentials, which is the default. To require a token on
 every `/api/v1` endpoint, create the first token against the working directory and enable

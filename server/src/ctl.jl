@@ -77,6 +77,9 @@ function build_ctl_settings()
         "followers"
             help = "Show a dataset and the status of each of its followers (the group view)"
             action = :command
+        "plugins"
+            help = "List the plugins that the server loaded, with the wire names of their key sources and kinds"
+            action = :command
         "follower-create"
             help = "Create a follower of a dataset and process every indexed item"
             action = :command

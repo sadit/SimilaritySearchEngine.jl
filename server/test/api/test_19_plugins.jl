@@ -2,7 +2,7 @@ using Test
 using HTTP
 using JSON3
 
-# Plugins in the server (PLAN.md §5.13, issue #5, phase 6a). `ensure_test_server` loads the test
+# Plugins in the server (PLAN.md §5.13, issue #5, phases 6a and 6b). `ensure_test_server` loads the test
 # plugin of `server/test/plugins/`, as `serve` loads `[plugins]` before it opens any dataset.
 @testset "19. Plugins" begin
     with_test_server() do base_url, workdir
@@ -89,7 +89,18 @@ using JSON3
         @test HTTP.post("$base_url/admin/datasets/pl_txt/reload", [], "").status == 200
         @test get_("datasets/pl_txt/followers/decade").open
 
-        for name in ("decade", "counts")
+        # similarity-search-ctl lists the plugins, and creates a follower of a kind of a plugin.
+        port = string(HTTP.URI(base_url).port)
+        ctl(args...) = _run_ctl(String["--port", port, (string(a) for a in args)...])
+        code, out = ctl("plugins")
+        @test code == 0 && "SSETestPlugin.key_counts" in only(filter(p -> p.name == "SSETestPlugin", JSON3.read(out).plugins)).follower_kinds
+        code, out = ctl("follower-create", "--dataset", "pl_txt", "--name", "counts2", "--kind", "SSETestPlugin.key_counts",
+                        "--kind-options", "{\"min_count\": 3}", "--source", "keywords")
+        @test code == 0 && JSON3.read(out).kind == "KeyCounts"
+        code, out = ctl("follower-create", "--dataset", "pl_txt", "--name", "x", "--kind", "partition", "--source", "Nope.decade")
+        @test code == 1 && occursin("404", out) && occursin("PluginNotLoaded", out)
+
+        for name in ("decade", "counts", "counts2")
             @test HTTP.delete("$base_url/datasets/pl_txt/followers/$name").status == 200
         end
         @test HTTP.delete("$base_url/datasets/pl_txt").status == 200

@@ -101,8 +101,11 @@ permission.
 
 The keywords are the wire names of the server, not the spec types of the engine:
 
-- `kind`: `"partition"` or `"keyword"`.
-- `source`: `"keywords"`, `"refs"`, `"doc_id"`, or `"meta:<field>"`.
+- `kind`: `"partition"`, `"keyword"`, or `"Plugin.name"`, a kind of a plugin of the server. A
+  kind of a plugin with options is a `Dict`: `Dict("name" => "Plugin.name", "min_weight" => 2)`.
+- `source`: `"keywords"`, `"refs"`, `"doc_id"`, `"meta:<field>"`, or `"Plugin.name"`, a key source
+  of a plugin; with options, a `Dict` such as `Dict("name" => "Decades.decade", "field" => "year")`.
+  [`plugins`](@ref) lists the names that the server has.
 - `disjoint`: a partition follower only; `false` when an item can have several keys. The server
   takes `true` when it is `nothing`.
 - `graph_min`: a partition follower of a dense dataset only.
@@ -112,7 +115,7 @@ The keywords are the wire names of the server, not the spec types of the engine:
 """
 function create_follower(h::RemoteProject, name::AbstractString; kind, source, disjoint=nothing,
                          graph_min=nothing, distance=nothing, policy=nothing)
-    body = Dict{String,Any}("name" => String(name), "kind" => string(kind), "source" => string(source))
+    body = Dict{String,Any}("name" => String(name), "kind" => _wire_name(kind), "source" => _wire_name(source))
     for (key, value) in (("disjoint", disjoint), ("graph_min", graph_min), ("distance", distance))
         value === nothing || (body[key] = value isa Symbol ? string(value) : value)
     end
@@ -120,6 +123,20 @@ function create_follower(h::RemoteProject, name::AbstractString; kind, source, d
     request(h.conn, "POST", dataset_path(h.id, "/followers"); body)
     return RemoteFollower(h, String(name))
 end
+
+# A wire name, or an object with a name and the options of a plugin type, as it is sent.
+_wire_name(x::AbstractDict) = Dict{String,Any}(string(k) => v for (k, v) in x)
+_wire_name(x) = string(x)
+
+"""
+    plugins(conn::Connection) -> Vector{Dict{String,Any}}
+
+The plugins that the server loaded (`GET /api/v1/plugins`): for each one, `name`, `path` or
+`package`, and the wire names of its key sources (`key_sources`) and of its kinds of follower
+(`follower_kinds`). The engine has no counterpart: a plugin of an embedded engine is a module
+that the script registers.
+"""
+plugins(conn::Connection) = Dict{String,Any}[_plain(p) for p in request(conn, "GET", "/api/v1/plugins")[:plugins]]
 
 """
     open_follower(h::RemoteProject, name) -> Union{RemoteFollower, RemoteFollowerView}

@@ -60,6 +60,9 @@ cli_exit_code(e::SSE.EngineError) =
          e isa SSE.ConflictingState ? 5 :
          e isa SSE.InvalidRequest ? 2 : 70)
 
+"The `--config` file of the running command, named by the message of a plugin that is not loaded (PLAN.md §5.13)."
+const CLI_CONFIG = Ref{String}("config.toml")
+
 """
     @cli_engine_call expr
 
@@ -78,6 +81,8 @@ macro cli_engine_call(expr)
         catch e
             e isa SSE.EngineError || rethrow()
             println("Error: ", sprint(showerror, e))
+            e isa SSE.PluginNotLoaded && println("similarity-search loads the plugins of the [plugins] section of ",
+                "the file of --config: ", CLI_CONFIG[], isfile(CLI_CONFIG[]) ? "" : ", which does not exist")
             cli_exit_code(e)
         end
     end
@@ -889,6 +894,21 @@ with `Server.parse_follower_request`, and `similarity-search-ctl` sends it to th
 function follower_request(cmd_args::AbstractDict)
     d = Dict{String,Any}("name" => cmd_args["name"], "kind" => cmd_args["kind"], "source" => cmd_args["source"])
     kind = cmd_args["kind"]
+    # The options of a key source or of a kind of a plugin go in an object with its name
+    # (PLAN.md §5.13).
+    for (flag, field) in (("source-options", "source"), ("kind-options", "kind"))
+        text = get(cmd_args, flag, nothing)
+        text === nothing && continue
+        Server.is_plugin_name(d[field]) || return "--$flag applies to a $(field == "kind" ? "kind" : "key source") of a plugin, " *
+            "--$field Plugin.name; got --$field $(d[field])"
+        options = try
+            JSON3.read(codeunits(text), Dict{String,Any})
+        catch
+            return "--$flag must be a JSON object, such as '{\"field\": \"year\"}'; got $(repr(text))"
+        end
+        haskey(options, "name") && return "--$flag cannot hold 'name': the name is --$field"
+        d[field] = merge(Dict{String,Any}("name" => d[field]), options)
+    end
     if get(cmd_args, "non-disjoint", false)
         kind == "partition" || return "--non-disjoint applies to a partition follower"
         d["disjoint"] = false
@@ -1110,6 +1130,49 @@ function execute_postings(cmd_args::AbstractDict)
         end
         nothing
     end
+end
+
+# --- Plugins (PLAN.md §5.13, issue #5, phase 6b) ------------------------------------------
+
+"""
+    needs_plugins(cmd_name, cmd_args) -> Bool
+
+Whether the command opens a follower, whose spec or key source can belong to a plugin:
+`follower-create`, `follower-sync`, `follower-rebuild`, `rebuild --rebuild-followers`, and
+`searchbatch` and `postings` with `--follower`. Loading a plugin compiles its code, so the other
+commands do not load them.
+"""
+function needs_plugins(cmd_name::AbstractString, cmd_args::AbstractDict)
+    cmd_name in ("follower-create", "follower-sync", "follower-rebuild") && return true
+    cmd_name == "rebuild" && return get(cmd_args, "rebuild-followers", false) === true
+    cmd_name in ("searchbatch", "postings") && return get(cmd_args, "follower", nothing) !== nothing
+    return false
+end
+
+"""
+    run_cli_command(config_path, cmd_name, cmd_args) -> Int
+
+Runs one command of `similarity-search`. A command that opens a follower ([`needs_plugins`](@ref))
+first loads the plugins of the `[plugins]` section of `config_path`, as `serve` does. A file that
+does not exist is not an error: a follower that needs a plugin then raises `PluginNotLoaded`,
+and the message names the file. A plugin that cannot be loaded exits with code 1.
+
+The command runs with `Base.invokelatest`, because the code of a plugin is defined after this
+function was compiled.
+"""
+function run_cli_command(config_path::AbstractString, cmd_name::String, cmd_args::AbstractDict)
+    CLI_CONFIG[] = String(config_path)
+    if needs_plugins(cmd_name, cmd_args) && isfile(config_path)
+        try
+            Server.load_plugins!(TOML.parsefile(config_path); base_dir=dirname(abspath(config_path)))
+        catch e
+            e isa Union{Server.PluginLoadError,TOML.ParserError} || rethrow()
+            println("Error: ", sprint(showerror, e))
+            println("Correct or remove the plugin in ", config_path, ", or run the command with another --config.")
+            return 1
+        end
+    end
+    return Base.invokelatest(dispatch_command, cmd_name, cmd_args)
 end
 
 """

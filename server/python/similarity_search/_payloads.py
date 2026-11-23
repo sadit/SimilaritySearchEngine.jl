@@ -141,9 +141,10 @@ def _follower_path(index, follower, rest=""):
 
 
 def create_follower(index, name, kind, source, disjoint=None, graph_min=None, distance=None, policy=None):
-    """``kind`` is ``partition`` or ``keyword``; ``source`` is ``keywords``, ``refs``, ``doc_id``
-    or ``meta:<field>``; ``policy`` is ``on_index``, ``on_write``, ``manual`` or
-    ``{"periodic": {"seconds": 60, "items": 1000}}``."""
+    """``kind`` is ``partition``, ``keyword`` or ``Plugin.name``; ``source`` is ``keywords``,
+    ``refs``, ``doc_id``, ``meta:<field>`` or ``Plugin.name``. A kind or a key source of a plugin
+    with options is a dict, ``{"name": "Decades.decade", "field": "year"}``. ``policy`` is
+    ``on_index``, ``on_write``, ``manual`` or ``{"periodic": {"seconds": 60, "items": 1000}}``."""
     body = _compact({
         "name": name, "kind": kind, "source": source, "disjoint": disjoint,
         "graph_min": graph_min, "distance": distance, "policy": policy,
@@ -216,6 +217,11 @@ def migrate_partitions(index, name, disjoint):
 
 def get_group(index):
     return "GET", f"/api/v1/datasets/{index}/group", None, None
+
+
+def list_plugins():
+    """The plugins that the server loaded, with the wire names of their key sources and kinds."""
+    return "GET", "/api/v1/plugins", None, None
 
 
 # --- jobs -------------------------------------------------------------------------

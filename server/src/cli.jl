@@ -19,7 +19,6 @@ const CLI_CHOICES = Dict(
     # A key `command:argument` applies to that argument of that command only. `follower-create`
     # has a `--distance` whose values are distances between sets, not the distances of a dense
     # dataset.
-    "follower-create:kind" => ["partition", "keyword"],
     "follower-create:distance" => ["jaccard", "dice", "intersection", "cosine_set"],
     "follower-create:policy" => ["on_index", "on_write", "manual", "periodic"],
     "migrate-partitions:disjoint" => ["true", "false"],
@@ -53,12 +52,16 @@ function add_follower_create_args!(t::ArgParseSettings)
             help = "Name of the follower: letters, digits, '_' and '-', at most 128 characters"
             required = true
         "--kind"
-            help = "partition (a search restricted to the items of one key) or keyword (an inverted file of the keys)"
+            help = "partition (a search restricted to the items of one key), keyword (an inverted file of the keys), or Plugin.name, a kind of a plugin"
             required = true
-            range_tester = _choice_tester("follower-create:kind")
+            range_tester = x -> x in ("partition", "keyword") || occursin('.', x)
         "--source"
-            help = "Where the keys of an item come from: keywords, refs, doc_id, or meta:<field>"
+            help = "Where the keys of an item come from: keywords, refs, doc_id, meta:<field>, or Plugin.name, a key source of a plugin"
             required = true
+        "--source-options"
+            help = "The options of a key source of a plugin, as a JSON object, such as '{\"field\": \"year\"}'"
+        "--kind-options"
+            help = "The options of a kind of a plugin, as a JSON object"
         "--non-disjoint"
             help = "partition only: an item can have several keys and belong to several partitions"
             action = :store_true
@@ -125,7 +128,7 @@ function build_settings()
 
     @add_arg_table! s begin
         "--config", "-c"
-            help = "Path to the TOML configuration file"
+            help = "Path to the TOML configuration file. The commands that open a follower load the plugins of its [plugins] section"
             default = "config.toml"
         "interactive"
             help = "Start the interactive guided CLI"

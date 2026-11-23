@@ -133,8 +133,8 @@ using JSON3
     ctl_settings = SimilaritySearchServer.build_ctl_settings()
     ctl_names = SimilaritySearchServer._command_menu_names(ctl_settings)
     @test Set(ctl_names) == Set(["list", "stats", "log", "jobs", "add-token", "del-token", "prune-tokens", "log-tokens", "dump", "load",
-                                 "followers", "follower-create", "follower-sync", "follower-rebuild", "follower-delete",
-                                 "migrate-partitions"])
+                                 "followers", "plugins", "follower-create", "follower-sync", "follower-rebuild",
+                                 "follower-delete", "migrate-partitions"])
     @test "interactive" ∉ ctl_names
 
     jobs_sub = ctl_settings["jobs"]

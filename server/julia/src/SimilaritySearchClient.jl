@@ -29,7 +29,7 @@ export submit_job, job_info, wait_job, job_result, list_jobs, cancel_job!, kill_
 export search_pages, SearchPages
 export RemoteFollower, RemoteFollowerView, FollowerStatus
 export create_follower, open_follower, close_follower!, followers, follower_status, sync!
-export rebuild_follower!, delete_follower!, migrate_partitions!, posting_list
+export rebuild_follower!, delete_follower!, migrate_partitions!, posting_list, plugins
 export KnnRow, CenterSelectionResult, FFTResult, NearDupResult, JobFailed, JobTimeout
 export AbstractItem, DenseItem, SparseItem, TextItem
 export SearchResult, StoredItem, ExistsResult, CalibrationLevel

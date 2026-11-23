@@ -229,7 +229,7 @@ picked) → confirm-before-run panel → dispatch via the same `dispatch_command
 non-interactive path uses, so there is exactly one command-name → `execute_*` mapping
 regardless of how the arguments were collected.
 """
-function run_interactive()
+function run_interactive(; config_path::AbstractString="config.toml")
     if !(stdin isa Base.TTY)
         println(stderr, "Error: 'interactive' requires a real terminal (stdin is not a TTY)")
         return 1
@@ -264,7 +264,7 @@ function run_interactive()
         return 0
     end
 
-    return dispatch_command(cmd_name, cmd_args)
+    return run_cli_command(config_path, cmd_name, cmd_args)
 end
 
 """

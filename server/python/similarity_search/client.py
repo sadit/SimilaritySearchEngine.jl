@@ -148,6 +148,9 @@ class SimilaritySearchClient:
     def get_group(self, index):
         return self._call(*p.get_group(index))
 
+    def list_plugins(self):
+        return self._call(*p.list_plugins())
+
     # --- jobs -------------------------------------------------------------------------
 
     def submit_job(self, kind, command=None, **params):

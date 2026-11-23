@@ -558,6 +558,11 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </tbody>
 </table>
 <p>The client does not declare the spec types of the engine, <code>PartitionFollower</code> and <code>KeywordFollower</code>. A follower is created with the names of the HTTP API, as <code>create_project</code> creates a dataset.</p>
+<p>A key source or a kind of a plugin of the server is named <code>Plugin.name</code>. With options, it is a <code>Dict</code>. <code>plugins(conn)</code> lists the plugins of the server and their names:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="fu">plugins</span>(conn)                       <span class="co"># [Dict("name" =&gt; "Decades", "key_sources" =&gt; ["Decades.decade"], ...)]</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>f <span class="op">=</span> <span class="fu">create_follower</span>(h, <span class="st">"by_decade"</span>; kind<span class="op">=</span><span class="st">"partition"</span>,</span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>                    source<span class="op">=</span><span class="fu">Dict</span>(<span class="st">"name"</span> <span class="op">=&gt;</span> <span class="st">"Decades.decade"</span>, <span class="st">"field"</span> <span class="op">=&gt;</span> <span class="st">"year"</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>A plugin that the server has not loaded raises <code>PluginNotLoaded</code>. The <a href="../server/manual.html#plugins">server manual</a> describes the plugins.</p>
 </section>
 <section id="what-the-client-does-not-cover-yet" class="level2">
 <h2 class="anchored" data-anchor-id="what-the-client-does-not-cover-yet">8. What the Client Does Not Cover Yet</h2>
@@ -569,7 +574,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section id="tests" class="level2">
 <h2 class="anchored" data-anchor-id="tests">9. Tests</h2>
 <p>The package’s own tests need no server: they check the error mapping, the shape of the items sent, and the options checked before a request. The tests against a server are part of the full level of the server’s suite (<code>server/test/api/test_17_julia_client.jl</code>), which starts one.</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">--project</span><span class="op">=</span>server/julia <span class="at">-e</span> <span class="st">'using Pkg; Pkg.test()'</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb8"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">--project</span><span class="op">=</span>server/julia <span class="at">-e</span> <span class="st">'using Pkg; Pkg.test()'</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 
 
 </section>

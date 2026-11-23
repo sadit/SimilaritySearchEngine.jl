@@ -158,4 +158,57 @@ using JSON3
     @test all(r -> length(r) == 5 && all(isodd, r), res) && res[1][1] == 3
     # The partitions are no longer in the dataset.
     @test first(cli("searchbatch", "--dataset", "dn", "--queries", vq, "--output", tempname(), "--partition", "odd", w...)) != 0
+
+    # --- plugins (PLAN.md §5.13) ---------------------------------------------------------
+    # `--config` names the file whose `[plugins]` the commands that open a follower load.
+    cfg = joinpath(workdir, "config.toml")
+    plugin_file = joinpath(@__DIR__, "..", "plugins", "sse_test_plugin.jl")
+    write(cfg, "[plugins.SSETestPlugin]\npath = \"$(escape_string(plugin_file))\"\n" *
+               "[plugins.SSETestPlugin.settings]\nlabel = \"test\"\n")
+    pc(args...) = cli("--config", cfg, args...)
+    year(i) = 1960 + i
+    plugin_input = tempname() * ".jsonl"
+    write(plugin_input, join([JSON3.write(Dict("doc_id" => rows[i]["doc_id"], "text" => rows[i]["text"],
+                                                "keywords" => rows[i]["keywords"], "year" => year(i))) for i in 1:60], "\n"))
+    @test first(cli("build", "--dataset", "pl", "--input", plugin_input, "--index-kind", "bm25_invfile", w...)) == 0
+    code, out = pc("follower-create", "--dataset", "pl", "--name", "decade", "--kind", "partition",
+                   "--source", "SSETestPlugin.decade", "--source-options", "{\"field\": \"year\"}", w...)
+    @test code == 0
+    st = json_line(out)
+    @test st.plugin == "SSETestPlugin" && st.source == "Decade(\"year\")" && st.stats.partitions == 7
+    code, out = pc("follower-create", "--dataset", "pl", "--name", "counts", "--kind", "SSETestPlugin.key_counts",
+                   "--kind-options", "{\"min_count\": 2}", "--source", "keywords", w...)
+    @test code == 0 && json_line(out).kind == "KeyCounts" && json_line(out).stats.items == 60
+    code, out = pc("follower-create", "--dataset", "pl", "--name", "x", "--kind", "partition", "--source", "keywords",
+                   "--source-options", "{}", w...)
+    @test code == 2 && occursin("--source-options applies to a key source of a plugin", out)
+    code, out = pc("follower-create", "--dataset", "pl", "--name", "x", "--kind", "partition",
+                   "--source", "SSETestPlugin.decade", "--source-options", "field=year", w...)
+    @test code == 2 && occursin("must be a JSON object", out)
+    code, out = pc("follower-create", "--dataset", "pl", "--name", "x", "--kind", "partition",
+                   "--source", "SSETestPlugin.century", w...)
+    @test code == 2 && occursin("it has SSETestPlugin.decade", out)
+
+    # A partition of the key source of the plugin, searched from the command line.
+    pq = tempname() * ".jsonl"
+    write(pq, join([JSON3.write(Dict("text" => rows[i]["text"])) for i in (33, 35)], "\n"))
+    out = tempname()
+    @test first(pc("searchbatch", "--dataset", "pl", "--queries", pq, "--output", out, "--k", 5,
+                   "--follower", "decade=1990s", w...)) == 0
+    @test all(l -> all(id -> 1990 <= year(id) <= 1999, JSON3.read(l).ids), readlines(out))
+
+    # A process that has not registered the plugin cannot open its followers, and the message
+    # names the file of --config.
+    plugin_module = SimilaritySearchEngine._PLUGINS["SSETestPlugin"]
+    delete!(SimilaritySearchEngine._PLUGINS, "SSETestPlugin")
+    try
+        code, out = cli("--config", joinpath(workdir, "missing.toml"), "follower-sync", "--dataset", "pl", "--name", "decade", w...)
+        @test code == 4 && occursin("plugin SSETestPlugin", out) && occursin("missing.toml, which does not exist", out)
+    finally
+        SimilaritySearchEngine.register_plugin!(plugin_module)
+    end
+
+    # `rebuild --rebuild-followers` builds the followers of the plugin again.
+    code, out = pc("rebuild", "--dataset", "pl", "--rebuild-followers", w...)
+    @test code == 0 && count("synchronized", out) == 2
 end

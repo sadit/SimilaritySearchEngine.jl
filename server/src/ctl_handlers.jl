@@ -309,6 +309,14 @@ ctl_followers(base_url::String, cmd_args::AbstractDict) =
     _ctl_print(_ctl_request(:get, "$base_url/datasets/$(cmd_args["dataset"])/group"))
 
 """
+    ctl_plugins(base_url::String) -> Int
+
+`similarity-search-ctl plugins` -> `GET /api/v1/plugins`: the plugins that the server loaded
+(PLAN.md §5.13).
+"""
+ctl_plugins(base_url::String) = _ctl_print(_ctl_request(:get, "$base_url/plugins"))
+
+"""
     ctl_follower_create(base_url::String, cmd_args::Dict) -> Int
 
 `similarity-search-ctl follower-create --dataset <id> --name <n> --kind <k> --source <s> ...` ->
@@ -380,6 +388,7 @@ function dispatch_ctl_command(parsed::AbstractDict, base_url::String)
     cmd == "dump" && return ctl_dump(base_url, parsed["dump"])
     cmd == "load" && return ctl_load(base_url, parsed["load"])
     cmd == "followers" && return ctl_followers(base_url, parsed["followers"])
+    cmd == "plugins" && return ctl_plugins(base_url)
     cmd == "follower-create" && return ctl_follower_create(base_url, parsed["follower-create"])
     cmd == "follower-sync" && return ctl_follower_sync(base_url, parsed["follower-sync"])
     cmd == "follower-rebuild" && return ctl_follower_rebuild(base_url, parsed["follower-rebuild"])

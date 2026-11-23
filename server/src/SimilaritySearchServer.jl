@@ -169,9 +169,10 @@ function main(args::Vector{String})::Cint
     parsed_args = parse_commandline(args)
 
     if parsed_args["%COMMAND%"] == "interactive"
-        return run_interactive()
+        return run_interactive(; config_path=parsed_args["config"])
     elseif parsed_args["%COMMAND%"] !== nothing
-        return dispatch_command(parsed_args["%COMMAND%"], parsed_args[parsed_args["%COMMAND%"]])
+        cmd = parsed_args["%COMMAND%"]
+        return run_cli_command(parsed_args["config"], cmd, parsed_args[cmd])
     else
         println("No command specified.")
     end

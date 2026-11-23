@@ -182,6 +182,16 @@ The differences with the engine are these:
 
 The client does not declare the spec types of the engine, `PartitionFollower` and `KeywordFollower`. A follower is created with the names of the HTTP API, as `create_project` creates a dataset.
 
+A key source or a kind of a plugin of the server is named `Plugin.name`. With options, it is a `Dict`. `plugins(conn)` lists the plugins of the server and their names:
+
+```julia
+plugins(conn)                       # [Dict("name" => "Decades", "key_sources" => ["Decades.decade"], ...)]
+f = create_follower(h, "by_decade"; kind="partition",
+                    source=Dict("name" => "Decades.decade", "field" => "year"))
+```
+
+A plugin that the server has not loaded raises `PluginNotLoaded`. The [server manual](manual.qmd#plugins) describes the plugins.
+
 ## 8. What the Client Does Not Cover Yet
 
 - The administration routes: tokens, unloading and reloading a dataset, and the operation log. The Python client in `server/python/` covers them.

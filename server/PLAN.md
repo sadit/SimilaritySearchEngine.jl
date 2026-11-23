@@ -458,6 +458,15 @@ of it exist.
       then calls `run_serve` with `invokelatest`, so `serve` itself did not need it.
     - Not done yet: 6b (the command lines, the clients, the manual).
 
+    Phase 6b, the command lines, the clients and the documentation, done on 2026-11-23.
+    `similarity-search --config` loads `[plugins]` for the commands that open a follower
+    (`run_cli_command`, `needs_plugins`). `follower-create` takes `--source-options` and
+    `--kind-options` as JSON, in both command lines. `similarity-search-ctl plugins`. The Julia
+    client has `plugins(conn)` and accepts a `Dict` for `kind` and `source`; the Python client has
+    `list_plugins()`. The server manual has a section "Plugins", the tutorial a step that writes
+    a plugin, and §5.13 "As built". Phase 6 is complete, and with it the phases of issue #5
+    designed in §5.11. The decisions after phase 5 (§5.12) are in the queue of item 16.
+
 16. **Binary sketches (`bitsketch`, Hamming distance)** — recorded as necessary on 2026-11-23,
     in the queue after phase 6 of issue #5. Issue #1 lists them under "Later, not required for
     a first version"; they are now required. A binary sketch is a projection of each dense
@@ -1921,7 +1930,8 @@ Status: designed on 2026-11-23 for issue #5, phase 6. Phase 5 is done (§5.12): 
 two command lines and the two clients expose the followers of the engine, with the kinds and
 the key sources that the engine includes. This section designs how the server and the command
 line `similarity-search` load plugins: Julia modules that add key sources and kinds of
-follower.
+follower. Implemented on 2026-11-23 in phases 6a and 6b. "As built", at the end of this
+section, lists what differs from the design.
 
 #### What exists
 
@@ -2087,6 +2097,27 @@ A key source or a kind of a plugin is a string, or an object with `name` and its
   plugin kind implements, and it is worth adding when a plugin kind needs a query.
 - Loading or unloading a plugin while `serve` runs.
 - Plugins in a job. No job opens a follower.
+
+#### As built (2026-11-23)
+
+What differs from the design above, from phases 6a and 6b. §0, item 15, has the details of each
+phase.
+
+- **World age.** The code of a plugin is defined after the functions of the server were
+  compiled. `main_serve` calls `run_serve` with `Base.invokelatest`, `similarity-search` runs its
+  command with `invokelatest` (`run_cli_command`), and `_guard` runs every handler with
+  `invokelatest`, as does the task of the periodic followers. The last two make a plugin that is
+  loaded after the server started visible to it, which the tests need.
+- **`setup` before `register_plugin!`.** A plugin whose `setup` raises is not registered.
+- **`similarity-search`.** A plugin that cannot be loaded exits with code 1. The message of
+  `PluginNotLoaded` names the file of `--config`. `--kind` accepts `partition`, `keyword`, or a
+  name with a dot; the interactive mode asks for it as text, because a fixed list cannot hold the
+  names of the plugins.
+- **Status text.** `source` and `kind` are `repr` of the value. A type of a plugin without a
+  method of `show` prints with its module, `Main.Decades.Decade("year")`.
+- **Clients.** The Julia client has `plugins(conn) -> Vector{Dict{String,Any}}`, and
+  `create_follower` sends a `Dict` given as `kind` or `source` as it is. The Python client has
+  `list_plugins()`; it was checked on 2026-11-23 against a server started with the test plugin.
 
 ## 6. Hybrid Search Readiness (Suggestions & Specifications)
 

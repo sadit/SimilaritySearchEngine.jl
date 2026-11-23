@@ -169,6 +169,26 @@ import SimilaritySearchClient as C
         @test C.delete_project!(d) === nothing
     end
 
+    @testset "a key source and a kind of a plugin of the server" begin
+        listed = only(filter(p -> p["name"] == "SSETestPlugin", C.plugins(conn)))
+        @test listed["key_sources"] == ["SSETestPlugin.decade"]
+        t = C.create_project(conn, "jc_plugin"; index_type="bm25_invfile")
+        C.append_items!(t, [C.TextItem(rows[i]["text"]; doc_id=rows[i]["doc_id"], keywords=rows[i]["keywords"],
+                                       meta=Dict("year" => 1960 + i)) for i in 1:40])
+        f = C.create_follower(t, "decade"; kind="partition", source=Dict("name" => "SSETestPlugin.decade", "field" => "year"))
+        st = C.follower_status(f)
+        @test st.plugin == "SSETestPlugin" && st.stats.partitions == 5 && st.error === nothing
+        @test Dict(p.name => p.items for p in C.partitions(f)) == Dict("1960s" => 9, "1970s" => 10, "1980s" => 10, "1990s" => 10, "2000s" => 1)
+        res = C.ftsearch(C.open_follower(t, "decade=1970s"), rows[15]["text"], 5)
+        @test !isempty(res) && all(r -> 1970 <= 1960 + r._id <= 1979, res)
+        k = C.create_follower(t, "counts"; kind=Dict("name" => "SSETestPlugin.key_counts", "min_count" => 2), source=:keywords)
+        @test C.follower_status(k).kind == "KeyCounts"
+        @test_throws C.PluginNotLoaded C.create_follower(t, "x"; kind="partition", source="Nope.decade")
+        C.delete_follower!(t, "decade")
+        C.delete_follower!(t, "counts")
+        C.delete_project!(t)
+    end
+
     @testset "pages of a search, through a cursor" begin
         h = C.open_project(conn, "jc_dense")
         q = vec(21)

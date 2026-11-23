@@ -24,6 +24,7 @@ are described here.
 | `cli_handlers.jl`, `ctl_handlers.jl` | one function per subcommand: `build`, `search`, `searchbatch`, `allknn`, `fft`, `neardup`, `hsp`, `closestpair`, `describe`, `rebuild`, `dump`, `load`, the follower commands and `postings` |
 | `server.jl` | the HTTP API (Oxygen), one `EmbeddedEngine` per dataset, and the request/response mapping |
 | `followers_api.jl` | the routes of followers, and the task of `serve` that processes the periodic followers |
+| `plugins.jl` | loading the plugins of `[plugins]`, and the wire names of their key sources and kinds of follower |
 | `jobs.jl`, `executors.jl` | the job spool: an atomic directory tree (`queued/`, `running/`, `completed/`, `failed/`) of `.job.toml` files, dispatched as independent Julia subprocesses |
 | `tokens.jl`, `telemetry.jl`, `cursors.jl` | access tokens, the `op_log` operation history, and server-side result cursors for pagination |
 | `interactive.jl` | guided invocation through `REPL.TerminalMenus` |
@@ -484,6 +485,128 @@ ensures that a follower in the bundle has not processed an item that the project
 does not have. `load` copies the followers next to the new dataset and attaches them to it. The
 project and its followers come from the same bundle, so the followers are not stale.
 
+### Plugins
+
+A **plugin** is a Julia module that adds key sources and kinds of follower to the server. It is a
+`.jl` file or a package. A plugin that needs a program outside Julia calls it from its own code,
+for example with `run`. The code of a plugin runs in the process of the server, with the
+permissions of that process, and only the configuration file declares plugins.
+
+A plugin is declared in `config.toml`:
+
+```toml
+[plugins.Decades]
+path = "plugins/decades.jl"     # a file that defines `module Decades`, relative to this file
+# package = "Decades"           # or a package of the active environment: one of the two
+
+[plugins.Decades.settings]      # optional; passed to Decades.setup(settings)
+labels = "short"
+```
+
+The name of the table is the name of the module, and the name of the plugin. `serve` loads the
+plugins when it starts, before it opens any dataset. For each one, it includes the file into
+`Main` or loads the package, calls the function `setup` of the module with the settings if the
+module has one, registers the module in the engine with `register_plugin!`, and reads the wire
+names that the module declares. A plugin is loaded once per process. There is no route that
+loads a plugin: a new plugin needs a restart of `serve`.
+
+A plugin that cannot be loaded stops the start, and `serve` prints the reason:
+
+```text
+Error: the plugin Decades was not loaded: the file /srv/search/plugins/decades.jl does not exist; `path` is relative to the directory of the configuration file
+Correct or remove [plugins.Decades] in config.toml, and start the server again.
+```
+
+The module does not depend on the server. It declares its wire names with two constants, read
+by their names:
+
+```julia
+module Decades
+
+using SimilaritySearchEngine
+const SSE = SimilaritySearchEngine
+
+"The decade of an integer field of `meta`: 1987 is 1980s."
+struct Decade <: SSE.KeySource
+    field::String
+end
+
+function SSE.keys_of(s::Decade, item::SSE.StoredItem)
+    year = get(item.meta, s.field, nothing)
+    year isa Integer ? string(10 * fld(year, 10), "s") : nothing
+end
+
+# Optional: the settings of [plugins.Decades.settings].
+setup(settings::Dict{String,Any}) = nothing
+
+# The wire names. Each constructor takes the options of the request.
+const KEY_SOURCES = Dict{String,Function}("decade" => opts -> Decade(opts["field"]))
+const FOLLOWER_KINDS = Dict{String,Function}()   # name => (source, opts) -> FollowerSpec
+
+end
+```
+
+A key source is a subtype of `KeySource` with a method of `keys_of`, which returns `nothing`, a
+string or a list of strings for one item. A kind of follower is a subtype of `FollowerSpec` that
+implements the functions of the engine listed in the docstring of `FollowerSpec`. The
+[architecture page](../architecture.qmd#leader-and-follower-datasets) describes both. The same
+module works in an application that uses the engine alone: it registers the module with
+`register_plugin!` and ignores the two constants.
+
+A request names a key source or a kind of a plugin as `Plugin.name`. With options, it is an
+object with `name` and the options:
+
+```json
+{"name": "by_decade", "kind": "partition",
+ "source": {"name": "Decades.decade", "field": "year"}}
+
+{"name": "counts", "kind": {"name": "Counts.key_counts", "min_count": 2},
+ "source": "keywords"}
+```
+
+A source that starts with `meta:` is the engine's, even when the name of its field has a dot.
+A key source of a plugin works with the kinds of the engine, and `disjoint`, `graph_min`,
+`distance` and `policy` keep their meaning. A kind of a plugin takes the options in the object
+`kind`, and a request that adds `disjoint`, `graph_min` or `distance` to it answers `400`.
+
+| case | status | kind |
+| :--- | ---: | :--- |
+| the plugin is not loaded | 404 | `PluginNotLoaded`; the message names `[plugins.<Plugin>]` and the loaded plugins |
+| the plugin has no such name | 400 | the message lists the names it has |
+| the constructor refuses the options | 400 | the message of the constructor; an `EngineError` keeps its kind |
+
+A follower of a kind of a plugin is created, processed, rebuilt, deleted and reported as any
+other. Its `plugin` field names the plugin. The search routes and `postings` call the functions
+of the engine, which do not know a kind of a plugin, so they answer `400` with the kind
+`UnsupportedOperation`. A server that has not loaded the plugin of a follower does not open the
+follower: its status has `open` false and the error, a search answers `404` with
+`PluginNotLoaded`, and the leader stays available.
+
+- `GET /api/v1/plugins` — the plugins of this process, with the permission `read` over `*`. It
+  lists the configuration of the server, not data.
+
+```json
+GET /api/v1/plugins
+{"status":"ok",
+ "plugins":[{"name":"Decades","path":"/srv/search/plugins/decades.jl",
+             "key_sources":["Decades.decade"],"follower_kinds":[]}]}
+```
+
+`similarity-search` loads the plugins of the file of `--config`, `config.toml` by default, before
+the commands that open a follower: `follower-create`, `follower-sync`, `follower-rebuild`,
+`rebuild --rebuild-followers`, and `searchbatch` and `postings` with `--follower`. The other
+commands do not load them, because loading a plugin compiles its code. A missing file is not an
+error; a follower that needs a plugin then fails with exit code 4, and the message names the
+file. `follower-create` takes the options of a plugin type as JSON:
+
+```bash
+similarity-search --config config.toml follower-create --dataset papers --name by_decade \
+      --kind partition --source Decades.decade --source-options '{"field": "year"}'
+```
+
+`--kind-options` gives the options of a kind of a plugin in the same way.
+`similarity-search-ctl plugins` calls `GET /api/v1/plugins`.
+
 ### Searching Several Text Fields
 
 A record can have several text fields, for example a title and an abstract. Each field is a text dataset of its own. Each dataset has its own vocabulary, document frequencies and BM25 length statistics, so a short title is compared with the length of other titles.
@@ -707,7 +830,8 @@ check_seconds = 10
 ```
 
 `check_seconds` is how often the task of `serve` looks for periodic followers to process (see
-"Followers"). A follower with `{"periodic": {"seconds": 60}}` is therefore processed between 60
+"Followers"). The section `[plugins]` declares the plugins that `serve` loads when it starts (see
+"Plugins"). A follower with `{"periodic": {"seconds": 60}}` is therefore processed between 60
 and 70 seconds after its last processing. A value that is not a positive number is replaced by
 the default, 10.
 
@@ -783,8 +907,9 @@ engine's suite uses the same selection: its files are `dense`, `text`, `persiste
 
 ## 8. Where to go next
 
-- The [server tutorial](tutorial.qmd): the same interface in use, in ten steps. A dataset is
-  created, indexed and queried, a job is executed, and the items are organized with followers.
+- The [server tutorial](tutorial.qmd): the same interface in use, in eleven steps. A dataset is
+  created, indexed and queried, a job is executed, and the items are organized with followers
+  and with a plugin.
 - The [architecture of the engine](../architecture.qmd): the storage layout, the engine
   hierarchy, the concurrency model, and the typed errors this package maps.
 - The [Julia client](julia-client.qmd): the engine's functions over the HTTP API of a remote
