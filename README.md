@@ -24,7 +24,7 @@ They are developed together and tested in one CI run, with separate dependency s
 - **Project Specifications**: A project is described by one value, built from smaller ones (issue #2):
   - What it holds: `DenseVectors(distance; index, storage)`, `SparseVectors(dimension, distance)`, `TextDocuments(model; index)`.
   - The index: `Graph(; minrecall)` (a `SearchGraph`) or `Exhaustive(; parallel)` for dense vectors, `BM25()` or `VectorSpace(; distance)` for text.
-  - The storage of dense vectors: `Float32Vectors()` or `Quantized(SQ(bits; range); rotation, keep_vectors)`.
+  - The storage of dense vectors: `Float32Vectors()`, `Quantized(SQ(bits; range); rotation, keep_vectors)`, or `Sketched(hyperplanes; bits, rerank, keep_vectors)`.
   - Each type holds only its own options, so a combination that does not exist cannot be written. `project_spec(h)` returns the spec of an open project.
   - Strong typing with dedicated item containers: `DenseItem`, `SparseItem`, and `TextItem`.
 - **Dense Vector Search**: Approximate nearest-neighbor search via `SearchGraph` with dynamic beam-search tuning, or exact brute-force search via `ExhaustiveSearch`.
@@ -41,6 +41,8 @@ They are developed together and tested in one CI run, with separate dependency s
 - **Indexed External Identifiers**: `doc_id` lookups resolve through a dedicated column family (0.12 ms against 59 ms for a scan, at 50,000 items) and are not required to be unique -- `fetch_items` returns every item carrying the requested identifier.
 - **Storage Compaction**: `close_project!` compacts the project after a session that wrote, which is what keeps the next open fast (0.28 s against 2.97 s); `compact_project!` runs it mid-session.
 - **Granular Storage Persistence**: High-throughput persistence utilizing a hybrid layout of RocksDB column families and dedicated memory-mapped vector files (`dense_vectors.mmapdb`).
+- **Followers**: A follower organizes the items of another project, its leader, and does not copy them (issue #5). A partition follower restricts a search to the items of one key. A keyword follower indexes the keywords of each item in an inverted file. A follower is stored in its own RocksDB database, and its policy says when it processes the new items of its leader.
+- **Events of a Project**: `index!` and `append_items!` report the items that became searchable as one `ItemsIndexed(sp, ep)` event per call, to the observers that `observe!` added. The followers are observers of their leader. An error of an observer is written to the log, and the call of the project returns.
 - **Typed Errors**: Every failure the engine raises on purpose is an `EngineError` in one of four categories -- `InvalidRequest`, `NotFound`, `ConflictingState`, `StorageFailure` -- with a concrete type underneath (`PayloadMismatch`, `PendingBacklog`, `WrongDimension`, ...). A caller acts on the category instead of parsing a message; the server maps categories to HTTP status codes and the CLIs to exit codes.
 
 ---
@@ -104,7 +106,7 @@ repository, and the engine and the service layer are two halves of one thing any
 
 - **[Manual](https://sadit.github.io/SimilaritySearchEngine.jl/)** — prose, for both packages:
   - [Architecture Guide](manual/architecture.qmd): Detailed specifications of engine submodules, concurrency controls, and the on-disk storage layout.
-  - [Getting Started Tutorial](manual/tutorials/getting-started.qmd): Step-by-step walkthrough covering dense embeddings, sparse indexing, BM25 text retrieval, filtering, calibration, and whole-dataset operations.
+  - [Getting Started Tutorial](manual/tutorials/getting-started.qmd): Step-by-step walkthrough covering dense embeddings, sparse indexing, BM25 text retrieval, filtering, calibration, followers, observers of a project, and whole-dataset operations.
   - [Multilingual Case Study](manual/tutorials/paragraph-search.qmd): Real-world evaluation over Project Gutenberg and Wikipedia paragraph corpora.
   - [Server Manual](manual/server/manual.qmd) and [Server Tutorial](manual/server/tutorial.qmd): the REST API, the job queue, the two command lines, and the error mapping.
   - [Julia Client](manual/server/julia-client.qmd): the engine's functions over the REST API of a remote server.
@@ -123,14 +125,16 @@ Two levels, in both packages: light on every change, full before a release.
 
 ```julia
 using Pkg
-Pkg.test()                          # light   -- engine 264 assertions, 46s
-Pkg.test(test_args=["full"])        # full    -- engine 310 assertions, 1m30
+Pkg.test()                          # light   -- engine 1,119 assertions, 7m12s
+Pkg.test(test_args=["full"])        # full    -- engine 1,166 assertions, 8m26s
 Pkg.test(test_args=["text"])        # only the files named or tagged "text"
 ```
 
-A run that receives names or tags includes only the test files that match one of them, with their heavy testsets. Each suite lists its files, with their names and tags, in the table `TEST_FILES` of its `runtests.jl`. The server's files are `api/01` to `api/17`, `cli/01` to `cli/06`, `e2e`, `boundary`, `dispatcher` and `config`. `SSE_TEST_SELECT="api/13 jobs"` gives the same selection from the environment. A name that matches no file is an error. `test/selection.jl` implements the selection for both suites.
+The times are those of the outer testset, measured on 2026-11-23 with 8 threads (`julia -t 8`). The four suites ran at the same time on one machine of 60 cores.
 
-The split follows the clock, not importance. The engine's full level adds the whole-dataset algorithms, the concurrency stress test, and the text testsets that fit a linguistic profile from a corpus -- everything they cover is covered in the light run too, at a size that runs in about a second each. The server's light level (219 assertions, 15 s, measured on 2026-11-20) covers the boundary with the engine -- wire names to engine types, engine errors to status and exit codes, wire items to engine items -- without starting a server or spawning a subprocess; its full level (999 assertions, 30 min) adds the HTTP, job, CLI and Julia client end-to-end suites. `SSE_TEST_LEVEL=full` selects the full level from CI.
+A run that receives names or tags includes only the test files that match one of them, with their heavy testsets. Each suite lists its files, with their names and tags, in the table `TEST_FILES` of its `runtests.jl`. The server's files are `api/01` to `api/20`, `cli/01` to `cli/08`, `e2e`, `boundary`, `dispatcher` and `config`. The engine's files include `dense`, `text`, `persistence`, `quantized`, `sketches`, `followers` and `events`. `SSE_TEST_SELECT="api/13 jobs"` gives the same selection from the environment. A name that matches no file is an error. `test/selection.jl` implements the selection for both suites.
+
+The split follows the clock, not importance. The engine's full level adds the whole-dataset algorithms, the concurrency stress test, the text testsets that fit a linguistic profile from a corpus, and the resident memory of a quantized project -- everything they cover is covered in the light run too, at a size that runs in about a second each. The server's light level (321 assertions, 29 s, measured on 2026-11-23) covers the boundary with the engine -- wire names to engine types, engine errors to status and exit codes, wire items to engine items -- without starting a server or spawning a subprocess; its full level (1,372 assertions, 40 min, measured on the same day) adds the HTTP, job, CLI and Julia client end-to-end suites. `SSE_TEST_LEVEL=full` selects the full level from CI.
 
 A skipped testset is named at the end of a light run: a light run that looks identical to a full one is how a suite quietly stops testing something.
 

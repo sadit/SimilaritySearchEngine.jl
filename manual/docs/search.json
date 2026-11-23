@@ -494,7 +494,7 @@
     "href": "server/manual.html#where-to-go-next",
     "title": "Server Manual",
     "section": "8. Where to go next",
-    "text": "8. Where to go next\n\nThe server tutorial: the same interface in use, in eleven steps. A dataset is created, indexed and queried, a job is executed, and the items are organized with followers and with a plugin.\nThe architecture of the engine: the storage layout, the engine hierarchy, the concurrency model, and the typed errors this package maps.\nThe Julia client: the engine’s functions over the HTTP API of a remote server.\nThe reference, generated from the docstrings of both packages: Server API and Engine API."
+    "text": "8. Where to go next\n\nThe server tutorial: the same interface in use, in twelve steps. A dataset is created, indexed and queried, and a job is executed. A dense dataset stores its vectors quantized, the items are organized with followers and with a plugin, and the server requires a token.\nThe architecture of the engine: the storage layout, the engine hierarchy, the concurrency model, and the typed errors this package maps.\nThe Julia client: the engine’s functions over the HTTP API of a remote server.\nThe reference, generated from the docstrings of both packages: Server API and Engine API."
   },
   {
     "objectID": "server/tutorial.html",
