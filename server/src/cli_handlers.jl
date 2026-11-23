@@ -982,7 +982,8 @@ server; this command line processes it with `follower-sync`.
 function execute_follower_create(cmd_args::AbstractDict)
     req = follower_request(cmd_args)
     req isa String && (println("Error: ", req); return Cint(2))
-    parsed = Server.parse_follower_request(req)
+    parsed = @cli_engine_call Server.parse_follower_request(req)
+    parsed isa Cint && return parsed
     parsed isa String && (println("Error: ", parsed); return Cint(2))
     _with_dataset(cmd_args; read_only=false) do handle
         f = SSE.create_follower(handle, parsed.name, parsed.spec; policy=parsed.policy)

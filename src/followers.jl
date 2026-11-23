@@ -266,6 +266,7 @@ mutable struct Follower
     read_only::Bool
     lock::ReentrantLock
     closed::Bool
+    last_error::Union{Nothing,String}   # the error of the last sync! that failed, until one succeeds
 end
 
 """
@@ -356,7 +357,8 @@ function _build_follower(leader::EmbeddedEngine, name::String, dir::String, spec
                              policy=repr(policy))))
         Persistence.save_field!(store, :follows, (spec=spec, policy=policy))
         state = create_follower_state(spec, leader, store, db)
-        return Follower(leader, name, dir, db, store, spec, policy, plugin, state, 0, false, ReentrantLock(), false)
+        return Follower(leader, name, dir, db, store, spec, policy, plugin, state, 0, false, ReentrantLock(), false,
+                        nothing)
     catch
         close(db)
         rethrow()
@@ -456,7 +458,7 @@ function _open_existing_follower(leader::EmbeddedEngine, name::String)
         follows === nothing && corrupted_storage("the follower '", canonical, "' has no saved spec")
         state = open_follower_state(follows.spec, leader, store, db)
         return Follower(leader, name, dir, db, store, follows.spec, follows.policy, fields.plugin, state,
-                        fields.position, leader.read_only, ReentrantLock(), false)
+                        fields.position, leader.read_only, ReentrantLock(), false, nothing)
     catch
         close(db)
         rethrow()
@@ -542,6 +544,11 @@ item that the leader has not indexed yet is not processed.
 It works in blocks of `block` items. After each block it saves the position, so an interruption
 repeats at most one block. Deletes are not processed: the leader marks a deleted item in each
 result. Raises `UnsupportedOperation` on a follower opened from a read-only leader handle.
+
+A follower that cannot process an item stops before the block of that item, and it does not skip
+it: the next `sync!` tries the same item again. Each failure is written to the log as an error,
+with the name of the follower, its position and the error, and `follower_status(f).error` holds
+its message until a `sync!` succeeds.
 """
 function sync!(f::Follower; block::Integer=FOLLOWER_SYNC_BLOCK)
     _check_follower_open(f)
@@ -550,7 +557,15 @@ function sync!(f::Follower; block::Integer=FOLLOWER_SYNC_BLOCK)
         "' was opened from a read-only handle of its leader; open the leader for writing to process new items")
     block > 0 || invalid_option(:block, "sync! needs `block` > 0; got $block")
     return lock(f.lock) do
-        _sync_blocks!(f, key_source(f.spec), Int(block))
+        try
+            n = _sync_blocks!(f, key_source(f.spec), Int(block))
+            f.last_error = nothing
+            n
+        catch e
+            f.last_error = sprint(showerror, e)
+            @error "the follower $(_canonical_name(f)) stopped at position $(f.position) of its leader; it stays there until the next item can be processed" exception=(e, catch_backtrace())
+            rethrow()
+        end
     end
 end
 
@@ -592,7 +607,7 @@ function _sync_followers!(handle::EmbeddedEngine, ::Type{P}) where {P<:SyncPolic
         try
             sync!(f)
         catch e
-            @warn "the follower $(_canonical_name(f)) did not process the new items of its leader; call sync! on it again" exception=(e, catch_backtrace())
+            # `sync!` wrote the error to the log.
             first_error === nothing && (first_error = e)
         end
     end
@@ -727,6 +742,8 @@ What [`follower_status`](@ref) and [`followers`](@ref) report about one follower
 - `missing`: whether the leader lists the follower and its directory does not exist.
 - `open`: whether the follower is open on the leader handle.
 - `stats`: the statistics of its kind, or `nothing` when the follower is not open.
+- `error`: the message of the last `sync!` that failed, until one succeeds, or `nothing`. A
+  follower that is not open has `nothing`.
 """
 struct FollowerStatus
     name::String
@@ -743,6 +760,7 @@ struct FollowerStatus
     missing::Bool
     open::Bool
     stats::Any
+    error::Union{Nothing,String}
 end
 
 """
@@ -756,7 +774,8 @@ function follower_status(f::Follower)
     indexed = IndexEngine.indexed_length(f.leader.engine)
     FollowerStatus(_canonical_name(f), f.leader.dataset, string(nameof(typeof(f.spec))),
                    repr(key_source(f.spec)), repr(f.policy), f.plugin, f.position, indexed,
-                   indexed - f.position, indexed == f.position, false, false, true, follower_stats(f.state))
+                   indexed - f.position, indexed == f.position, false, false, true, follower_stats(f.state),
+                   f.last_error)
 end
 follower_status(v::FollowerView) = follower_status(v.follower)
 
@@ -782,7 +801,7 @@ function followers(leader::EmbeddedEngine)
         dir = _follower_dir(leader, name)
         if !isdir(dir)
             push!(out, FollowerStatus(canonical, leader.dataset, nothing, nothing, nothing, nothing,
-                                      0, indexed, indexed, false, false, true, false, nothing))
+                                      0, indexed, indexed, false, false, true, false, nothing, nothing))
             continue
         end
         db = _open_follower_db(dir, String[], true, false)
@@ -796,7 +815,7 @@ function followers(leader::EmbeddedEngine)
         push!(out, FollowerStatus(canonical, leader.dataset,
             s === nothing ? nothing : s.kind, s === nothing ? nothing : s.source,
             s === nothing ? nothing : s.policy, fields.plugin, fields.position, indexed,
-            indexed - fields.position, !stale && indexed == fields.position, stale, false, false, nothing))
+            indexed - fields.position, !stale && indexed == fields.position, stale, false, false, nothing, nothing))
     end
     return out
 end

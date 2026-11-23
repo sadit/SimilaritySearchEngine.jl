@@ -215,7 +215,7 @@ end
     api = filter(r -> occursin("\"/api/v1", r), routes)
     open_routes = filter(r -> !occursin("\"/api/v1", r), routes)
 
-    @test length(api) == 45
+    @test length(api) == 46
     @test all(r -> occursin("_guard(", r), api)
     # Health and metrics stay open on purpose: a supervisor and a metrics collector have no
     # token, and refusing them would report a healthy server as down.
@@ -471,10 +471,9 @@ import SimilaritySearchClient as Client
 end
 
 
-# The client's `FollowerStatus` has the fields of the engine's, in the same order, and `error`,
-# which the server adds.
+# The client's `FollowerStatus` has the fields of the engine's, in the same order.
 @testset "the Julia client's follower status has the engine's fields" begin
-    @test fieldnames(Client.FollowerStatus) == (fieldnames(SSE.FollowerStatus)..., :error)
+    @test fieldnames(Client.FollowerStatus) == fieldnames(SSE.FollowerStatus)
 end
 
 # ---------------------------------------------------------------------------------------
@@ -511,4 +510,86 @@ end
                 Dict("name" => "x", "kind" => "partition", "source" => "keywords", "color" => "red"))
         @test parse(bad) isa String
     end
+end
+
+# ---------------------------------------------------------------------------------------
+# Plugins (PLAN.md §5.13): loading `[plugins]`, and the wire names of a plugin.
+# ---------------------------------------------------------------------------------------
+
+@testset "a plugin of [plugins] is loaded once, set up and registered" begin
+    file = joinpath(@__DIR__, "plugins", "sse_test_plugin.jl")
+    # The settings of `ensure_test_server`, so that the order of the files does not matter.
+    config = Dict{String,Any}("plugins" => Dict{String,Any}("SSETestPlugin" =>
+        Dict{String,Any}("path" => file, "settings" => Dict{String,Any}("label" => "test"))))
+    @test Server.load_plugins!(config) == ["SSETestPlugin"]
+    mod = Server.PLUGINS["SSETestPlugin"].mod
+    @test mod === Base.invokelatest(getfield, Main, :SSETestPlugin)
+    @test haskey(SSE._PLUGINS, "SSETestPlugin")
+    @test Base.invokelatest(getfield, mod, :SETTINGS)["label"] == "test"
+    # A second load returns the plugin that the process has, without including the file again.
+    @test Server.load_plugins!(config) == ["SSETestPlugin"]
+    @test Server.PLUGINS["SSETestPlugin"].mod === mod === Base.invokelatest(getfield, Main, :SSETestPlugin)
+    d = Server.plugin_dict(Server.PLUGINS["SSETestPlugin"])
+    @test d["key_sources"] == ["SSETestPlugin.decade"] && d["follower_kinds"] == ["SSETestPlugin.key_counts"]
+    @test d["path"] == normpath(file)
+    @test Server.load_plugins!(Dict{String,Any}()) == String[]
+end
+
+@testset "a plugin that cannot be loaded names itself and the reason" begin
+    dir = mktempdir()
+    load(name, table) = try Server.load_plugin!(name, table; base_dir=dir); nothing catch e; e end
+    e = load("SSEMissingFile", Dict("path" => "nope.jl"))
+    @test e isa Server.PluginLoadError && e.plugin == "SSEMissingFile" && occursin("nope.jl does not exist", e.msg)
+    @test occursin("one of the two", load("SSEBoth", Dict("path" => "a.jl", "package" => "SSEBoth")).msg)
+    @test occursin("pathh", load("SSEFields", Dict("path" => "a.jl", "pathh" => 1)).msg)
+    @test occursin("[plugins.Other]", load("SSEPkg", Dict("package" => "Other")).msg)
+    @test occursin("Julia identifier", load("not-a-module", Dict("path" => "a.jl")).msg)
+    write(joinpath(dir, "other.jl"), "module SSEOtherName end\n")
+    @test occursin("does not define `module SSEExpected`", load("SSEExpected", Dict("path" => "other.jl")).msg)
+    write(joinpath(dir, "bad_setup.jl"), "module SSEBadSetup\nsetup(s) = error(\"no settings\")\nend\n")
+    e = load("SSEBadSetup", Dict("path" => "bad_setup.jl"))
+    @test e isa Server.PluginLoadError && occursin("no settings", e.msg)
+    @test !haskey(Server.PLUGINS, "SSEBadSetup") && !haskey(SSE._PLUGINS, "SSEBadSetup")
+    write(joinpath(dir, "bad_table.jl"), "module SSEBadTable\nconst KEY_SOURCES = [1, 2]\nend\n")
+    @test occursin("must be a Dict", load("SSEBadTable", Dict("path" => "bad_table.jl")).msg)
+
+    # `serve` does not start, and the message names the plugin and the file of the configuration.
+    cfg = joinpath(dir, "config.toml")
+    write(cfg, "[paths]\nworkdir = \"$(escape_string(joinpath(dir, "w")))\"\n[plugins.SSENotThere]\npath = \"missing.jl\"\n")
+    out = tempname()
+    code = open(out, "w") do io
+        redirect_stdout(() -> SimilaritySearchServer.main_serve(["-c", cfg, "serve", "--port", "0"]), io)
+    end
+    printed = read(out, String)
+    @test code == 1 && occursin("SSENotThere", printed) && occursin("missing.jl does not exist", printed)
+end
+
+@testset "a plugin's wire names map onto its types" begin
+    parse(d) = Server.parse_follower_request(Dict{String,Any}(d))
+    p = parse(Dict("name" => "d", "kind" => "partition", "disjoint" => false,
+                   "source" => Dict("name" => "SSETestPlugin.decade", "field" => "year")))
+    @test p.spec isa SSE.PartitionFollower && !p.spec.disjoint
+    @test repr(SSE.key_source(p.spec)) == "Decade(\"year\")"
+    k = parse(Dict("name" => "c", "kind" => Dict("name" => "SSETestPlugin.key_counts", "min_count" => 3),
+                   "source" => "keywords", "policy" => "manual"))
+    @test nameof(typeof(k.spec)) == :KeyCounts && k.spec.min_count == 3 && k.policy == SSE.Manual()
+    @test SSE.key_source(k.spec) isa SSE.Keywords
+    @test nameof(typeof(parse(Dict("name" => "c", "kind" => "SSETestPlugin.key_counts", "source" => "refs")).spec)) == :KeyCounts
+    # A plugin that is not loaded is not found; a name that the plugin lacks, or an option that its
+    # constructor refuses, is a bad request.
+    @test_throws SSE.PluginNotLoaded parse(Dict("name" => "d", "kind" => "keyword", "source" => "Nope.decade"))
+    @test_throws SSE.PluginNotLoaded parse(Dict("name" => "d", "kind" => "Nope.counts", "source" => "keywords"))
+    msg = parse(Dict("name" => "d", "kind" => "keyword", "source" => "SSETestPlugin.century"))
+    @test msg isa String && occursin("it has SSETestPlugin.decade", msg)
+    msg = parse(Dict("name" => "d", "kind" => "keyword", "source" => "SSETestPlugin.decade"))
+    @test msg isa String && occursin("options of SSETestPlugin.decade were refused", msg)
+    msg = parse(Dict("name" => "c", "kind" => "SSETestPlugin.key_counts", "source" => "keywords", "disjoint" => true))
+    @test msg isa String && occursin("object 'kind'", msg)
+    msg = parse(Dict("name" => "c", "kind" => Dict("name" => "partition"), "source" => "keywords"))
+    @test msg isa String && occursin("names a kind of a plugin", msg)
+    msg = parse(Dict("name" => "d", "kind" => "keyword", "source" => Dict("name" => "keywords", "x" => 1)))
+    @test msg isa String && occursin("only a key source of a plugin", msg)
+    @test parse(Dict("name" => "d", "kind" => "keyword", "source" => Dict("name" => "keywords"))).spec isa SSE.KeywordFollower
+    # A field of meta with a dot is the engine's.
+    @test SSE.key_source(parse(Dict("name" => "d", "kind" => "keyword", "source" => "meta:a.b")).spec) == SSE.MetaValue("a.b")
 end

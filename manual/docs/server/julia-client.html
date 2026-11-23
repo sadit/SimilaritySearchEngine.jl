@@ -542,8 +542,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </tr>
 <tr class="even">
 <td style="text-align: left;"><code>FollowerStatus</code></td>
-<td style="text-align: left;">14 fields</td>
-<td style="text-align: left;">the same 14 fields, and <code>error</code>: the last error of the server when it opened or processed the follower</td>
+<td style="text-align: left;"><code>error</code> is the last failure of <code>sync!</code></td>
+<td style="text-align: left;"><code>error</code> also reports a follower that the server could not open</td>
 </tr>
 <tr class="odd">
 <td style="text-align: left;"><code>close_follower!</code></td>

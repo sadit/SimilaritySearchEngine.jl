@@ -176,7 +176,7 @@ The differences with the engine are these:
 | `create_follower` | a spec, such as `PartitionFollower(MetaValue("repo"); disjoint=false)` | the names of the HTTP API: `kind="partition", source="meta:repo", disjoint=false` |
 | `open_follower(h, "name=value")` | raises `UnknownPartition` for a value that is not a partition | does not check the value; the first search with it raises `UnknownPartition` |
 | `search` of a view | a filter function, `minrecall`, `candidates`, `stats` | a filter object and `minrecall` |
-| `FollowerStatus` | 14 fields | the same 14 fields, and `error`: the last error of the server when it opened or processed the follower |
+| `FollowerStatus` | `error` is the last failure of `sync!` | `error` also reports a follower that the server could not open |
 | `close_follower!` | closes the database of the follower | does nothing |
 | `attach_follower!` | exists | not available; the commands `rebuild` and `load` of `similarity-search` use it |
 

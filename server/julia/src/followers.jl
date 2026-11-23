@@ -43,7 +43,7 @@ follower_path(v::RemoteFollowerView, rest::AbstractString="") =
     FollowerStatus
 
 What [`follower_status`](@ref) and [`followers`](@ref) report about one follower. The fields are
-those of the engine's `FollowerStatus`, and one more:
+those of the engine's `FollowerStatus`:
 
 - `name`: the canonical name, `leader/follower`.
 - `leader`: the name of the leader.
@@ -58,8 +58,8 @@ those of the engine's `FollowerStatus`, and one more:
 - `missing`: whether the leader lists the follower and its directory does not exist.
 - `open`: whether the server has the follower open.
 - `stats`: the statistics of its kind as a named tuple, or `nothing` when it is not open.
-- `error`: the last error of the server when it opened or processed the follower, or `nothing`.
-  The engine has no such field.
+- `error`: the message of the last failure to process the follower, or `nothing`. The server
+  also reports here a follower that it could not open.
 """
 struct FollowerStatus
     name::String

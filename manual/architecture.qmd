@@ -527,6 +527,8 @@ A policy says when a follower processes the new items:
 
 `open_follower` registers the follower in the handle of its leader. `index!` and `append_items!` of the leader call `sync!` on the registered followers whose policy applies, after the leader has saved its own work. When `sync!` of a follower raises, the other followers are processed, and the first error is raised afterwards. `close_project!` of the leader closes its followers first. `open_follower` processes nothing: a follower that lags behind its leader stays behind until its policy or `sync!` processes the new items. `follower_status(f)` and `followers(h)` report the position, the lag and whether a follower is synchronized.
 
+A follower that cannot process an item stops before the block of that item. It does not skip the item, so the next `sync!` tries it again. An item stops a follower when its key source returns a value that is not a key, for example a number in `meta`, or several keys for a disjoint partition follower. Each failure of `sync!` is written to the log as an error, with the name of the follower and its position, and `follower_status(f).error` holds its message until a `sync!` succeeds. The leader keeps the item, and its searches return it.
+
 A follower accepts no direct write. `append_items!`, `delete_item!` and `index!` on a follower raise `UnsupportedOperation`, and the message names the leader.
 
 ### Plugins

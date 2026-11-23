@@ -240,8 +240,23 @@ function main_serve(args::Vector{String})::Cint
     check = get(followers_cfg, "check_seconds", Server.DEFAULT_FOLLOWER_CHECK_SECONDS)
     follower_check_seconds = check isa Real && check > 0 ? Float64(check) : Server.DEFAULT_FOLLOWER_CHECK_SECONDS
 
-    return run_serve(host, port, workdir; auth_enabled, batch_threads_pct, max_concurrent_queries,
-                     follower_check_seconds)
+    # The plugins are loaded before any dataset is opened, because a follower of a plugin is
+    # opened with its leader. A plugin that the configuration declares and that cannot be
+    # loaded stops the start (PLAN.md §5.13).
+    try
+        loaded = Server.load_plugins!(config; base_dir=dirname(abspath(config_path)))
+        isempty(loaded) || println("Loaded plugin(s): ", join(loaded, ", "))
+    catch e
+        e isa Server.PluginLoadError || rethrow()
+        println("Error: ", sprint(showerror, e))
+        println("Correct or remove [plugins.", e.plugin, "] in ", config_path, ", and start the server again.")
+        return Cint(1)
+    end
+
+    # The code of a plugin was defined after this function was compiled; `invokelatest` runs the
+    # server in the world that has it.
+    return Base.invokelatest(run_serve, host, port, workdir; auth_enabled, batch_threads_pct, max_concurrent_queries,
+                             follower_check_seconds)
 end
 
 end # module

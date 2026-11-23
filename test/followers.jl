@@ -155,6 +155,36 @@ end
     end
 end
 
+@testset "followers: an item that cannot be processed stops the follower" begin
+    mktempworkdir() do workdir
+        h = create_project(workdir, "lead", DenseVectors(; index=Exhaustive()))
+        append_items!(h, [follower_item(i) for i in 1:5])
+        f = create_follower(h, "repo", FTK.GroupsSpec(MetaValue("repo")))
+        @test f.position == 5 && follower_status(f).error === nothing
+        # A number is not a key: the follower stops before the block of item 6, and the failure
+        # is written to the log.
+        bad = DenseItem(Float32[6, 1, 2]; doc_id="d6", meta=Dict{String,Any}("repo" => 7))
+        err = @test_logs (:error, r"repo stopped at position 5") match_mode=:any begin
+            try
+                append_items!(h, [bad, follower_item(7)])
+                index!(h)
+                nothing
+            catch e
+                e
+            end
+        end
+        @test err isa PayloadMismatch
+        st = follower_status(f)
+        @test st.position == 5 && st.lag == 2 && occursin("item 6", st.error)
+        # It does not skip the item: the next sync! stops at it again.
+        @test_logs (:error,) match_mode=:any (@test_throws PayloadMismatch sync!(f))
+        @test f.position == 5
+        # The leader keeps the item.
+        @test search(h, Float32[6, 1, 2], 1)[1]._id == 6
+        close_project!(h)
+    end
+end
+
 @testset "followers: an interrupted sync! repeats one block" begin
     mktempworkdir() do workdir
         h = create_project(workdir, "lead", DenseVectors(; index=Exhaustive()))

@@ -34,6 +34,7 @@ import SimilaritySearchEngine as SSE
 using SparseArrays: SparseArrays
 
 export run_server, AppState, reload_datasets!, parse_index_kind, dataset_spec, parse_distance, start_follower_task!
+export load_plugins!, PluginLoadError
 
 const JSON_HEADERS = ["Content-Type" => "application/json"]
 
@@ -285,16 +286,21 @@ behavior of a server that has never had authentication.
 - `403` when the token is valid and does not carry the permission. The response names the
   permission that was required, because its holder is a legitimate caller who needs to know
   what to ask for.
+
+The handler runs with `Base.invokelatest`. A task of the HTTP server keeps the world of the code
+that started the server, and the methods of a plugin (PLAN.md §5.13) loaded later are not
+visible in it. `serve` loads its plugins before it starts the server, so this matters for a
+process that loads a plugin while the server runs, such as the test suite.
 """
 function _guard(handler, req::HTTP.Request, app::AppState, op::Symbol, dataset::AbstractString)
-    app.auth_enabled[] || return handler()
+    app.auth_enabled[] || return Base.invokelatest(handler)
     record = Tokens.validate_token(app.token_mgr, _request_token(req))
     record === nothing &&
         return json_response(401, Dict("error" => "a valid token is required", "kind" => "Unauthenticated"))
     Tokens.has_permission(record, op, dataset) ||
         return json_response(403, Dict("error" => "token lacks permission $(op):$(dataset)",
                                        "kind" => "Forbidden", "required" => "$(op):$(dataset)"))
-    return handler()
+    return Base.invokelatest(handler)
 end
 
 """
@@ -2036,6 +2042,8 @@ function run_server(host::String, port::Int, app::AppState; async::Bool=false)
     @get "/api/v1/datasets/{id}/postings" (req, id) -> _guard(() -> handle_postings(req, app, id), req, app, :read, id)
     @post "/api/v1/datasets/{id}/migrate-partitions" (req, id) -> _guard(() -> handle_migrate_partitions(req, app, id), req, app, :admin, id)
     @get "/api/v1/datasets/{id}/group" (req, id) -> _guard(() -> handle_get_group(req, app, id), req, app, :read, id)
+    # The plugins of this process (PLAN.md §5.13): the configuration of the server, not data.
+    @get "/api/v1/plugins" req -> _guard(() -> handle_list_plugins(req, app), req, app, :read, "*")
 
     println("Starting SimilaritySearchServer at http://$host:$port")
     serve(host=host, port=port, async=async)
@@ -2146,6 +2154,7 @@ function parse_distance(dist::Union{AbstractString,Nothing})
     d == "" && return nothing # Some places pass empty string
     error("Unknown distance: $dist")
 end
+include("plugins.jl")
 include("followers_api.jl")
 
 end # module

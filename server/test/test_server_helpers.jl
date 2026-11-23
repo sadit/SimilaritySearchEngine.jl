@@ -54,6 +54,12 @@ function ensure_test_server()
         app.followers.check_seconds = 0.5
         start_follower_task!(app)
 
+        # The test plugin is loaded before the server starts, as `serve` loads `[plugins]`
+        # (PLAN.md §5.13). `api/19` uses it.
+        load_plugins!(Dict{String,Any}("plugins" => Dict{String,Any}("SSETestPlugin" => Dict{String,Any}(
+            "path" => joinpath(@__DIR__, "plugins", "sse_test_plugin.jl"),
+            "settings" => Dict{String,Any}("label" => "test")))))
+
         port = 8765
         run_server("127.0.0.1", port, app; async=true)
 

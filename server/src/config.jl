@@ -49,6 +49,17 @@ max_concurrent_queries = 0
 # the policy on_index or on_write is processed in the request that writes its leader instead.
 check_seconds = 10
 
+# Plugins: Julia modules that add key sources and kinds of follower. serve loads them when it
+# starts, before it opens any dataset, and does not start when one cannot be loaded. The name of
+# a table is the name of the module.
+#
+# [plugins.Decades]
+# path = "plugins/decades.jl"   # a file that defines `module Decades`, relative to this file
+# package = "Decades"           # or a package of the active environment: one of the two
+#
+# [plugins.Decades.settings]    # optional; passed to Decades.setup(settings)
+# labels = "short"
+
 [server]
 # Listen address
 host = "127.0.0.1"

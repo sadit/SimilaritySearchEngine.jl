@@ -440,6 +440,24 @@ of it exist.
 
     Phase 6, plugins in the server: designed in §5.13 on 2026-11-23.
 
+    Phase 6a, plugins in `serve`, done on 2026-11-23 (`server/src/plugins.jl`,
+    `server/test/plugins/sse_test_plugin.jl`, `server/test/api/test_19_plugins.jl`, and three
+    light testsets in `server/test/test_boundary.jl`). What it implements, and what differs from
+    §5.13:
+    - `load_plugins!(config; base_dir)` loads `[plugins]`, and `main_serve` calls it before it
+      opens any dataset. A `PluginLoadError` stops the start, and the message names the plugin
+      and the configuration file. `setup` runs before `register_plugin!`, so a plugin whose
+      `setup` raises is not registered.
+    - The wire names `Plugin.name`, as a string or as an object with options, for `source` and
+      for `kind`. `GET /api/v1/plugins` (46 routes under `/api/v1`). The generated
+      `config.toml` has a commented example of `[plugins]`.
+    - Not in §5.13: `_guard` runs every handler with `Base.invokelatest`, and so does the task of
+      the periodic followers. A task of the HTTP server keeps the world of the code that started
+      the server, and the methods of a plugin loaded after that are not visible in it: the test
+      plugin raised "method too new" when `api/19` ran alone. `main_serve` loads the plugins and
+      then calls `run_serve` with `invokelatest`, so `serve` itself did not need it.
+    - Not done yet: 6b (the command lines, the clients, the manual).
+
 The stemmer registry of §5.3 and §9's phase 5 is not on this list: it was discarded. Stemming
 was the way this specification proposed to make a query match a word it does not equal. That
 is now the work of the query pipeline of `TextSearch.jl`, which the engine exposes through the
@@ -1833,9 +1851,9 @@ phase.
 - **Engine.** Three functions were added so that the server does not read the fields of a
   leader handle: `attach_follower!`, `close_follower!(leader, name)` and `open_followers(leader)`.
 - **Status.** `kind`, `source` and `policy` are the text of the engine (`PartitionFollower`,
-  `MetaValue("repo")`, `OnIndex()`), not the wire names of the request. The server adds
-  `error`, the last failure of a follower that it could not open or process, and the Julia
-  client has that field too.
+  `MetaValue("repo")`, `OnIndex()`), not the wire names of the request. `error` is the last
+  failure of `sync!` (a field of the engine's status since 2026-11-23), or of the server when it
+  could not open the follower.
 - **Calibration of a partition.** It takes `minrecall`, `numqueries` and `ksearch`, and answers
   with the `baseline` and the `calibration` of the calibration of a dataset.
 - **Delete.** Deleting a dataset also removes its directory of followers, which is empty by
@@ -1865,13 +1883,23 @@ phase.
    question is what an event is (an `append`, an `index!`, a block of items), so that the
    dispatch consumes few resources. Until then, `on_write` keeps its behavior.
 2. **A follower that cannot process an item stays stopped, and its errors go to the logs.** It
-   does not skip the item.
-3. **Recorded for later: skipping the item that fails.** It would be acceptable if `_id` were
-   entirely on the side of the engine and the server, and a client depended only on the key
-   it gives (`doc_id`). That was the intent of the design. Verified on 2026-11-23, `_id`
-   crosses the boundary today: search results, `fetch` and `exists` return it; `delete` takes
-   only `_id`; the hybrid search combines two datasets by `_id`; posting lists and the results
-   of `allknn`, `fft` and `neardup` are `_id`s; and `rebuild` numbers the items again.
+   does not skip the item. Done on 2026-11-23: each failure of `sync!` is written to the log
+   with `@error`, with the name and the position of the follower, and `FollowerStatus` has the
+   field `error`, the message of the last failure, until a `sync!` succeeds. The earlier
+   warning of `_sync_followers!` said to call `sync!` again, which does not help when an item
+   cannot be processed; it was removed. The server reports the field in the status, and the
+   Julia client's `FollowerStatus` has the fields of the engine's.
+3. **Recorded for later: skipping the item that fails.** It is acceptable if `_id` is
+   controlled by the engine and the server: a client knows `_id` and uses it in some
+   operations, but never sets it and never depends on its order. That was the intent of the
+   design. Skipping an item in a follower changes no `_id`. Verified on 2026-11-23:
+   - A client does not set `_id`: `append` ignores an `_id` field of an item as a reserved
+     name, and the engine assigns it.
+   - A client knows `_id` and uses it: search results, `fetch` and `exists` return it,
+     `delete` takes it, and posting lists and the results of `allknn`, `fft` and `neardup`
+     are `_id`s. `rebuild` assigns new `_id`s.
+   - One exception depends on how `_id` is assigned: the hybrid search combines two datasets
+     by `_id`, so the client must append the same items in the same order to both.
 
 ### 5.13. Plugins in the Server (design, 2026-11-23)
 

@@ -47,11 +47,22 @@ const _SET_DISTANCES = Dict(
 """
     parse_key_source(source) -> Union{SSE.KeySource, String}
 
-The key source that a wire name selects: `keywords`, `refs`, `doc_id`, or `meta:<field>`. A
-`String` result is the message of a `400`.
+The key source that a wire name selects: `keywords`, `refs`, `doc_id`, `meta:<field>`, or
+`Plugin.name` of a plugin (PLAN.md §5.13). A key source of a plugin with options is an object,
+`{"name": "Plugin.name", ...}`. A `String` result is the message of a `400`. A plugin that is not
+loaded raises `PluginNotLoaded`.
 """
 function parse_key_source(source)
-    source isa AbstractString || return "'source' must be a string: keywords, refs, doc_id, or meta:<field>"
+    if source isa AbstractDict
+        name = get(source, "name", nothing)
+        name isa AbstractString || return "'source' as an object needs 'name', the wire name of a key source of a plugin (Plugin.name)"
+        options = Dict{String,Any}(String(k) => v for (k, v) in source if k != "name")
+        is_plugin_name(name) && return plugin_key_source(name, options)
+        isempty(options) || return "only a key source of a plugin (Plugin.name) takes options; got $(repr(name)) with options"
+        return parse_key_source(String(name))
+    end
+    source isa AbstractString || return "'source' must be a string (keywords, refs, doc_id, meta:<field>, or Plugin.name) " *
+        "or an object with 'name' and the options of a key source of a plugin"
     source == "keywords" && return SSE.Keywords()
     source == "refs" && return SSE.Refs()
     source == "doc_id" && return SSE.DocId()
@@ -60,7 +71,8 @@ function parse_key_source(source)
         isempty(field) && return "'source' meta:<field> needs the name of a field of meta"
         return SSE.MetaValue(field)
     end
-    return "unknown 'source' $(repr(source)); use keywords, refs, doc_id, or meta:<field>"
+    is_plugin_name(source) && return plugin_key_source(source, Dict{String,Any}())
+    return "unknown 'source' $(repr(source)); use keywords, refs, doc_id, meta:<field>, or Plugin.name of a plugin"
 end
 
 """
@@ -94,7 +106,9 @@ end
 
 The name, the spec and the policy of `POST /api/v1/datasets/{id}/followers` (PLAN.md §5.12):
 `(name, spec, policy)`, or the message of a `400`. `kind` is `partition` (with `disjoint` and
-`graph_min`) or `keyword` (with `distance`).
+`graph_min`), `keyword` (with `distance`), or a kind of a plugin (PLAN.md §5.13): `Plugin.name`,
+or `{"name": "Plugin.name", ...}` with its options. A plugin that is not loaded raises
+`PluginNotLoaded`.
 """
 function parse_follower_request(data::AbstractDict)
     unknown = [k for k in keys(data) if !(k in _FOLLOWER_FIELDS)]
@@ -106,6 +120,19 @@ function parse_follower_request(data::AbstractDict)
     policy = parse_sync_policy(get(data, "policy", nothing))
     policy isa String && return policy
     kind = get(data, "kind", nothing)
+    kind_name = kind isa AbstractDict ? get(kind, "name", nothing) : kind
+    if kind_name isa AbstractString && is_plugin_name(kind_name)
+        for field in ("disjoint", "graph_min", "distance")
+            haskey(data, field) && return "'$field' applies to a partition or a keyword follower; the options of a " *
+                "kind of a plugin go in the object 'kind'"
+        end
+        options = kind isa AbstractDict ? Dict{String,Any}(String(k) => v for (k, v) in kind if k != "name") : Dict{String,Any}()
+        spec = plugin_follower_spec(kind_name, source, options)
+        spec isa String && return spec
+        return (name=String(name), spec, policy)
+    end
+    kind isa AbstractDict && return "'kind' as an object names a kind of a plugin, {\"name\": \"Plugin.name\", ...}; " *
+        "partition and keyword are strings"
     if kind == "partition"
         haskey(data, "distance") && return "'distance' applies to a keyword follower"
         disjoint = get(data, "disjoint", true)
@@ -121,7 +148,7 @@ function parse_follower_request(data::AbstractDict)
         dist === nothing && return "unknown 'distance' $(repr(dname)); use $(join(sort(collect(keys(_SET_DISTANCES))), ", "))"
         return (name=String(name), spec=SSE.KeywordFollower(source; distance=dist()), policy)
     end
-    return "'kind' must be partition or keyword"
+    return "'kind' must be partition, keyword, or Plugin.name of a plugin"
 end
 
 """
@@ -129,17 +156,22 @@ end
     follower_status_dict(app, s::SSE.FollowerStatus) -> Dict
 
 The wire form of a follower status: the fields of `SSE.FollowerStatus` by name, and `stats` as an
-object. With `app`, it adds `error`, the last error of a follower that `serve` could not open or
-process. The command lines print the form without `app`.
+object. `error` is present when the follower has one: the last `sync!` of the engine that failed.
+With `app`, a follower that `serve` could not open or process also has `error`. The command lines
+print the form without `app`.
 """
-follower_status_dict(s::SSE.FollowerStatus) =
-    Dict{String,Any}("name" => s.name, "leader" => s.leader, "kind" => s.kind, "source" => s.source,
+function follower_status_dict(s::SSE.FollowerStatus)
+    d = Dict{String,Any}("name" => s.name, "leader" => s.leader, "kind" => s.kind, "source" => s.source,
         "policy" => s.policy, "plugin" => s.plugin, "position" => s.position, "leader_indexed" => s.leader_indexed,
         "lag" => s.lag, "synchronized" => s.synchronized, "stale" => s.stale, "missing" => s.missing,
         "open" => s.open, "stats" => s.stats === nothing ? nothing : Dict(string(k) => v for (k, v) in pairs(s.stats)))
+    s.error === nothing || (d["error"] = s.error)
+    return d
+end
 
 function follower_status_dict(app, s::SSE.FollowerStatus)
     d = follower_status_dict(s)
+    haskey(d, "error") && return d
     err = lock(() -> get(app.followers.errors, s.name, nothing), app.followers.lock)
     err === nothing || (d["error"] = err)
     return d
@@ -176,9 +208,10 @@ _body(req::HTTP.Request) = (b = String(req.body); isempty(b) ? Dict{String,Any}(
 function handle_create_follower(req::HTTP.Request, app, id::String)
     handle = _leader_or_404(app, id)
     handle isa HTTP.Response && return handle
-    parsed = parse_follower_request(_body(req))
-    parsed isa String && return json_response(400, Dict("error" => parsed))
     _engine_call() do
+        # A name of a plugin that is not loaded raises `PluginNotLoaded` here.
+        parsed = parse_follower_request(_body(req))
+        parsed isa String && return json_response(400, Dict("error" => parsed))
         f = lock(app.lock) do
             SSE.create_follower(handle, parsed.name, parsed.spec; policy=parsed.policy)
         end
@@ -438,9 +471,9 @@ function process_periodic_followers!(app; now::Float64=time())
                 _clear_follower_error!(app, canonical)
                 done += 1
             catch e
+                # `sync!` wrote the error to the log, and the status of the follower holds it.
                 e isa SSE.EngineError || e isa ErrorException || rethrow()
                 _record_follower_error!(app, canonical, e)
-                @warn "the periodic follower $canonical was not processed" exception=e
             end
         end
     end
@@ -456,7 +489,9 @@ Starts the task of `serve` that processes the periodic followers every
 start_follower_task!(app) = errormonitor(@async while true
     sleep(app.followers.check_seconds)
     try
-        process_periodic_followers!(app)
+        # In the newest world, so that the methods of a plugin loaded after this task started
+        # are visible (PLAN.md §5.13).
+        Base.invokelatest(process_periodic_followers!, app)
     catch e
         @error "the periodic follower task failed; it continues" exception=(e, catch_backtrace())
     end
