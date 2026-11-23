@@ -51,6 +51,7 @@ const TEST_FILES = [
     TestFile("api/15", "api/test_15_meta_schema.jl"; tags=["api", "schema", "filter"], light=false),
     TestFile("api/16", "api/test_16_partitions.jl"; tags=["api", "partitions", "text"], light=false),
     TestFile("api/17", "api/test_17_julia_client.jl"; tags=["api", "client", "jobs", "cursors"], light=false),
+    TestFile("api/18", "api/test_18_followers.jl"; tags=["api", "followers", "partitions", "text", "dense"], light=false),
     TestFile("cli/01", "cli/test_01_build.jl"; tags=["cli", "build"], light=false),
     TestFile("cli/02", "cli/test_02_search.jl"; tags=["cli", "search"], light=false),
     TestFile("cli/03", "cli/test_03_describe_rebuild_closestpair.jl"; tags=["cli", "rebuild"], light=false),

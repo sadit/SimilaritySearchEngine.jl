@@ -370,6 +370,22 @@ of it exist.
     2026-11-22. `Periodic` runs as a task of `serve`, not as a job, because a job cannot write
     to a dataset that `serve` holds open.
 
+    Phase 5a, followers in `serve`, done on 2026-11-22 (`server/src/followers_api.jl`,
+    `server/test/api/test_18_followers.jl`). What it implements, and what differs from §5.12:
+    - The engine gained `attach_follower!`, `close_follower!(leader, name)` and
+      `open_followers(leader)`, so that the server does not read the fields of a leader handle.
+    - The fourteen routes of §5.12, all through `_guard` (45 routes under `/api/v1`).
+    - `serve` opens the followers of each dataset it loads or reloads. A follower that cannot be
+      opened keeps its error in `app.followers`, and its status reports it as `error`.
+    - `start_follower_task!` processes the periodic followers every `[followers] check_seconds`
+      seconds (10 by default, in `config.toml`).
+    - `kind`, `source` and `policy` of a status are the text of the engine: `PartitionFollower`,
+      `MetaValue("repo")`, `OnIndex()`. The request uses the wire names of §5.12.
+    - The calibration route of a partition takes `minrecall`, `numqueries` and `ksearch`.
+    - Deleting a dataset also removes its directory of followers, which is empty by then.
+    - Not done yet: 5b (the command lines, `rebuild`, `dump` and `load` with followers), 5c (the
+      clients), 5d (the manual).
+
 The stemmer registry of §5.3 and §9's phase 5 is not on this list: it was discarded. Stemming
 was the way this specification proposed to make a query match a word it does not equal. That
 is now the work of the query pipeline of `TextSearch.jl`, which the engine exposes through the

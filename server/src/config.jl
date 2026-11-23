@@ -43,6 +43,12 @@ batch_threads_pct = 20
 # what says whether this bound is ever reached.
 max_concurrent_queries = 0
 
+[followers]
+# How often, in seconds, the server looks for followers with a periodic policy whose period
+# has passed or whose lag has reached its number of items, and processes them. A follower with
+# the policy on_index or on_write is processed in the request that writes its leader instead.
+check_seconds = 10
+
 [server]
 # Listen address
 host = "127.0.0.1"

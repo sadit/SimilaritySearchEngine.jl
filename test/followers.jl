@@ -260,3 +260,43 @@ end
         close_project!(h)
     end
 end
+
+@testset "followers: attach_follower!, closing by name, open_followers" begin
+    mktempworkdir() do workdir
+        h = create_project(workdir, "lead", DenseVectors(; index=Exhaustive()))
+        append_items!(h, [follower_item(i) for i in 1:10])
+        a = create_follower(h, "a", FTK.GroupsSpec(Keywords()))
+        b = create_follower(h, "b", FTK.GroupsSpec(Keywords()); policy=Manual())
+        @test [f.name for f in open_followers(h)] == ["a", "b"]
+        close_follower!(h, "b")
+        close_follower!(h, "absent")                   # not open: nothing to do
+        @test [f.name for f in open_followers(h)] == ["a"] && b.closed
+        @test_throws InvalidOption attach_follower!(h, "a")   # open
+        close_project!(h)
+
+        # A copy of the leader with one of its followers, as `load` makes it: same generation.
+        cp(joinpath(workdir, "lead"), joinpath(workdir, "copy"))
+        mkpath(joinpath(workdir, "copy.followers"))
+        cp(follower_dir(workdir, "lead", "a"), follower_dir(workdir, "copy", "a"))
+        c = open_project(workdir, "copy")
+        st = Dict(s.name => s for s in followers(c))
+        @test st["copy/b"].missing                       # the list came with the copy
+        delete_follower!(c, "b")
+        attach_follower!(c, "a")
+        @test open_follower(c, "a").position == 10
+        @test follower_status(open_follower(c, "a")).leader == "copy"
+        close_project!(c)
+
+        # A rebuilt leader is a new project with a new generation: the attached follower is stale.
+        fresh = create_project(workdir, "fresh", DenseVectors(; index=Exhaustive()))
+        append_items!(fresh, [follower_item(i) for i in 1:12])
+        @test_throws UnknownFollower attach_follower!(fresh, "a")     # no directory yet
+        mkpath(joinpath(workdir, "fresh.followers"))
+        cp(follower_dir(workdir, "lead", "a"), follower_dir(workdir, "fresh", "a"))
+        attach_follower!(fresh, "a")
+        @test only(followers(fresh)).stale
+        @test_throws StaleFollower open_follower(fresh, "a")
+        @test rebuild_follower!(fresh, "a").position == 12
+        close_project!(fresh)
+    end
+end

@@ -215,7 +215,7 @@ end
     api = filter(r -> occursin("\"/api/v1", r), routes)
     open_routes = filter(r -> !occursin("\"/api/v1", r), routes)
 
-    @test length(api) == 31
+    @test length(api) == 45
     @test all(r -> occursin("_guard(", r), api)
     # Health and metrics stay open on purpose: a supervisor and a metrics collector have no
     # token, and refusing them would report a healthy server as down.
@@ -467,5 +467,42 @@ import SimilaritySearchClient as Client
         haskey(Client.ERROR_KINDS, name) || continue
         engine_category = nameof(supertype(T))
         @test nameof(supertype(Client.ERROR_KINDS[name])) == engine_category
+    end
+end
+
+
+# ---------------------------------------------------------------------------------------
+# Followers on the wire (PLAN.md §5.12): strings to the engine's spec, source and policy.
+# ---------------------------------------------------------------------------------------
+
+@testset "the wire's follower requests map onto the engine's specs" begin
+    parse(d) = Server.parse_follower_request(Dict{String,Any}(d))
+    p = parse(Dict("name" => "by_repo", "kind" => "partition", "source" => "meta:repo", "disjoint" => false))
+    @test p.name == "by_repo"
+    @test p.spec == SSE.PartitionFollower(SSE.MetaValue("repo"); disjoint=false)
+    @test p.policy == SSE.OnIndex()
+    @test parse(Dict("name" => "g", "kind" => "partition", "source" => "doc_id", "graph_min" => 50)).spec ==
+          SSE.PartitionFollower(SSE.DocId(); graph_min=50)
+    k = parse(Dict("name" => "kw", "kind" => "keyword", "source" => "keywords", "distance" => "dice", "policy" => "manual"))
+    @test k.spec == SSE.KeywordFollower(SSE.Keywords(); distance=SSE.Dist.Sets.Dice())
+    @test k.policy == SSE.Manual()
+    @test parse(Dict("name" => "kw", "kind" => "keyword", "source" => "refs")).spec == SSE.KeywordFollower(SSE.Refs())
+    @test parse(Dict("name" => "w", "kind" => "keyword", "source" => "keywords", "policy" => "on_write")).policy == SSE.OnWrite()
+    @test parse(Dict("name" => "p", "kind" => "keyword", "source" => "keywords",
+                     "policy" => Dict("periodic" => Dict("seconds" => 60)))).policy == SSE.Periodic(seconds=60)
+
+    # Every mistake is a message, which the route answers with a 400.
+    for bad in (Dict("kind" => "partition", "source" => "keywords"),
+                Dict("name" => "x", "kind" => "tree", "source" => "keywords"),
+                Dict("name" => "x", "kind" => "partition", "source" => "title"),
+                Dict("name" => "x", "kind" => "partition", "source" => "meta:"),
+                Dict("name" => "x", "kind" => "partition", "source" => "keywords", "distance" => "dice"),
+                Dict("name" => "x", "kind" => "keyword", "source" => "keywords", "graph_min" => 3),
+                Dict("name" => "x", "kind" => "keyword", "source" => "keywords", "distance" => "l2"),
+                Dict("name" => "x", "kind" => "partition", "source" => "keywords", "disjoint" => "no"),
+                Dict("name" => "x", "kind" => "partition", "source" => "keywords", "policy" => "hourly"),
+                Dict("name" => "x", "kind" => "partition", "source" => "keywords", "policy" => Dict("periodic" => Dict())),
+                Dict("name" => "x", "kind" => "partition", "source" => "keywords", "color" => "red"))
+        @test parse(bad) isa String
     end
 end

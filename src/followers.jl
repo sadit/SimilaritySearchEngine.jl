@@ -513,6 +513,26 @@ function close_follower!(f::Follower)
 end
 
 """
+    close_follower!(leader::EmbeddedEngine, name)
+
+Closes the follower `name` if it is open on `leader`; does nothing otherwise. For a caller that
+holds the leader and a name, such as the server before it deletes a follower (PLAN.md §5.12).
+"""
+function close_follower!(leader::EmbeddedEngine, name::AbstractString)
+    f = get(leader.followers, String(name), nothing)
+    f === nothing || close_follower!(f)
+    return nothing
+end
+
+"""
+    open_followers(leader::EmbeddedEngine) -> Vector{Follower}
+
+The followers open on `leader`, sorted by name. The server walks them to process the followers
+with a [`Periodic`](@ref) policy (PLAN.md §5.12).
+"""
+open_followers(leader::EmbeddedEngine) = sort!(Follower[f for f in values(leader.followers)]; by=f -> f.name)
+
+"""
     sync!(f::Follower; block=FOLLOWER_SYNC_BLOCK) -> Int
 
 Processes the items of the leader from the position of the follower plus one to
@@ -626,6 +646,40 @@ function rebuild_follower!(leader::EmbeddedEngine, name::AbstractString)
     f = _open_existing_follower(leader, name)
     leader.followers[name] = f
     return f
+end
+
+"""
+    attach_follower!(leader::EmbeddedEngine, name)
+
+Lists in `leader` a follower whose directory already exists in
+[`follower_dir`](@ref)`(workdir, leader, name)`, and writes the name of the leader in it
+(PLAN.md §5.12). It processes nothing. A rebuilt leader has a new generation, so a follower
+attached to it stays stale until [`rebuild_follower!`](@ref). A leader loaded from a copy has the
+generation of the copy, so a follower copied with it is ready.
+
+The follower must not be open. A name that the leader already lists only gets the name of the
+leader written again.
+"""
+function attach_follower!(leader::EmbeddedEngine, name::AbstractString)
+    _check_writable_leader(leader, :attach_follower!)
+    name = String(name)
+    _check_follower_name(name)
+    haskey(leader.followers, name) && invalid_option(:name, "the follower '", _canonical_name(leader.dataset, name),
+        "' is open; close it with close_follower! first")
+    dir = _follower_dir(leader, name)
+    isdir(dir) || unknown_follower(name, "there is no follower directory $dir to attach to '", leader.dataset, "'")
+    db = _open_follower_db(dir, String[], false, false)
+    try
+        Persistence.save_field!(Persistence.open_engine_store(db), :leader, leader.dataset)
+    finally
+        close(db)
+    end
+    listed = _listed_followers(leader)
+    if !(name in listed)
+        Persistence.save_field!(leader.store, :followers, vcat(listed, name))
+        leader.wrote[] = true
+    end
+    return nothing
 end
 
 """

@@ -87,7 +87,8 @@ handler mapping regardless of how the arguments were collected" principle
 """
 function run_serve(host::String, port::Int, workdir::String;
                    auth_enabled::Bool=false, batch_threads_pct::Real=20,
-                   max_concurrent_queries::Int=0)::Cint
+                   max_concurrent_queries::Int=0,
+                   follower_check_seconds::Real=Server.DEFAULT_FOLLOWER_CHECK_SECONDS)::Cint
     job_mgr = Jobs.init_job_manager(workdir)
     cursor_mgr = Cursors.init_cursor_manager(workdir)
     executor = Executors.LocalCLIExecutor()
@@ -121,8 +122,12 @@ function run_serve(host::String, port::Int, workdir::String;
     # Reopen every dataset already on disk (from a previous run of this same server)
     # before accepting any requests -- otherwise a restarted server could list/describe
     # existing datasets but not search/append/ftsearch/calibrate them until recreated.
+    app.followers.check_seconds = Float64(follower_check_seconds)
     reloaded = Server.reload_datasets!(app)
     isempty(reloaded) || println("Reloaded $(length(reloaded)) existing dataset(s) from $workdir: ", reloaded)
+    # The followers with a periodic policy are processed by a task of this process, not by a job:
+    # a job cannot write to a dataset that this process holds open (PLAN.md §5.12).
+    Server.start_follower_task!(app)
 
     # Crash recovery: anything left in running/ from a previous serve process
     # (killed mid-dispatch) gets requeued before the dispatcher starts (PLAN.md §5.5).
@@ -231,8 +236,12 @@ function main_serve(args::Vector{String})::Cint
     batch_threads_pct = resolve_batch_threads_pct(resources_cfg)
     configured_slots = get(resources_cfg, "max_concurrent_queries", 0)
     max_concurrent_queries = configured_slots isa Integer ? Int(configured_slots) : 0
+    followers_cfg = get(config, "followers", Dict{String, Any}())
+    check = get(followers_cfg, "check_seconds", Server.DEFAULT_FOLLOWER_CHECK_SECONDS)
+    follower_check_seconds = check isa Real && check > 0 ? Float64(check) : Server.DEFAULT_FOLLOWER_CHECK_SECONDS
 
-    return run_serve(host, port, workdir; auth_enabled, batch_threads_pct, max_concurrent_queries)
+    return run_serve(host, port, workdir; auth_enabled, batch_threads_pct, max_concurrent_queries,
+                     follower_check_seconds)
 end
 
 end # module

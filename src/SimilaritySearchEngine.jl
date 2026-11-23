@@ -124,8 +124,8 @@ export UnknownFollower, PluginNotLoaded, StaleFollower, HasFollowers
 # them qualified, as `SimilaritySearchEngine.process_items!`.
 export KeySource, Keywords, Refs, DocId, MetaValue, keys_of, needs_payload
 export FollowerSpec, SyncPolicy, OnIndex, OnWrite, Periodic, Manual
-export Follower, FollowerView, FollowerStatus, create_follower, open_follower, close_follower!, sync!,
-       rebuild_follower!, delete_follower!, follower_status, followers, follower_dir, register_plugin!,
+export Follower, FollowerView, FollowerStatus, create_follower, open_follower, close_follower!, open_followers, sync!,
+       rebuild_follower!, delete_follower!, attach_follower!, follower_status, followers, follower_dir, register_plugin!,
        FOLLOWER_SYNC_BLOCK
 export PartitionFollower, migrate_partitions!, KeywordFollower, posting_list
 

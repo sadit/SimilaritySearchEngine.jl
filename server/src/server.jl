@@ -33,7 +33,7 @@ using ..Telemetry
 import SimilaritySearchEngine as SSE
 using SparseArrays: SparseArrays
 
-export run_server, AppState, reload_datasets!, parse_index_kind, dataset_spec, parse_distance
+export run_server, AppState, reload_datasets!, parse_index_kind, dataset_spec, parse_distance, start_follower_task!
 
 const JSON_HEADERS = ["Content-Type" => "application/json"]
 
@@ -109,6 +109,23 @@ function _parse_offset_limit(params::AbstractDict, total::Int)
 end
 
 """
+    FollowerRegistry
+
+What `serve` keeps about the followers of its datasets, besides the followers themselves, which
+their leader handles hold: the last error of each follower that could not be opened or
+processed, by canonical name; the time of its last processing by the periodic task; and how
+often that task wakes up (`[followers] check_seconds`).
+"""
+mutable struct FollowerRegistry
+    errors::Dict{String,String}
+    last_sync::Dict{String,Float64}
+    check_seconds::Float64
+    lock::ReentrantLock
+end
+FollowerRegistry(check_seconds::Real) =
+    FollowerRegistry(Dict{String,String}(), Dict{String,Float64}(), Float64(check_seconds), ReentrantLock())
+
+"""
     AppState
 
 Holds the global application state for the server.
@@ -158,6 +175,9 @@ struct AppState
     # How far an operation that runs in this process may spread over threads, as a cap on the
     # batch count of the engine's contexts. See `inprocess_batch_cap`.
     batch_cap::Int
+
+    # The errors and the periodic processing of the followers of the datasets (PLAN.md §5.12).
+    followers::FollowerRegistry
 end
 
 AppState(workdir, job_mgr, cursor_mgr, executor, token_mgr, handles, lock, auth_enabled::Bool,
@@ -165,7 +185,7 @@ AppState(workdir, job_mgr, cursor_mgr, executor, token_mgr, handles, lock, auth_
          batch_cap::Int=inprocess_batch_cap(Threads.nthreads(), 20)) =
     AppState(workdir, job_mgr, cursor_mgr, executor, token_mgr, handles, lock, Ref(auth_enabled),
              Telemetry.MetricsRegistry(), Base.Semaphore(query_slots),
-             Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), batch_cap)
+             Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), batch_cap, FollowerRegistry(DEFAULT_FOLLOWER_CHECK_SECONDS))
 
 # The seven-argument form is the one every existing caller uses, and it leaves authentication
 # off, which is the default of `[auth] enabled`.
@@ -561,6 +581,7 @@ function _reload_one_dataset!(app::AppState, id::String)
     lock(app.lock) do
         app.handles[id] = handle
     end
+    open_dataset_followers!(app, id, handle)
     return true
 end
 
@@ -610,6 +631,12 @@ caches, and removes its on-disk directory.
 """
 function handle_delete_dataset(req::HTTP.Request, app::AppState, id::String)
     valid_project_id(id) || return json_response(400, Dict("error" => "invalid dataset id"))
+    # A leader with followers is not deleted (PLAN.md §5.12): its followers are deleted first.
+    names = haskey(app.handles, id) ? [s.name for s in SSE.followers(app.handles[id])] :
+            (d = joinpath(datasets_root(app), id * ".followers"); isdir(d) ? ["$id/$n" for n in readdir(d)] : String[])
+    isempty(names) || return engine_error_response(SSE.HasFollowers(id, names,
+        "the dataset '$id' has the followers $(join(repr.(names), ", ")); delete each one first with " *
+        "DELETE /api/v1/datasets/$id/followers/{name} or `similarity-search follower-delete`"))
 
     lock(app.lock) do
         if haskey(app.handles, id)
@@ -622,6 +649,9 @@ function handle_delete_dataset(req::HTTP.Request, app::AppState, id::String)
 
     path = joinpath(app.workdir, "datasets", id)
     isdir(path) && rm(path; force=true, recursive=true)
+    # The directory of its followers, empty at this point (checked above).
+    followers_dir = path * ".followers"
+    isdir(followers_dir) && rm(followers_dir; force=true, recursive=true)
 
     return json_response(200, Dict("status" => "deleted", "id" => id))
 end
@@ -786,6 +816,9 @@ function handle_get_dataset(req::HTTP.Request, app::AppState, id::String)
     valid_project_id(id) || return json_response(400, Dict("error" => "invalid dataset id"))
     desc = dataset_descriptor(app, id)
     desc === nothing && return json_response(404, Dict("error" => "dataset_not_found"))
+    # The status of each follower of a loaded leader (PLAN.md §5.12).
+    handle = lock(() -> get(app.handles, id, nothing), app.lock)
+    handle === nothing || (desc = merge(desc, Dict{String,Any}("followers" => dataset_follower_statuses(app, handle))))
     return json_response(200, desc)
 end
 
@@ -1980,6 +2013,23 @@ function run_server(host::String, port::Int, app::AppState; async::Bool=false)
     @post "/api/v1/admin/datasets/{id}/unload" (req, id) -> _guard(() -> handle_unload_dataset(req, app, id), req, app, :admin, id)
     @post "/api/v1/admin/datasets/{id}/reload" (req, id) -> _guard(() -> handle_reload_dataset(req, app, id), req, app, :admin, id)
 
+    # Followers (PLAN.md §5.12), with the permissions of their leader. `{f}` is a follower name,
+    # or `name=value` for one partition.
+    @post "/api/v1/datasets/{id}/followers" (req, id) -> _guard(() -> handle_create_follower(req, app, id), req, app, :admin, id)
+    @get "/api/v1/datasets/{id}/followers" (req, id) -> _guard(() -> handle_list_followers(req, app, id), req, app, :read, id)
+    @get "/api/v1/datasets/{id}/followers/{f}" (req, id, f) -> _guard(() -> handle_get_follower(req, app, id, f), req, app, :read, id)
+    @delete "/api/v1/datasets/{id}/followers/{f}" (req, id, f) -> _guard(() -> handle_delete_follower(req, app, id, f), req, app, :admin, id)
+    @post "/api/v1/datasets/{id}/followers/{f}/sync" (req, id, f) -> _guard(() -> handle_sync_follower(req, app, id, f), req, app, :write, id)
+    @post "/api/v1/datasets/{id}/followers/{f}/rebuild" (req, id, f) -> _guard(() -> handle_rebuild_follower(req, app, id, f), req, app, :admin, id)
+    @get "/api/v1/datasets/{id}/followers/{f}/partitions" (req, id, f) -> _guard(() -> handle_follower_partitions(req, app, id, f), req, app, :read, id)
+    @post "/api/v1/datasets/{id}/followers/{f}/search" (req, id, f) -> _guard(() -> handle_follower_search(req, app, id, f), req, app, :read, id)
+    @post "/api/v1/datasets/{id}/followers/{f}/ftsearch" (req, id, f) -> _guard(() -> handle_follower_ftsearch(req, app, id, f), req, app, :read, id)
+    @post "/api/v1/datasets/{id}/followers/{f}/calibrate" (req, id, f) -> _guard(() -> handle_follower_calibrate(req, app, id, f), req, app, :write, id)
+    @get "/api/v1/datasets/{id}/followers/{f}/postings" (req, id, f) -> _guard(() -> handle_follower_postings(req, app, id, f), req, app, :read, id)
+    @get "/api/v1/datasets/{id}/postings" (req, id) -> _guard(() -> handle_postings(req, app, id), req, app, :read, id)
+    @post "/api/v1/datasets/{id}/migrate-partitions" (req, id) -> _guard(() -> handle_migrate_partitions(req, app, id), req, app, :admin, id)
+    @get "/api/v1/datasets/{id}/group" (req, id) -> _guard(() -> handle_get_group(req, app, id), req, app, :read, id)
+
     println("Starting SimilaritySearchServer at http://$host:$port")
     serve(host=host, port=port, async=async)
 end
@@ -2089,4 +2139,6 @@ function parse_distance(dist::Union{AbstractString,Nothing})
     d == "" && return nothing # Some places pass empty string
     error("Unknown distance: $dist")
 end
+include("followers_api.jl")
+
 end # module

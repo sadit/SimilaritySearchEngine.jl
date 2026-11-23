@@ -50,6 +50,9 @@ function ensure_test_server()
         )
 
         errormonitor(@async Executors.run_dispatcher!(job_mgr, executor))
+        # Periodic followers are checked often, so that their test does not wait for long.
+        app.followers.check_seconds = 0.5
+        start_follower_task!(app)
 
         port = 8765
         run_server("127.0.0.1", port, app; async=true)
