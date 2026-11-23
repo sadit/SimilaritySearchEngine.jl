@@ -532,7 +532,48 @@ of it exist.
       to 66 s for a sketched project and 5 to 7 s for a quantized one: `_fit_quantizer!` built
       its sample with `reduce(hcat, generator)`, which copies the matrix at each column. The
       sample is now filled column by column, and a quantized `index!` takes 2 to 3 s.
-    - Not done yet: 7b (the server and the clients), 7c (the documentation).
+
+    Phase 7b, the server and the clients, implemented on 2026-11-23 (`parse_storage`,
+    `storage_dict` and `encoder_dict` in `server/src/server.jl`; `server/test/api/test_20_storage.jl`,
+    `server/test/cli/test_08_storage.jl`, and a testset in `test_boundary.jl`). What it
+    implements, and what differs from §5.14:
+    - `POST /api/v1/datasets` takes `storage`, an object with a `kind` (`float32`, `quantized`
+      or `sketched`) and the fields of that kind; only `kind` is required. A field that is absent
+      takes the default of the engine's constructor, so the defaults stay in the engine. An
+      unknown kind or field, a value of the wrong type, a value that the constructor refuses, a
+      `storage` on a text or sparse dataset, and a distance that the storage does not take answer
+      `400` with `InvalidOption`.
+    - `GET /api/v1/datasets/{id}` reports `storage`, with every field, and `encoder` (`fitted`,
+      `dimension`, `min`, `max`, `bytes_per_vector`, `staged`, and `bytes_on_disk_per_vector`
+      for sketches), read from the project. They are `null` for a dataset that is not loaded,
+      as `meta_schema` is; `descriptor.json` does not hold a copy. `staged` counts the vectors
+      not encoded yet: a sketched dataset keeps its first 64 staged and answers `409 NotTrained`.
+    - `append` indexes, so the first `append` fits the encoder on its own vectors: on at most
+      `samplesize` of them, and a quantized dataset fits its range on a first request of a few
+      vectors. The manual says to send a first request with enough vectors. A way to delay the
+      fitting is not designed.
+    - `build --storage JSON` takes the same object. `describe` reports the distance of the
+      dataset (it reported the distance between codes), `storage` and `encoder`; its distance
+      statistics search with the kept vectors, and are `null` without them or for a sketched
+      dataset with `rerank` 0, whose results have distances between sketches.
+    - `rebuild` encodes the kept vectors again with a new encoder and the same storage. A
+      quantized or sketched dataset without `keep_vectors` is refused with exit code 2 before
+      anything is moved. Before this, `rebuild` read the vectors with `stored_payload`, which
+      returns `nothing` for codes, so every item of a quantized dataset was dropped (found by
+      reading the code; no test had a quantized dataset to rebuild).
+    - `dump` and `load` copy the project, so the storage and the fitted encoder are kept; the
+      test compares the results before and after.
+    - The Julia client has `create_project(...; storage)`, with a `Dict` or a `NamedTuple` in
+      the wire form, and `project_info` reports `storage` and `encoder`. The Python clients have
+      `create_dataset(..., storage=None)`; they were checked against a server with a script
+      outside the suite, as in phase 5c.
+    - Found and corrected: `parse_distance` accepted `jaccard` for a type that does not exist
+      (`Dist.Jaccard`), so such a dataset failed with `500`; the name is removed, and an unknown
+      distance answers `400 InvalidOption` instead of `500`. The choices of `build --distance`
+      listed `NormalizedCosine`, which `parse_distance` did not accept; they are now `L2`,
+      `SqL2`, `Cosine`, `NormCosine`, `Angle` and `NormAngle`.
+    - `fetch` does not return the vector of an item, for any storage, as before.
+    - Not done yet: 7c (the manual and the tutorial).
 
     The order of the queue, set on 2026-11-23: phase 6b of issue #5; then binary sketches; then
     the decisions after phase 5 of issue #5 (§5.12, "Decided after phase 5": the event

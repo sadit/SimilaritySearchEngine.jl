@@ -51,9 +51,9 @@ class AsyncSimilaritySearchClient:
     # --- datasets ---------------------------------------------------------------------
 
     async def create_dataset(self, id=None, index_type="searchgraph", distance="L2", meta_schema=None,
-                              partition_by=None, partition_graph_min=None):
+                              partition_by=None, partition_graph_min=None, storage=None):
         return await self._call(*p.create_dataset(id, index_type, distance, meta_schema, partition_by,
-                                                partition_graph_min))
+                                                partition_graph_min, storage))
 
     async def list_datasets(self, offset=0, limit=None):
         return await self._call(*p.list_datasets(offset, limit))

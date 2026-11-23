@@ -15,7 +15,7 @@ Mode "single source of truth" principle -- applied here to the one piece of meta
 """
 const CLI_CHOICES = Dict(
     "index-kind" => ["searchgraph", "exhaustive_search", "parallel_exhaustive_search", "invfile", "bm25_invfile"],
-    "distance" => ["L2", "Cosine", "Angle", "NormalizedCosine"],
+    "distance" => ["L2", "SqL2", "Cosine", "NormCosine", "Angle", "NormAngle"],
     # A key `command:argument` applies to that argument of that command only. `follower-create`
     # has a `--distance` whose values are distances between sets, not the distances of a dense
     # dataset.
@@ -204,7 +204,7 @@ function build_settings()
             default = "searchgraph"
             range_tester = _choice_tester("index-kind")
         "--distance"
-            help = "Distance function (L2, Cosine, Angle, NormalizedCosine)"
+            help = "Distance function (L2, SqL2, Cosine, NormCosine, Angle, NormAngle); L2 is computed as SqL2"
             default = "L2"
             range_tester = _choice_tester("distance")
         "--workdir"
@@ -215,6 +215,8 @@ function build_settings()
         "--partition-graph-min"
             help = "Dense index with --partition-by only: the number of indexed members from which a partition has its own graph (default 4096); a smaller partition is searched with an exact scan"
             arg_type = Int
+        "--storage"
+            help = "Dense index only: how the vectors are stored, a JSON object as the 'storage' field of POST /api/v1/datasets, for example '{\"kind\": \"quantized\", \"bits\": 4}' or '{\"kind\": \"sketched\", \"hyperplanes\": 256, \"bits\": 8}' (default: Float32 vectors)"
     end
 
     @add_arg_table! s["searchbatch"] begin

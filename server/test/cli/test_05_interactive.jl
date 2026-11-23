@@ -37,7 +37,7 @@ using JSON3
 
     build_fields = SimilaritySearchServer._command_fields(settings, "build")
     @test Set(f.dest_name for f in build_fields) == Set(["dataset", "input", "index-kind", "distance", "workdir", "partition-by",
-                                                               "partition-graph-min"])
+                                                               "partition-graph-min", "storage"])
 
     @test SimilaritySearchServer._is_new_id_field("build", "dataset") == true
     @test SimilaritySearchServer._is_new_id_field("load", "dataset") == true
@@ -93,10 +93,10 @@ using JSON3
     # --- CLI_CHOICES / range_tester: non-interactive parsing also validates now ---
 
     @test SimilaritySearchServer.CLI_CHOICES["index-kind"] == ["searchgraph", "exhaustive_search", "parallel_exhaustive_search", "invfile", "bm25_invfile"]
-    @test SimilaritySearchServer.CLI_CHOICES["distance"] == ["L2", "Cosine", "Angle", "NormalizedCosine"]
+    @test SimilaritySearchServer.CLI_CHOICES["distance"] == ["L2", "SqL2", "Cosine", "NormCosine", "Angle", "NormAngle"]
     # A choice list of one command does not apply to the argument of the same name elsewhere.
     @test SimilaritySearchServer.field_choices("follower-create", "distance") == ["jaccard", "dice", "intersection", "cosine_set"]
-    @test SimilaritySearchServer.field_choices("build", "distance") == ["L2", "Cosine", "Angle", "NormalizedCosine"]
+    @test SimilaritySearchServer.field_choices("build", "distance") == ["L2", "SqL2", "Cosine", "NormCosine", "Angle", "NormAngle"]
     @test SimilaritySearchServer.field_choices("follower-create", "name") === nothing
 
     good = SimilaritySearchServer.parse_commandline(["build", "--dataset", "x", "--input", "y", "--index-kind", "searchgraph"])

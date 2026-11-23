@@ -52,11 +52,11 @@ def metrics():
 # --- datasets -------------------------------------------------------------------------
 
 def create_dataset(id=None, index_type="searchgraph", distance="L2", meta_schema=None,
-                    partition_by=None, partition_graph_min=None):
+                    partition_by=None, partition_graph_min=None, storage=None):
     body = _compact({
         "id": id, "index_type": index_type, "distance": distance,
         "meta_schema": meta_schema, "partition_by": partition_by,
-        "partition_graph_min": partition_graph_min,
+        "partition_graph_min": partition_graph_min, "storage": storage,
     })
     return "POST", "/api/v1/datasets", body, None
 

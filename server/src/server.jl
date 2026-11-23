@@ -519,7 +519,7 @@ function handle_create_dataset(req::HTTP.Request, app::AppState)
                                                   "which a partition has its own graph"))
 
     spec = try
-        dataset_spec(index_type, distance, dimension)
+        dataset_spec(index_type, distance, dimension, get(data, "storage", nothing))
     catch e
         e isa SSE.EngineError || rethrow()
         return engine_error_response(e)
@@ -741,7 +741,8 @@ end
     dataset_descriptor(app, id) -> Union{Dict, Nothing}
 
 Merges the persistent sidecar (`index_kind`/`distance`/`created_at`/`edit_correction`) with live stats from `app.handles` when the dataset happens to be
-currently loaded (`doc_count`, `tombstone_count`/`_ratio`) — `reload_datasets!` populates
+currently loaded (`doc_count`, `tombstone_count`/`_ratio`, and `storage` and `encoder`, which
+[`storage_dict`](@ref) and [`encoder_dict`](@ref) read from the project) — `reload_datasets!` populates
 `app.handles` for every on-disk dataset right at server startup, so in the normal case the
 two sources agree; `loaded == false` still shows up for the brief window before that
 startup reload runs, or if a dataset was explicitly unloaded some other way. Returns
@@ -766,12 +767,18 @@ function dataset_descriptor(app::AppState, id::String)
     # The declaration lives in the project, so it is reported for a dataset that is open and
     # left out for one that is not, rather than kept as a second copy in this sidecar.
     get!(base, "meta_schema", nothing)
+    get!(base, "storage", nothing)
+    get!(base, "encoder", nothing)
     if loaded
         handle = app.handles[id]
         declared = SSE.meta_schema(handle)
         base["meta_schema"] = isempty(declared) ? nothing : serialize_meta_schema(declared)
         base["partition_by"] = SSE.partition_field(handle)
         base["partition_graph_min"] = SSE.partition_graph_min(handle)
+        # The storage and its encoder live in the project too (PLAN.md §5.14).
+        spec = SSE.project_spec(handle)
+        base["storage"] = spec isa SSE.DenseVectors ? storage_dict(spec.storage) : nothing
+        base["encoder"] = encoder_dict(handle)
         engine = handle.engine
         doc_count = engine.backend.index === nothing ? 0 : length(engine.backend.index)
         tombstones = length(engine.deleted_ids)
@@ -2070,10 +2077,11 @@ end
 datasets_root(app::AppState) = joinpath(app.workdir, "datasets")
 
 """
-    dataset_spec(index_kind, distance, dimension) -> SSE.ProjectSpec
+    dataset_spec(index_kind, distance, dimension, storage) -> SSE.ProjectSpec
 
 The project specification of a dataset created with the wire's `index_kind`, `distance` (a name
-for [`parse_distance`](@ref), or `nothing`) and `dimension` (an integer, or `nothing`).
+for [`parse_distance`](@ref), or `nothing`), `dimension` (an integer, or `nothing`) and
+`storage` (the object that [`parse_storage`](@ref) reads, or `nothing`).
 
 | `index_kind` | spec |
 |---|---|
@@ -2087,11 +2095,15 @@ for [`parse_distance`](@ref), or `nothing`) and `dimension` (an integer, or `not
 A dense dataset without `distance` uses `SqL2`, and a sparse or a weighted text one `NormCosine`.
 A text dataset is fitted from its own corpus: the HTTP API has no way to send a profile yet.
 `dimension` is required for `sparse_invfile` and refused for the others, with
-[`SSE.InvalidOption`](@ref).
+[`SSE.InvalidOption`](@ref). `storage` applies only to the three dense kinds; the others refuse
+it with [`SSE.InvalidOption`](@ref).
 """
-function dataset_spec(kind::AbstractString, distance, dimension)
+function dataset_spec(kind::AbstractString, distance, dimension, storage)
     payload = parse_index_kind(kind)
     dist = parse_distance(distance)
+    storage === nothing || payload === :dense ||
+        throw(SSE.InvalidOption(:storage, "'storage' applies to a dense dataset (searchgraph, exhaustive_search or " *
+            "parallel_exhaustive_search); $kind does not take one"))
     if payload === :sparse
         dimension isa Integer ||
             throw(SSE.InvalidOption(:dimension, "a sparse dataset needs an integer 'dimension': an inverted file " *
@@ -2107,7 +2119,145 @@ function dataset_spec(kind::AbstractString, distance, dimension)
         return SSE.TextDocuments(model; index=SSE.VectorSpace(distance=something(dist, SimilaritySearch.Dist.NormCosine())))
     end
     index = kind == "searchgraph" ? SSE.Graph() : SSE.Exhaustive(parallel=kind == "parallel_exhaustive_search")
-    return SSE.DenseVectors(something(dist, SimilaritySearch.Dist.SqL2()); index)
+    return SSE.DenseVectors(something(dist, SimilaritySearch.Dist.SqL2()); index, storage=parse_storage(storage))
+end
+
+# --- The storage of a dense dataset (PLAN.md §5.14) ---------------------------------------
+
+# The fields of each kind of storage on the wire, besides `kind`.
+const STORAGE_FIELDS = Dict{String,Vector{String}}(
+    "float32" => String[],
+    "quantized" => ["bits", "range", "minmax", "samplesize", "rotation", "keep_vectors"],
+    "sketched" => ["hyperplanes", "bits", "rerank", "keep_vectors", "center", "samplesize", "hsel", "henc",
+                   "entquantile", "anchorpolicy"],
+)
+const ROTATIONS = Dict{String,Any}("none" => SSE.NoRotation(), "qr" => SSE.QRRotation(), "hadamard" => SSE.HadamardRotation())
+
+function _storage_value(d::AbstractDict, name::String, ::Type{T}, what::String) where {T}
+    v = d[name]
+    v isa T && !(T === Integer && v isa Bool) ||
+        throw(SSE.InvalidOption(:storage, "'storage.$name' must be $what; got $(repr(v))"))
+    return v
+end
+
+"""
+    parse_storage(raw) -> SSE.DenseStorage
+
+The storage of a dense dataset from the `storage` object of `POST /api/v1/datasets`:
+
+```json
+{"kind": "float32"}
+{"kind": "quantized", "bits": 8, "range": "global", "minmax": null, "samplesize": 4096,
+ "rotation": "none", "keep_vectors": false}
+{"kind": "sketched", "hyperplanes": 256, "bits": 8, "rerank": 0, "keep_vectors": false,
+ "center": false, "samplesize": 16384, "hsel": 4096, "henc": 1024, "entquantile": 0.5,
+ "anchorpolicy": "random"}
+```
+
+`nothing` is `{"kind": "float32"}`. Only `kind` is required. A field that is absent takes the
+default of the engine's constructor: `SSE.Quantized`, `SSE.SQ`, `SSE.GlobalRange`,
+`SSE.PerVectorRange` or `SSE.Sketched`. `range` is `global` or `per_vector`, and `minmax`, two
+numbers, applies to `global`. `rotation` is `none`, `qr` or `hadamard`. `anchorpolicy` is
+`random` or `extremal`. Raises [`SSE.InvalidOption`](@ref) for an unknown kind or field, a value
+of the wrong type, or a value that the constructor refuses.
+"""
+function parse_storage(raw)
+    raw === nothing && return SSE.Float32Vectors()
+    raw isa AbstractDict || throw(SSE.InvalidOption(:storage,
+        "'storage' is an object with a 'kind': float32, quantized or sketched; got $(repr(raw))"))
+    d = Dict{String,Any}(String(k) => v for (k, v) in raw)
+    kind = get(d, "kind", nothing)
+    fields = kind isa AbstractString ? get(STORAGE_FIELDS, kind, nothing) : nothing
+    fields === nothing && throw(SSE.InvalidOption(:storage,
+        "'storage.kind' must be float32, quantized or sketched; got $(repr(kind))"))
+    unknown = sort!([k for k in keys(d) if k != "kind" && !(k in fields)])
+    isempty(unknown) || throw(SSE.InvalidOption(:storage, "the storage $kind has no field(s) $(join(unknown, ", ")); " *
+        (isempty(fields) ? "it takes none" : "it takes $(join(fields, ", "))")))
+    kind == "float32" && return SSE.Float32Vectors()
+    int(name) = _storage_value(d, name, Integer, "an integer")
+    bool(name) = _storage_value(d, name, Bool, "true or false")
+    str(name) = _storage_value(d, name, AbstractString, "a string")
+    kw = Dict{Symbol,Any}()
+    if kind == "quantized"
+        range_kw = Dict{Symbol,Any}()
+        haskey(d, "samplesize") && (range_kw[:samplesize] = int("samplesize"))
+        if haskey(d, "minmax") && d["minmax"] !== nothing
+            mm = d["minmax"]
+            mm isa AbstractVector && length(mm) == 2 && all(x -> x isa Real && !(x isa Bool), mm) ||
+                throw(SSE.InvalidOption(:storage, "'storage.minmax' must be two numbers [lo, hi]; got $(repr(mm))"))
+            range_kw[:minmax] = (mm[1], mm[2])
+        end
+        range = haskey(d, "range") ? str("range") : "global"
+        range in ("global", "per_vector") ||
+            throw(SSE.InvalidOption(:storage, "'storage.range' must be global or per_vector; got $(repr(range))"))
+        range == "per_vector" && haskey(range_kw, :minmax) &&
+            throw(SSE.InvalidOption(:storage, "'storage.minmax' applies to the range global, not to per_vector"))
+        sq_kw = Dict{Symbol,Any}()
+        isempty(range_kw) && !haskey(d, "range") ||
+            (sq_kw[:range] = range == "global" ? SSE.GlobalRange(; range_kw...) : SSE.PerVectorRange(; range_kw...))
+        sq = haskey(d, "bits") ? SSE.SQ(int("bits"); sq_kw...) : SSE.SQ(; sq_kw...)
+        if haskey(d, "rotation")
+            r = str("rotation")
+            haskey(ROTATIONS, r) || throw(SSE.InvalidOption(:storage,
+                "'storage.rotation' must be none, qr or hadamard; got $(repr(r))"))
+            kw[:rotation] = ROTATIONS[r]
+        end
+        haskey(d, "keep_vectors") && (kw[:keep_vectors] = bool("keep_vectors"))
+        return SSE.Quantized(sq; kw...)
+    end
+    for name in ("bits", "rerank", "samplesize", "hsel", "henc")
+        haskey(d, name) && (kw[Symbol(name)] = int(name))
+    end
+    for name in ("keep_vectors", "center")
+        haskey(d, name) && (kw[Symbol(name)] = bool(name))
+    end
+    haskey(d, "entquantile") && (kw[:entquantile] = _storage_value(d, "entquantile", Real, "a number"))
+    haskey(d, "anchorpolicy") && (kw[:anchorpolicy] = Symbol(str("anchorpolicy")))
+    return haskey(d, "hyperplanes") ? SSE.Sketched(int("hyperplanes"); kw...) : SSE.Sketched(; kw...)
+end
+
+"""
+    storage_dict(storage::SSE.DenseStorage) -> Dict
+
+The wire form of the storage of a dense dataset, with every field, as
+[`parse_storage`](@ref) reads it back.
+"""
+storage_dict(::SSE.Float32Vectors) = Dict{String,Any}("kind" => "float32")
+
+function storage_dict(q::SSE.Quantized)
+    r = q.quantizer.range
+    glob = r isa SSE.GlobalRange
+    Dict{String,Any}("kind" => "quantized", "bits" => q.quantizer.bits, "range" => glob ? "global" : "per_vector",
+        "minmax" => glob && r.minmax !== nothing ? Float32[r.minmax...] : nothing, "samplesize" => r.samplesize,
+        "rotation" => only(k for (k, v) in ROTATIONS if v == q.rotation), "keep_vectors" => q.keep_vectors)
+end
+
+storage_dict(s::SSE.Sketched) = Dict{String,Any}("kind" => "sketched", "hyperplanes" => s.hyperplanes,
+    "bits" => s.bits, "rerank" => s.rerank, "keep_vectors" => s.keep_vectors, "center" => s.center,
+    "samplesize" => s.samplesize, "hsel" => s.hsel, "henc" => s.henc, "entquantile" => s.entquantile,
+    "anchorpolicy" => String(s.anchorpolicy))
+
+"""
+    encoder_dict(handle) -> Union{Dict, Nothing}
+
+The encoder of a quantized or sketched dataset, from `SSE.quantizer_info` or `SSE.sketch_info`:
+whether it is `fitted`, the `dimension` of the vectors, the `min` and `max` of its range, the
+`bytes_per_vector` of a code, and for sketches the `bytes_on_disk_per_vector` with the kept
+vectors. `staged` is the number of appended vectors that are not encoded yet: a sketched
+dataset keeps its first 64 vectors staged until it has more. `nothing` for a dataset that
+stores `Float32` vectors or is not dense.
+"""
+function encoder_dict(handle)
+    SSE.project_spec(handle) isa SSE.DenseVectors || return nothing
+    q = SSE.quantizer_info(handle)
+    s = q === nothing ? SSE.sketch_info(handle) : nothing
+    info = something(q, s, Some(nothing))
+    info === nothing && return nothing
+    d = Dict{String,Any}("fitted" => info.fitted, "dimension" => info.dimension, "min" => info.min,
+                         "max" => info.max, "bytes_per_vector" => info.bytes_per_vector,
+                         "staged" => handle.engine.quant.npending)
+    s === nothing || (d["bytes_on_disk_per_vector"] = s.bytes_on_disk_per_vector)
+    return d
 end
 
 """
@@ -2137,9 +2287,13 @@ end
     parse_distance(name::Union{AbstractString,Nothing}) -> Union{SimilaritySearch.PreMetric,Nothing}
 
 The distance that a wire name selects: `l2` and `sql2` give `SqL2`, and `cosine`, `normcosine`,
-`angle`, `normangle` and `jaccard` give the distance of the same name. The name is not case
-sensitive. `nothing` and the empty string give `nothing`, which lets
-[`dataset_spec`](@ref) choose the default distance of the dataset kind.
+`angle` and `normangle` give the distance of the same name. The name is not case sensitive.
+`nothing` and the empty string give `nothing`, which lets [`dataset_spec`](@ref) choose the
+default distance of the dataset kind. Another name raises [`SSE.InvalidOption`](@ref).
+
+`jaccard` was listed here until 2026-11-23, and it named a type that SimilaritySearch does not
+have, so a dataset created with it failed with a 500. The Jaccard distance of SimilaritySearch
+is between sets, and the keyword followers have it (PLAN.md §5.12).
 """
 function parse_distance(dist::Union{AbstractString,Nothing})
     dist === nothing && return nothing
@@ -2150,9 +2304,8 @@ function parse_distance(dist::Union{AbstractString,Nothing})
     d == "normcosine" && return SimilaritySearch.Dist.NormCosine()
     d == "angle" && return SimilaritySearch.Dist.Angle()
     d == "normangle" && return SimilaritySearch.Dist.NormAngle()
-    d == "jaccard" && return SimilaritySearch.Dist.Jaccard()
     d == "" && return nothing # Some places pass empty string
-    error("Unknown distance: $dist")
+    throw(SSE.InvalidOption(:distance, "unknown distance $(repr(dist)); expected l2, sql2, cosine, normcosine, angle or normangle"))
 end
 include("plugins.jl")
 include("followers_api.jl")

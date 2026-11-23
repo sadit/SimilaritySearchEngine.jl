@@ -4,39 +4,16 @@ using TOML
 using HTTP
 using Dates
 
-function execute_build(cmd_args::Dict)
-    project_id = cmd_args["dataset"]
-    input_file = cmd_args["input"]
-    index_kind = cmd_args["index-kind"]
-    distance = cmd_args["distance"]
-    workdir = cmd_args["workdir"]
-
-    println("Building index '$index_kind' for dataset '$project_id'")
-
-    partition_by = get(cmd_args, "partition-by", nothing)
-    graph_min = get(cmd_args, "partition-graph-min", nothing)
-    graph_min === nothing || partition_by !== nothing ||
-        SSE.Errors.invalid_option(:partition_graph_min, "--partition-graph-min needs --partition-by: it is the " *
-                                  "size from which a partition has its own graph")
-    handle = SSE.create_project(workdir, project_id, Server.dataset_spec(index_kind, distance, nothing);
-        partitions=partition_by === nothing ? nothing : SSE.PartitionBy(partition_by; graph_min))
-
-    kind = SSE.payload_kind(handle.engine)
-    items = SSE.AbstractItem[]
-    for line in eachline(input_file)
-        isempty(strip(line)) && continue
-        it = Server._typed_item(kind, JSON3.read(codeunits(line), Dict{String, Any}))
-        it === nothing || push!(items, it)
+# The value of `build --storage`: a JSON object, as the `storage` field of `POST /api/v1/datasets`.
+function _storage_arg(arg)
+    arg === nothing && return nothing
+    try
+        return JSON3.read(codeunits(arg), Dict{String,Any})
+    catch e
+        e isa Union{ArgumentError,MethodError} || rethrow()
+        throw(SSE.InvalidOption(:storage, "--storage is a JSON object, such as '{\"kind\": \"quantized\", \"bits\": 4}'; " *
+                                          "got $(repr(arg))"))
     end
-
-    inserted = isempty(items) ? 0 : SSE.append_items!(handle, items)
-    inserted > 0 && SSE.index!(handle)
-    # Nothing else to write: the project persists itself, which is also why `search`,
-    # `describe` and every job below reopen it instead of reading a separate file.
-    SSE.close_project!(handle)
-
-    println("Successfully built index with $inserted items. Saved to $(joinpath(workdir, project_id))")
-    return 0
 end
 
 """
@@ -86,6 +63,43 @@ macro cli_engine_call(expr)
             cli_exit_code(e)
         end
     end
+end
+
+function execute_build(cmd_args::Dict)
+    project_id = cmd_args["dataset"]
+    input_file = cmd_args["input"]
+    index_kind = cmd_args["index-kind"]
+    distance = cmd_args["distance"]
+    workdir = cmd_args["workdir"]
+
+    println("Building index '$index_kind' for dataset '$project_id'")
+
+    partition_by = get(cmd_args, "partition-by", nothing)
+    graph_min = get(cmd_args, "partition-graph-min", nothing)
+    graph_min === nothing || partition_by !== nothing ||
+        SSE.Errors.invalid_option(:partition_graph_min, "--partition-graph-min needs --partition-by: it is the " *
+                                  "size from which a partition has its own graph")
+    spec = @cli_engine_call Server.dataset_spec(index_kind, distance, nothing, _storage_arg(get(cmd_args, "storage", nothing)))
+    spec isa Cint && return spec
+    handle = SSE.create_project(workdir, project_id, spec;
+        partitions=partition_by === nothing ? nothing : SSE.PartitionBy(partition_by; graph_min))
+
+    kind = SSE.payload_kind(handle.engine)
+    items = SSE.AbstractItem[]
+    for line in eachline(input_file)
+        isempty(strip(line)) && continue
+        it = Server._typed_item(kind, JSON3.read(codeunits(line), Dict{String, Any}))
+        it === nothing || push!(items, it)
+    end
+
+    inserted = isempty(items) ? 0 : SSE.append_items!(handle, items)
+    inserted > 0 && SSE.index!(handle)
+    # Nothing else to write: the project persists itself, which is also why `search`,
+    # `describe` and every job below reopen it instead of reading a separate file.
+    SSE.close_project!(handle)
+
+    println("Successfully built index with $inserted items. Saved to $(joinpath(workdir, project_id))")
+    return 0
 end
 
 """
@@ -383,6 +397,11 @@ Real, sampled nearest-neighbor distance statistics (min/mean/max over up to the 
 items' own nearest live neighbor) -- the "distance statistics ... to help people know
 about their data" PLAN.md §1's `describe` note asks for. `nothing` if the index has fewer
 than 2 items (no pair to measure) or isn't dense.
+
+A quantized or sketched index holds codes, so the queries are the `Float32` vectors that the
+dataset keeps (`keep_vectors`), and `nothing` when it does not keep them. A sketched dataset
+without a second evaluation (`rerank` 0) answers with distances between sketches, which are not
+the distance of the dataset, so it has no statistics either (PLAN.md §5.14).
 """
 function _dense_distance_stats(handle)
     engine = handle.engine
@@ -394,7 +413,14 @@ function _dense_distance_stats(handle)
     ids = collect(1:sample_n)
     # Through the engine's batch entry point, which locks the project and refuses a staged
     # backlog, rather than calling the library against the bare index.
-    queries = [Vector{Float32}(SimilaritySearch.database(engine.backend.index, i)) for i in ids]
+    queries = if IndexEngine.isquantized(engine)
+        IndexEngine.issketched(engine) && engine.quant.spec.rerank == 0 && return nothing
+        kept = [it.payload for it in SSE.fetch_items(handle, ids)]
+        any(v -> v === nothing, kept) && return nothing
+        kept
+    else
+        [Vector{Float32}(SimilaritySearch.database(engine.backend.index, i)) for i in ids]
+    end
     raw_ids, raw_dists = SSE.searchbatch(handle, queries, 2)
 
     nn_dists = Float64[]
@@ -447,7 +473,14 @@ function execute_describe(cmd_args::Dict)
         # answers exactly (PLAN.md §5's drift signal, see `execute_rebuild`).
         desc["vocab"] = SSE.vocabulary_report(handle; scan=true, sample=0)
     else
-        desc["distance"] = string(nameof(typeof(SimilaritySearch.distance(engine.backend.index))))
+        # The distance of the dataset: a quantized or sketched index searches with the distance
+        # of its codes (PLAN.md §5.14).
+        spec = SSE.project_spec(handle)
+        desc["distance"] = string(nameof(typeof(spec.distance)))
+        if spec isa SSE.DenseVectors
+            desc["storage"] = Server.storage_dict(spec.storage)
+            desc["encoder"] = Server.encoder_dict(handle)
+        end
         desc["distance_stats"] = _dense_distance_stats(handle)
         bs = IndexEngine.current_beamsearch(engine)
         desc["beamsearch_baseline"] = bs === nothing ? nothing :
@@ -492,14 +525,18 @@ function _report_followers(project_id::String, statuses::Vector{SSE.FollowerStat
 end
 
 """
-    _live_items(ds, engine) -> (all_ids::Vector{Int}, live::Vector{Tuple{Int,Dict}})
+    _live_items(handle) -> (all_ids::Vector{Int}, live::Vector{Tuple{Int,Dict}})
 
-Scans `ds`'s metadata column family once, returning every doc_id currently stored
-(`all_ids`, needed to wipe stale rows during a rebuild) alongside the reconstructed raw
-item (`declared_fields` merged with the decoded `extra` JSON -- see `Schema.MetadataRecord`)
-for every *live* (non-tombstoned) one, sorted by original doc_id.
+Scans the metadata column family of the project of `handle` once, returning every doc_id
+currently stored (`all_ids`, needed to wipe stale rows during a rebuild) alongside the
+reconstructed raw item (`declared_fields` merged with the decoded `extra` JSON -- see
+`Schema.MetadataRecord`) for every *live* (non-tombstoned) one, sorted by original doc_id.
+The index of a quantized or sketched project holds codes, so its vectors are the ones it
+keeps (`keep_vectors`), read with `fetch_items`.
 """
-function _live_items(ds, engine)
+function _live_items(handle)
+    ds, engine = handle.project, handle.engine
+    quantized = IndexEngine.isquantized(engine)
     all_ids = Int[]
     live = Tuple{Int, Dict{String, Any}}[]
     for (_, v) in RocksDB.DBIterator(ds.db; cf=ds.cf_records)
@@ -518,7 +555,8 @@ function _live_items(ds, engine)
             merge!(raw, Dict{String, Any}("meta" => meta))
         end
         
-        payload = IndexEngine.stored_payload(engine, record._id)
+        payload = quantized ? only(SSE.fetch_items(handle, [record._id])).payload :
+                              IndexEngine.stored_payload(engine, record._id)
         if payload !== nothing
             raw[payload isa String ? "text" : "vector"] = payload
         end
@@ -572,6 +610,15 @@ function execute_rebuild(cmd_args::Dict)
     # in the project, and the partition lists are rebuilt from the items' `meta` as they are
     # appended again.
     spec = SSE.project_spec(handle)
+    # A quantized or sketched project encodes its vectors again, with a new encoder, from the
+    # Float32 vectors it keeps. Without them there is nothing to encode (PLAN.md §5.14).
+    if spec isa SSE.DenseVectors && spec.storage isa Union{SSE.Quantized,SSE.Sketched} && !spec.storage.keep_vectors
+        SSE.close_project!(handle; compact=false)
+        println("Error: dataset '$project_id' stores its vectors as $(spec.storage isa SSE.Quantized ? "quantized codes" : "sketches") " *
+                "and does not keep the Float32 vectors (keep_vectors=false), so rebuild has no vectors to encode again. " *
+                "Build the dataset again from its source.")
+        return Cint(2)
+    end
     partition_by = SSE.partition_field(handle)
     partitions = partition_by === nothing ? nothing :
                  SSE.PartitionBy(partition_by; graph_min=SSE.partition_graph_min(handle))
@@ -584,7 +631,7 @@ function execute_rebuild(cmd_args::Dict)
         st.missing && println("The follower '$(st.name)' has no directory and is not kept.")
     end
 
-    all_ids, live = _live_items(handle.project, engine)
+    all_ids, live = _live_items(handle)
     live_valid = [(id, item) for (id, item) in live if haskey(item, field)]
     dropped_missing_field = length(live) - length(live_valid)
 

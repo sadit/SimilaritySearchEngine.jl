@@ -27,22 +27,66 @@ using JSON3
     # An unknown name is an invalid request, not an opaque failure: the handler turns this
     # very type into a 400.
     @test_throws SSE.UnknownBackend parse_index_kind("nope")
-    @test_throws SSE.UnknownBackend dataset_spec("nope", nothing, nothing)
+    @test_throws SSE.UnknownBackend dataset_spec("nope", nothing, nothing, nothing)
 
-    @test dataset_spec("searchgraph", nothing, nothing) == DenseVectors(Dist.SqL2(); index=Graph())
-    @test dataset_spec("exhaustive_search", "cosine", nothing) == DenseVectors(Dist.Cosine(); index=Exhaustive())
-    @test dataset_spec("parallel_exhaustive_search", "L2", nothing) ==
+    @test dataset_spec("searchgraph", nothing, nothing, nothing) == DenseVectors(Dist.SqL2(); index=Graph())
+    @test dataset_spec("exhaustive_search", "cosine", nothing, nothing) == DenseVectors(Dist.Cosine(); index=Exhaustive())
+    @test dataset_spec("parallel_exhaustive_search", "L2", nothing, nothing) ==
           DenseVectors(Dist.SqL2(); index=Exhaustive(parallel=true))
-    @test dataset_spec("sparse_invfile", nothing, 64) == SparseVectors(64, Dist.NormCosine())
+    @test dataset_spec("sparse_invfile", nothing, 64, nothing) == SparseVectors(64, Dist.NormCosine())
     # A text dataset is fitted from its own corpus: the HTTP API cannot send a profile.
-    bm25 = dataset_spec("bm25_invfile", "L2", nothing)
+    bm25 = dataset_spec("bm25_invfile", "L2", nothing, nothing)
     @test bm25 isa TextDocuments{BM25} && bm25.model isa FitFromCorpus
-    weighted = dataset_spec("invfile", "normcosine", nothing)
+    weighted = dataset_spec("invfile", "normcosine", nothing, nothing)
     @test weighted.index == VectorSpace(distance=Dist.NormCosine())
 
     # `dimension` belongs to a sparse dataset, and a sparse dataset needs it.
-    @test_throws SSE.InvalidOption dataset_spec("sparse_invfile", nothing, nothing)
-    @test_throws SSE.InvalidOption dataset_spec("searchgraph", nothing, 16)
+    @test_throws SSE.InvalidOption dataset_spec("sparse_invfile", nothing, nothing, nothing)
+    @test_throws SSE.InvalidOption dataset_spec("searchgraph", nothing, 16, nothing)
+end
+
+@testset "the storage of a dense dataset on the wire (PLAN.md §5.14)" begin
+    S = SimilaritySearchServer.Server
+    spec(storage; kind="exhaustive_search", distance="normcosine") = dataset_spec(kind, distance, nothing, storage)
+    @test spec(nothing).storage == Float32Vectors()
+    @test spec(Dict("kind" => "float32")).storage == Float32Vectors()
+    # A field that is absent takes the default of the engine's constructor.
+    @test spec(Dict("kind" => "quantized")).storage == Quantized()
+    @test spec(Dict("kind" => "quantized", "bits" => 4, "rotation" => "qr", "keep_vectors" => true)).storage ==
+          Quantized(SQ(4); rotation=QRRotation(), keep_vectors=true)
+    @test spec(Dict("kind" => "quantized", "range" => "per_vector", "samplesize" => 100)).storage ==
+          Quantized(SQ(8; range=PerVectorRange(samplesize=100)))
+    @test spec(Dict("kind" => "quantized", "minmax" => [-1, 1])).storage == Quantized(SQ(8; range=GlobalRange(minmax=(-1, 1))))
+    @test spec(Dict("kind" => "sketched")).storage == Sketched()
+    sk = Dict("kind" => "sketched", "hyperplanes" => 128, "bits" => 1, "rerank" => 4, "keep_vectors" => true,
+              "center" => true, "samplesize" => 1000, "hsel" => 4096, "henc" => 512, "entquantile" => 0.75,
+              "anchorpolicy" => "extremal")
+    @test spec(sk).storage == Sketched(128; bits=1, rerank=4, keep_vectors=true, center=true, samplesize=1000,
+                                       hsel=4096, henc=512, entquantile=0.75, anchorpolicy=:extremal)
+    # The wire form reads back to the same storage, with every field.
+    for st in (Float32Vectors(), Quantized(SQ(2; range=GlobalRange(minmax=(-2, 2))); rotation=HadamardRotation()),
+               Quantized(SQ(4; range=PerVectorRange())), spec(sk).storage)
+        d = S.storage_dict(st)
+        @test S.parse_storage(JSON3.read(JSON3.write(d), Dict{String,Any})) == st
+    end
+    @test S.storage_dict(Sketched())["hsel"] == 16 * 256
+    # Refused with InvalidOption, which the handler answers with a 400.
+    for bad in (Dict("bits" => 8), Dict("kind" => "pq"), "quantized", Dict("kind" => "quantized", "rotation" => "pca"),
+                Dict("kind" => "quantized", "bits" => "8"), Dict("kind" => "quantized", "bits" => 3),
+                Dict("kind" => "quantized", "keep_vectors" => 1), Dict("kind" => "quantized", "hyperplanes" => 64),
+                Dict("kind" => "quantized", "range" => "per_vector", "minmax" => [0, 1]),
+                Dict("kind" => "quantized", "minmax" => [1]), Dict("kind" => "float32", "bits" => 8),
+                Dict("kind" => "sketched", "hyperplanes" => 100), Dict("kind" => "sketched", "rerank" => 2),
+                Dict("kind" => "sketched", "anchorpolicy" => "central"), Dict("kind" => "sketched", "bits" => true))
+        @test_throws SSE.InvalidOption spec(bad)
+    end
+    # Only a dense dataset has a storage, and each storage checks its distance.
+    @test_throws SSE.InvalidOption spec(Dict("kind" => "quantized"); kind="bm25_invfile")
+    @test_throws SSE.InvalidOption spec(Dict("kind" => "float32"); kind="invfile")
+    @test_throws SSE.InvalidOption spec(Dict("kind" => "quantized"); distance="angle")
+    # An unknown distance is an invalid request, not an error of the server.
+    @test_throws SSE.InvalidOption dataset_spec("exhaustive_search", "jaccard", nothing, nothing)
+    @test_throws SSE.InvalidOption dataset_spec("exhaustive_search", "NormalizedCosine", nothing, nothing)
 end
 
 @testset "engine errors become status codes by category, not by message" begin

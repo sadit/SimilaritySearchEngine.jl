@@ -18,7 +18,7 @@ Base.show(io::IO, h::RemoteProject) = print(io, "RemoteProject(", repr(h.conn.ur
 """
     create_project(conn::Connection, dataset; index_type=nothing, distance=nothing, dimension=nothing,
                    meta_schema=nothing, partition_by=nothing, partition_graph_min=nothing,
-                   edit_correction=nothing) -> RemoteProject
+                   edit_correction=nothing, storage=nothing) -> RemoteProject
 
 Creates the dataset `dataset` on the server (`POST /api/v1/datasets`) and returns its handle.
 
@@ -31,14 +31,20 @@ also needs `dimension`. `meta_schema` declares fields of `meta` as in the engine
 `partition_by` names the field of `meta` that partitions the dataset, for a text or a dense
 dataset. `partition_graph_min` is the number of members from which a partition of a dense
 dataset has its own graph. Both are described in the server manual.
+
+`storage` says how a dense dataset stores its vectors, as the `storage` object of the server: a
+`Dict` or a `NamedTuple` with a `kind`, `"float32"`, `"quantized"` or `"sketched"`, and the
+fields of that kind. For example, `(kind="quantized", bits=4)` or
+`(kind="sketched", hyperplanes=256, bits=8)`. The fields are described in the server manual.
+[`project_info`](@ref) reports the storage with every field, and its encoder.
 """
 function create_project(conn::Connection, dataset::AbstractString; index_type=nothing, distance=nothing,
                         dimension=nothing, meta_schema=nothing, partition_by=nothing,
-                        partition_graph_min=nothing, edit_correction=nothing)
+                        partition_graph_min=nothing, edit_correction=nothing, storage=nothing)
     body = Dict{String,Any}("id" => String(dataset))
     for (key, value) in (("index_type", index_type), ("distance", distance), ("dimension", dimension),
                          ("partition_by", partition_by), ("partition_graph_min", partition_graph_min),
-                         ("edit_correction", edit_correction))
+                         ("edit_correction", edit_correction), ("storage", storage))
         value === nothing || (body[key] = value)
     end
     meta_schema === nothing || (body["meta_schema"] = wire_meta_schema(meta_schema))
@@ -104,7 +110,11 @@ list_projects(conn::Connection) =
 
 The descriptor of the dataset (`GET /api/v1/datasets/{id}`): `index_kind`, `distance`,
 `created_at`, `loaded`, and for a loaded dataset `doc_count`, `tombstone_count`, `meta_schema`,
-`partition_by`, `partition_graph_min` and `beamsearch_baseline`.
+`partition_by`, `partition_graph_min`, `beamsearch_baseline`, `storage` and `encoder`.
+`storage` has every field of the storage of a dense dataset. `encoder` is `nothing` for a
+dataset that stores `Float32` vectors, and otherwise says whether the encoder is `fitted`, its
+`dimension`, its range (`min`, `max`), its `bytes_per_vector`, and the number of `staged`
+vectors that are not encoded yet.
 """
 project_info(h::RemoteProject) = _plain(request(h.conn, "GET", dataset_path(h.id)))
 
