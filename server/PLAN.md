@@ -593,7 +593,39 @@ of it exist.
     and the followers as observers of those events. The user decided the six questions on
     2026-11-23 (§5.15, "Decided"): `ItemsIndexed` only, errors of observers do not fail the
     leader, `OnWrite` stays as a name of `OnIndex`, `Periodic(items)` is processed in
-    `on_event`, and the API is public. Next: phase 8a, the engine.
+    `on_event`, and the API is public.
+
+    Phase 8a, the engine, implemented on 2026-11-23 (`src/events.jl`, `test/events.jl`). What it
+    implements, and what differs from §5.15:
+    - `ProjectEvent`, `ItemsIndexed(sp, ep)`, `ProjectObserver`, `on_event`, `observe!`,
+      `unobserve!` and `observers` are exported. A handle holds its observers, the number of
+      indexed items already reported (`reported`, set to `indexed_length` when the handle is
+      created or opened), and a lock. `append_items!` and `index!` end with
+      `_report_indexed!`, which reports the items from `reported + 1` to `indexed_length`. An
+      `_id` is therefore reported once by a handle, also when an earlier call failed before it
+      reported: the next call reports its items too.
+    - The events of a handle are reported one at a time, under its lock, in the order in which
+      the observers were added. An error of an observer is written to the log with `@error`,
+      and the call of the leader returns. `close_project!` removes every observer.
+    - `Follower <: ProjectObserver`. `create_follower`, `open_follower` and
+      `rebuild_follower!` add it to the observers of the leader, and `close_follower!` removes
+      it. `on_event` applies its policy: `OnIndex` and `OnWrite` call `sync!`;
+      `Periodic(items=n)` calls it when the lag reaches `n`; `Manual` and `Periodic(seconds)`
+      do nothing. An error of `sync!` stays in the log and in `follower_status(f).error`.
+      `_sync_followers!` was removed.
+    - Changed behavior: an `OnIndex` follower of an exact or sparse leader processes the new
+      items in `append_items!`, where they become searchable; before, it waited for `index!`.
+      An `OnWrite` follower of a staging leader now processes at `index!`, as `OnIndex`.
+      `append_items!` and `index!` no longer raise the error of a follower, and an `append` of
+      the server answers `200` for the items it stored (the test `api/18` changed with it).
+    - Opening a follower still processes nothing. A follower that lags, because it was closed
+      or the process stopped, processes what it missed at the next event of its leader, or at
+      `sync!`. §5.15 said that it processes it when it opens.
+    - Phase 8c, the documentation, done on 2026-11-23 (§5.15, "As built"): the architecture
+      page, the server manual, both tutorials and the page of the Julia client.
+    - Phase 8b needed no code. The user decided on 2026-11-23 to keep the check of `items` in
+      the task of the server, which processes a follower opened with a lag of `items` or more
+      (§5.15, decision 5).
 
 The stemmer registry of §5.3 and §9's phase 5 is not on this list: it was discarded. Stemming
 was the way this specification proposed to make a query match a word it does not equal. That
@@ -2388,7 +2420,8 @@ each phase implements and the measurements. What differs from this design:
 
 ### 5.15. Events of a Project (design, 2026-11-23)
 
-Status: proposed on 2026-11-23, item 17 of §0; the decisions are in "Decided (2026-11-23)". Decision 1 of "Decided
+Status: proposed and decided on 2026-11-23, item 17 of §0. The decisions are in "Decided
+(2026-11-23)", and what phases 8a and 8c built is in "As built". Decision 1 of "Decided
 after phase 5" (§5.12) asks for an event dispatcher in place of the policies of the followers,
 like the two logs of SimilaritySearch, and leaves open what an event is, so that the dispatch
 consumes few resources. This section proposes an answer and lists the decisions it needs.
@@ -2530,6 +2563,9 @@ The user accepted the recommendations:
    working. The wire name `on_write` stays too.
 5. `Periodic(items=n)` is processed in `on_event` when the lag of the follower reaches `n`, in
    the engine and in the server. The task of the server processes only `Periodic(seconds=s)`.
+   Changed on 2026-11-23, after phase 8a: the task of the server keeps its check of `items`
+   too. It processes a follower that was opened with a lag of `n` or more, before the next
+   event of its leader.
 6. `observe!`, `unobserve!`, `observers`, `on_event`, `ProjectObserver`, `ProjectEvent` and
    `ItemsIndexed` are public from the first version, with no more than that.
 
@@ -2553,6 +2589,31 @@ The user accepted the recommendations:
   log and in the status.
 - A follower that was closed while its leader indexed items processes them when it opens.
 - `Periodic(items=n)` is processed when the lag reaches `n`, and not before.
+
+#### As built (2026-11-23)
+
+Phase 8a built the engine as this section says, with one difference. Opening a follower
+processes nothing. A follower that lags, because it was closed or because the process stopped,
+processes what it missed at the next event of its leader, or at `sync!`. `test/events.jl` tests
+this in place of the test of a follower that processes the missed items when it opens. Item 17
+of §0 lists what 8a changed.
+
+Phase 8c documented it:
+- `manual/architecture.qmd`: the policies and the rule for errors in "Processing", and a new
+  section, "Events of a Project", with the contract of an event and of an observer.
+- `manual/server/manual.qmd`: `on_write` as a name of `on_index`, `periodic` with `items`
+  inside an `append`, and an `append` that answers `200` when a follower fails.
+- `manual/tutorials/getting-started.qmd`: a new section, "Observing the Changes of a Project",
+  with an observer of a text project, and the policies of a follower.
+- `manual/server/tutorial.qmd` (step 10) and `manual/server/julia-client.qmd` (the observers
+  are not in the client).
+
+Phase 8b needed no code. An `append` answers `200` when a follower fails, because the engine
+no longer raises the error. The task of `serve` processes a periodic follower when `seconds`
+have passed, or when its lag reaches `items`. With the events, an `append` already processes it
+when the lag reaches `items`. The user decided on 2026-11-23 to keep the check of `items` in the
+task: it processes a follower that was opened with a lag of `items` or more, before the next
+event of its leader.
 
 ## 6. Hybrid Search Readiness (Suggestions & Specifications)
 

@@ -189,6 +189,7 @@ The differences with the engine are these:
 | `FollowerStatus` | `error` is the last failure of `sync!` | `error` also reports a follower that the server could not open |
 | `close_follower!` | closes the database of the follower | does nothing |
 | `attach_follower!` | exists | not available; the commands `rebuild` and `load` of `similarity-search` use it |
+| `observe!`, `on_event` | an observer runs in the process of the engine, in the task that changed the project | not available; the server does not send the events of a dataset to a client |
 
 The client does not declare the spec types of the engine, `PartitionFollower` and `KeywordFollower`. A follower is created with the names of the HTTP API, as `create_project` creates a dataset.
 

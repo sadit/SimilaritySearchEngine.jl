@@ -565,6 +565,11 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <td style="text-align: left;">exists</td>
 <td style="text-align: left;">not available; the commands <code>rebuild</code> and <code>load</code> of <code>similarity-search</code> use it</td>
 </tr>
+<tr class="odd">
+<td style="text-align: left;"><code>observe!</code>, <code>on_event</code></td>
+<td style="text-align: left;">an observer runs in the process of the engine, in the task that changed the project</td>
+<td style="text-align: left;">not available; the server does not send the events of a dataset to a client</td>
+</tr>
 </tbody>
 </table>
 <p>The client does not declare the spec types of the engine, <code>PartitionFollower</code> and <code>KeywordFollower</code>. A follower is created with the names of the HTTP API, as <code>create_project</code> creates a dataset.</p>

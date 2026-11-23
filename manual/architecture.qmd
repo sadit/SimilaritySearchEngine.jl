@@ -606,14 +606,22 @@ A policy says when a follower processes the new items:
 
 | policy | when |
 |---|---|
-| `OnIndex()` (default) | after each `index!` of the leader |
-| `OnWrite()` | after each `append_items!` of the leader; on a leader that stages its items, nothing is indexed at that point |
-| `Periodic(; seconds, items)` | in the server, as a task of `serve`; the engine treats it as `Manual()` |
+| `OnIndex()` (default) | when the new items become searchable: after each `index!` of the leader, and after each `append_items!` of a leader that indexes on insertion |
+| `OnWrite()` | another name of `OnIndex()` since 2026-11-23 |
+| `Periodic(; seconds, items)` | when the follower is `items` or more items behind its leader, checked at each event of the leader; every `seconds`, in the server, by a task of `serve`. The engine has no task, so a policy with only `seconds` is processed as `Manual()` |
 | `Manual()` | only at `sync!` |
 
-`open_follower` registers the follower in the handle of its leader. `index!` and `append_items!` of the leader call `sync!` on the registered followers whose policy applies, after the leader has saved its own work. When `sync!` of a follower raises, the other followers are processed, and the first error is raised afterwards. `close_project!` of the leader closes its followers first. `open_follower` processes nothing: a follower that lags behind its leader stays behind until its policy or `sync!` processes the new items. `follower_status(f)` and `followers(h)` report the position, the lag and whether a follower is synchronized.
+A leader that indexes on insertion is an exact dense project of `Float32` vectors, or a sparse project. Its items become searchable in `append_items!`. Other leaders stage their items, and `index!` makes them searchable.
+
+Before 2026-11-23, `OnWrite()` processed the new items after each `append_items!`. A follower processes indexed items only, so a leader that stages its items had nothing new for it at that point. In the server, `append` calls `index!`, so the two policies processed the same items. A follower created with `OnWrite()` keeps it.
+
+An open follower is an observer of its leader (see [Events of a Project](#events-of-a-project)). `create_follower`, `open_follower` and `rebuild_follower!` add it to the observers of the leader, and `close_follower!` removes it. At each `ItemsIndexed` event of the leader, the follower applies its policy. `sync!` then runs in the task that called the leader, after the leader saved its items. `close_project!` of the leader closes its followers first.
+
+`open_follower` processes nothing. A follower that lags behind its leader, because it was closed or because the process stopped, processes the missing items at the next event of its leader, or at `sync!`. `follower_status(f)` and `followers(h)` report the position, the lag and whether a follower is synchronized.
 
 A follower that cannot process an item stops before the block of that item. It does not skip the item, so the next `sync!` tries it again. An item stops a follower when its key source returns a value that is not a key, for example a number in `meta`, or several keys for a disjoint partition follower. Each failure of `sync!` is written to the log as an error, with the name of the follower and its position, and `follower_status(f).error` holds its message until a `sync!` succeeds. The leader keeps the item, and its searches return it.
+
+An error of a follower does not fail the call of its leader. `append_items!` and `index!` return normally, and the items they saved stay saved. Before 2026-11-23, the call of the leader raised the first error of its followers after it saved its items. The `append` of the server then answered that error for items that it had stored.
 
 A follower accepts no direct write. `append_items!`, `delete_item!` and `index!` on a follower raise `UnsupportedOperation`, and the message names the leader.
 
@@ -646,6 +654,56 @@ Processing a block again gives the same structures. The members of an item that 
 - A keyword follower has no restriction to one value, and it lists no keys. `follower_status(f).stats` gives the number of keys, the total length of the posting lists, the shortest, median and longest list, and the number of items without keys.
 
 `posting_list(h, key; limit)` returns the `_id`s of the items that hold one key, in ascending order, for every index with posting lists: a keyword follower (a key), a text project (a token of its vocabulary, read from `invfile_postings` through the cache of lists) and a sparse project (a dimension). With `limit=n` it returns the first `n` ids, without a cursor. Deleted items are in the lists. A dense project has no posting lists and raises `UnsupportedOperation`.
+
+## Events of a Project
+
+An **event** is a change of a project that a consumer can need to act on (`server/PLAN.md` §5.15). An **observer** is a consumer of the events of a project. The engine reports events since 2026-11-23, and the followers are observers of their leader.
+
+There is one kind of event, `ItemsIndexed(sp, ep)`: the items with `_id` from `sp` to `ep` became searchable.
+
+| call | reports |
+|---|---|
+| `index!` | the items that it indexed |
+| `append_items!` of a project that indexes on insertion: an exact dense project of `Float32` vectors, or a sparse project | the items that it appended |
+| `append_items!` of a project that stages its items | nothing; the next `index!` reports them |
+
+### Contract
+
+- **One event per call.** A call reports one event, whatever the number of items. An `append_items!` of 10,000 items to an exact project is one event.
+- **No items in the event.** An event holds two integers. An observer reads the items it needs by `_id`, with `fetch_items`.
+- **Each `_id` once.** A handle reports each `_id` once, in increasing order. The handle counts the items it reported. The count starts at the number of indexed items when the handle is created or opened. A call that fails before it reports leaves its items to the next call, whose event includes them.
+- **After the change is saved.** The engine reports an event at the end of the call, after the call saved its change.
+- **Not saved.** An observer receives the events from `observe!` until `unobserve!` or `close_project!`. An observer that must not miss an item saves its own position, as a follower does, and compares it with the number of indexed items of the project.
+- **Without observers.** A call to a project without observers takes the lock of the events, compares two integers and moves the count. It builds no event.
+
+### Observers
+
+```julia
+abstract type ProjectObserver end
+on_event(o::ProjectObserver, h::EmbeddedEngine, e::ProjectEvent)   # the default does nothing
+observe!(h::EmbeddedEngine, o::ProjectObserver) -> o
+unobserve!(h::EmbeddedEngine, o::ProjectObserver) -> h
+observers(h::EmbeddedEngine) -> Vector{ProjectObserver}
+```
+
+An observer is a subtype of `ProjectObserver` with a method of `on_event` for each kind of event it needs. The type of the event selects the method. `observe!` adds an observer after the ones already added, and an observer that the handle already has is not added again. `observers(h)` lists them, and the open followers of `h` are among them.
+
+```julia
+struct IndexedRanges <: ProjectObserver
+    ranges::Vector{UnitRange{Int}}
+end
+SimilaritySearchEngine.on_event(o::IndexedRanges, ::EmbeddedEngine, e::ItemsIndexed) =
+    push!(o.ranges, e.sp:e.ep)
+
+seen = observe!(h, IndexedRanges(UnitRange{Int}[]))
+```
+
+- `on_event` runs in the task that called `append_items!` or `index!`, in the order in which the observers were added. The events of a handle are reported one at a time.
+- An error of `on_event` does not fail the call of the project, whose change is saved. The engine writes the error to the log with `@error`, with the observer and the event, and it calls the next observer.
+- An observer with slow work records in `on_event` what is pending, and another task does the work. `on_event` must not wait for another task that changes the same project, because the events of a handle are reported one at a time.
+- `close_project!` removes every observer, and `observe!` on a closed handle raises `ProjectClosed`.
+
+The events are not the observers of SimilaritySearch (see [Logging Channels](#logging-channels-reporters-and-observers)). Those belong to one index and report its internal changes, such as the adjacency lists of a graph. The events belong to a project and report the items that a search can return.
 
 ## Failure Reporting: Typed Errors and Their Boundaries
 
@@ -691,6 +749,8 @@ flowchart LR
     INFORM --> Stderr["InformativeLog → stderr (throttled)"]
     OBSERVE --> CallbackLog["CallbackLog → Persistence Trigger (un-throttled)"]
 ```
+
+These two channels belong to an index of SimilaritySearch. The changes of a project are reported on a separate channel of the engine, its events (see [Events of a Project](#events-of-a-project)).
 
 ---
 

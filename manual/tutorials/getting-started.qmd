@@ -433,7 +433,7 @@ index!(hp)                      # the leader indexes them, and the follower proc
 partitions(volumes)             # now also (name = "third", items = 20, graph = false)
 ```
 
-The policy `Manual()` waits for an explicit `sync!(volumes)`, and `OnWrite()` processes the new items after each `append_items!`. `followers(hp)` reports every follower of a project, with its position and whether it is synchronized.
+An exact dense project of `Float32` vectors and a sparse project index their items in `append_items!`, so their followers process the new items there. The policy `Manual()` waits for an explicit `sync!(volumes)`. `Periodic(items=1000)` processes the new items when the follower is 1,000 or more items behind its leader. `OnWrite()` is another name of `OnIndex()` since 2026-11-23. `followers(hp)` reports every follower of a project, with its position and whether it is synchronized.
 
 A follower of a dense project works in the same way, with `search` in place of `ftsearch`. A partition with fewer than `graph_min` members, 4,096 by default, is searched with an exact scan of its members. A larger one has its own graph over the vectors of the leader, and `calibrate!(open_follower(h, "name=value"))` calibrates it.
 
@@ -442,6 +442,8 @@ Errors are raised, not returned as empty results:
 - A partition name that the follower does not hold raises `UnknownPartition`, a `NotFound`. Its message lists the closest names, so a misspelled name is not mistaken for a partition without matches.
 - A follower name that the project does not have raises `UnknownFollower`, also a `NotFound`.
 - `append_items!` or `delete_item!` on a follower raises `UnsupportedOperation`. A follower changes only when it processes the items of its leader.
+
+A follower that cannot process an item does not raise in the call of its leader. An example is an item whose `volume` is a number. `index!(hp)` returns, and the leader keeps the item. The follower stays at the item before it, and `follower_status(volumes).error` holds the message until a `sync!` succeeds.
 
 A project can also hold its partitions inside itself, declared with `create_project(...; partitions=PartitionBy("volume"))` or with `declare_partition!(h, "volume")`, and searched with `ftsearch(h, q, k; partition="second")`. That was the only form until 2026-11-22. `migrate_partitions!(h, "volume"; disjoint=true)` moves them to a follower and removes them from the project. The caller chooses `disjoint`, and a project whose field holds lists needs `disjoint=false`.
 
@@ -464,6 +466,40 @@ follower_status(characters).stats                       # number of keywords, le
 
 ```julia
 close_project!(hk)
+```
+
+## Observing the Changes of a Project
+
+A project reports each change that a consumer can need to act on as an *event*. Since 2026-11-23 the engine has one kind of event, `ItemsIndexed(sp, ep)`: the items with `_id` from `sp` to `ep` became searchable. A consumer of the events is an *observer*: a subtype of `ProjectObserver` with a method of `on_event`. The follower `volume` of "Searching One Partition" is an observer of `frankenstein_parts`.
+
+```julia
+struct IndexedRanges <: ProjectObserver
+    ranges::Vector{UnitRange{Int}}
+end
+SimilaritySearchEngine.on_event(o::IndexedRanges, ::EmbeddedEngine, e::ItemsIndexed) =
+    push!(o.ranges, e.sp:e.ep)
+
+seen = observe!(hp, IndexedRanges(UnitRange{Int}[]))
+observers(hp)     # [Follower("frankenstein_parts/volume"), IndexedRanges(UnitRange{Int64}[])]
+
+append_items!(hp, [TextItem(it["text"]; doc_id = it["doc_id"]) for it in items[221:230]])
+seen.ranges       # empty: the 10 items are staged
+index!(hp)
+seen.ranges       # [221:230]
+[it.doc_id for it in fetch_items(hp, collect(only(seen.ranges)))]   # the doc_ids of the 10 items
+```
+
+`index!` reports one event for the 10 items. A call reports one event, whatever the number of items. The event holds two integers, and an observer reads the items it needs with `fetch_items`. A text project stages its items, so its `append_items!` reports nothing. An exact dense project of `Float32` vectors and a sparse project index their items in `append_items!`, and their `append_items!` reports them.
+
+`on_event` runs in the task that called `index!`, after the items are saved, in the order of `observers(hp)`. The follower `volume` therefore processed the 10 items before `seen` received the event. The 10 items have no `volume`, so they belong to no partition.
+
+A handle reports each `_id` once, in increasing order. An observer receives the items indexed after `observe!`. The events are not saved, so an observer that must not miss an item saves its own position, as a follower does.
+
+An error of `on_event` does not fail the call of the project, whose items stay saved. The engine writes the error to the log, with the observer and the event. An observer with slow work records in `on_event` what is pending, and another task does the work. `unobserve!` removes an observer, and `close_project!` removes every observer:
+
+```julia
+unobserve!(hp, seen)
+close_project!(hp)
 ```
 
 ---
@@ -748,3 +784,4 @@ This tutorial covered the following operations:
 7. Operations over the entire dataset, executed in the calling process.
 8. Retrieval by external identifier, and compaction of the storage when the project is closed.
 9. Failure handling through the four categories of typed errors.
+10. Followers that search one partition of a project or index its keywords, and observers of the items that a project indexes.

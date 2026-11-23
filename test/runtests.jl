@@ -54,6 +54,7 @@ const TEST_FILES = [
     TestFile("quantized", "quantized.jl"; tags=["quantized", "dense"]),
     TestFile("sketches", "sketches.jl"; tags=["sketches", "quantized", "dense"]),
     TestFile("followers", "followers.jl"; tags=["followers", "dense"]),
+    TestFile("events", "events.jl"; tags=["events", "followers", "dense"]),
     TestFile("partition_followers", "partition_followers.jl"; tags=["followers", "partitions", "text", "dense"]),
     TestFile("keyword_followers", "keyword_followers.jl"; tags=["followers", "keywords", "text", "sparse"]),
 ]

@@ -47,6 +47,8 @@ using .IndexEngine
 # with no Job/token/HTTP surface at all (the trust boundary here is OS file permissions on
 # workdir, same as the CLI).
 include("embedded.jl")
+# Events of a project (PLAN.md §5.15): what changed, reported once per call to its observers.
+include("events.jl")
 # Leader and follower datasets (PLAN.md §5.11): a follower organizes the items of a project
 # without copying them.
 include("followers.jl")

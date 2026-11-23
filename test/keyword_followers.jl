@@ -35,9 +35,10 @@ kw_has(i, key) = i % 13 != 0 && key in kw_keys(i)
         @test all(r -> r._id > 30, search(f, ["ten"], 10; filter=(rec, meta) -> rec._id > 30, candidates=10))
         @test_throws UnsupportedOperation open_follower(h, "kw=three")
 
-        # New items reach the follower with the policy of the leader (OnIndex).
+        # New items reach the follower when they become searchable (OnIndex): an exact leader
+        # indexes them in the append, which reports them (PLAN.md §5.15).
         append_items!(h, [kw_item(i) for i in 61:70])
-        @test f.position == 60
+        @test f.position == 70
         index!(h)
         @test f.position == 70 && posting_list(f, "ten") == Int32[10, 20, 30, 40, 50, 60, 70]
 

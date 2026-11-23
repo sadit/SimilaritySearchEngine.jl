@@ -226,10 +226,17 @@ mutable struct EmbeddedEngine
     # raises `ProjectClosed` (issue #4): the stores behind a closed handle are closed, and an
     # operation on them returned wrong results instead of an error.
     closed::Base.RefValue{Bool}
-    # The followers opened on this handle, by name (PLAN.md §5.11). `index!` and
-    # `append_items!` process them according to their policies, and `close_project!` closes
-    # them. The values are `Follower`s, a type defined after this one.
+    # The followers opened on this handle, by name (PLAN.md §5.11). Each one is also an
+    # observer of the events of the project, and `close_project!` closes them. The values are
+    # `Follower`s, a type defined after this one.
     followers::Dict{String,Any}
+    # The observers of the events of this project (PLAN.md §5.15), in the order in which they
+    # receive them; the number of indexed items already reported to them; and the lock that
+    # reports the events one at a time. The values are `ProjectObserver`s, a type defined
+    # after this one.
+    observers::Vector{Any}
+    reported::Base.RefValue{Int}
+    events_lock::ReentrantLock
 end
 
 """
@@ -517,7 +524,7 @@ function create_project(workdir::String, dataset::String, spec::ProjectSpec=Dens
     handle = EmbeddedEngine(workdir, dataset, dir, project, eng, store, schema_version,
                             schema, OOVCounters(), dense_vectors, false, Ref(true), partitions_ref,
                             (runtime.postings_cache_max, runtime.postings_cache_base), spec, Ref(false),
-                            Dict{String,Any}())
+                            Dict{String,Any}(), Any[], Ref(IndexEngine.indexed_length(eng)), ReentrantLock())
     if kind === :dense && partition_by !== nothing
         Persistence.save_field!(store, :partition_graph_min, graph_min)
         _enable_dense_partitions!(handle, graph_min, Dict{UInt32,Int}())
@@ -815,7 +822,7 @@ function open_project(workdir::String, dataset::String; read_only::Bool=false, s
                             Persistence.load_field(store, :oov_counters, OOVCounters()),
                             dense_vectors, read_only, Ref(false), partitions_ref,
                             (runtime.postings_cache_max, runtime.postings_cache_base), spec, Ref(false),
-                            Dict{String,Any}())
+                            Dict{String,Any}(), Any[], Ref(IndexEngine.indexed_length(engine)), ReentrantLock())
     spec isa DenseVectors && partition_by !== nothing && _restore_dense_partitions!(handle)
     return handle
 end
@@ -930,6 +937,7 @@ function close_project!(handle::EmbeddedEngine; compact::Bool=true)
     for f in collect(values(handle.followers))
         close_follower!(f)
     end
+    lock(() -> empty!(handle.observers), handle.events_lock)
     # The queries counted since the last write (see `OOVCounters`). A read-only handle counted
     # them for its own report and has nowhere to put them.
     if !handle.read_only && handle.oov.unflushed > 0
@@ -1048,7 +1056,8 @@ function index!(handle::EmbeddedEngine)
     else
         IndexEngine.index!(engine)   # sparse and exact: already indexed on append, a no-op
     end
-    _sync_followers!(handle, OnIndex)
+    # The followers are observers: each one processes the new items as its policy says.
+    _report_indexed!(handle)
     return handle
 end
 
@@ -1347,7 +1356,8 @@ function append_items!(handle::EmbeddedEngine, items::AbstractVector{<:Schema.Ab
         Persistence.append_staged_texts!(Persistence.open_staged_text_store(project.db), text_sp, staged_texts)
     end
 
-    _sync_followers!(handle, OnWrite)
+    # An exact or sparse project indexed the items here (PLAN.md §5.15).
+    _report_indexed!(handle)
     return length(items)
 end
 

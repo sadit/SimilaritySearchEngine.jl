@@ -161,13 +161,14 @@ using JSON3
         @test HTTP.delete("$base_url/datasets/fl_ctl_dense").status == 200
 
         # A follower that cannot process an item stops at it, and its status has the error. The
-        # leader keeps the item.
+        # leader keeps the item, and the append answers 200 for it (PLAN.md §5.15): an error of a
+        # follower does not fail the call of the leader.
         @test HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "fl_bad", "index_type" => "bm25_invfile"))).status == 201
         @test HTTP.post("$base_url/datasets/fl_bad/append", [], JSON3.write(Dict("items" => docs[1:10]))).status == 200
         post("datasets/fl_bad/followers", Dict("name" => "repo", "kind" => "partition", "source" => "meta:repo", "disjoint" => false))
         bad = merge(docs[11], Dict{String,Any}("repo" => 5))
-        resp = failed(() -> HTTP.post("$base_url/datasets/fl_bad/append", [], JSON3.write(Dict("items" => [bad]))))
-        @test resp.status == 400 && JSON3.read(String(resp.body)).kind == "PayloadMismatch"
+        resp = HTTP.post("$base_url/datasets/fl_bad/append", [], JSON3.write(Dict("items" => [bad])))
+        @test resp.status == 200 && JSON3.read(String(resp.body)).inserted == 1
         st = get_("datasets/fl_bad/followers/repo")
         @test st.position == 10 && st.lag == 1 && occursin("item 11", st.error)
         @test get_("datasets/fl_bad").doc_count == 11

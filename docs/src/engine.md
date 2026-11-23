@@ -9,7 +9,8 @@ end
 
 ## Embedded API
 
-The friendly, no-HTTP-required surface — project lifecycle, CRUD, calibration, `allknn`.
+The surface that needs no HTTP: the life of a project, its items, calibration, `allknn`, the
+followers of a project, and the events of a project (`observe!`, `on_event`).
 
 ```@autodocs
 Modules = [SimilaritySearchEngine]

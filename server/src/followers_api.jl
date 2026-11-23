@@ -453,6 +453,10 @@ Processes each open follower with a `Periodic` policy whose period has passed si
 processing, or whose lag has reached its number of items (PLAN.md §5.12). Returns the number of
 followers processed. An error is kept for the status of the follower, and the others are still
 processed.
+
+An `append` already processes a follower whose lag reaches its number of items, at the event of
+its leader (PLAN.md §5.15). The check of the number of items here processes a follower that was
+opened with that lag, before the next event of its leader.
 """
 function process_periodic_followers!(app; now::Float64=time())
     done = 0

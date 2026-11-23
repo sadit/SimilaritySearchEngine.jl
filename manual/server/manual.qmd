@@ -469,8 +469,8 @@ The **source** of a follower says where the keys of an item come from: `keywords
 A follower cannot process an item whose source holds another value, such as a number. When the
 follower is created, the request answers `400` with the kind `PayloadMismatch`, and the
 follower is not created. When such an item arrives after the follower exists, the leader
-stores it, and the processing of the follower answers that error: `append` for `on_index`, or
-`sync`. The follower stays at the item before it. The
+stores it, and the follower stays at the item before it. The `append` answers `200`, and the
+status of the follower has the error. `POST .../followers/{name}/sync` answers the error. The
 [architecture page](../architecture.qmd#leader-and-follower-datasets) describes how the engine
 stores and processes followers.
 
@@ -503,12 +503,20 @@ answers with the items it has processed. The policy says when it processes the n
 | policy | when |
 | :--- | :--- |
 | `on_index` | inside each `append`, after the leader indexes the new items. The response of `append` comes after the follower is processed |
-| `on_write` | inside each `append`, after the leader stores the new items and before it indexes them. A follower processes indexed items only. An exact dense dataset indexes its items when it stores them, so the follower processes them in the same request. A `searchgraph` or text dataset indexes them after, so the follower processes them at the next `append` |
+| `on_write` | another name of `on_index` since 2026-11-23 |
 | `manual` | only at `POST .../followers/{name}/sync` |
-| `periodic` | in a task of `serve`, when `seconds` have passed since its last processing, or when its lag reaches `items`. The task checks every `[followers] check_seconds` seconds (section 6) |
+| `periodic` | inside an `append` that leaves the follower `items` or more items behind its leader. In a task of `serve`, when `seconds` have passed since its last processing, or when its lag reaches `items`. The task checks every `[followers] check_seconds` seconds (section 6) |
 
-A follower that fails during an `append` does not undo the write of the leader. The response is
-the error of the follower, and the follower lags until its next processing.
+Before 2026-11-23, `on_write` processed the new items after the leader stored them and before
+it indexed them. A follower processes indexed items only, so a follower of a `searchgraph` or a
+text dataset processed them at the next `append`. A follower created with `on_write` keeps the
+name, and it processes the items as `on_index`.
+
+A follower that fails during an `append` does not undo the write of the leader, and it does not
+change the response of the `append`. The `append` answers `200` with the number of items it
+stored. The follower stays at the item it could not process, the server writes the error to its
+log, and the status of the follower has `error`. Before 2026-11-23, the `append` answered the
+error of the follower, and a client that sent the request again stored the items twice.
 
 The routes of a follower are under its leader. `{f}` is the name of a follower, or
 `name=value` for one partition, with a character that a path segment does not allow encoded
@@ -570,8 +578,9 @@ the text of the engine, such as `PartitionFollower`, `MetaValue("section")` and
 `Periodic(seconds=60.0, items=nothing)`. `stale` is `true` when the leader was rebuilt after
 the follower processed its items. `missing` is `true` when the leader lists the follower and its
 directory does not exist. `stats` holds the statistics of the kind: for a partition follower,
-`partitions`, `memberships`, `smallest`, `median`, `largest` and `graphs`. A follower that
-`serve` could not open or process has `error`, the message of its last failure.
+`partitions`, `memberships`, `smallest`, `median`, `largest` and `graphs`. A follower whose
+last processing failed, or that `serve` could not open, has `error`, the message of its last
+failure.
 `GET /api/v1/datasets/{id}` has `followers`, the status of each follower.
 
 `serve` opens the followers of each dataset when it loads or reloads the dataset. A follower

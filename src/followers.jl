@@ -134,24 +134,28 @@ close_follower_state!(state) = nothing
     SyncPolicy
 
 When a follower processes the new items of its leader (PLAN.md §5.11): [`OnIndex`](@ref),
-[`OnWrite`](@ref), [`Periodic`](@ref) or [`Manual`](@ref).
+[`OnWrite`](@ref), [`Periodic`](@ref) or [`Manual`](@ref). The leader reports its new items to
+its open followers with an [`ItemsIndexed`](@ref) event, and the policy says what the follower
+does with it (PLAN.md §5.15).
 """
 abstract type SyncPolicy end
 
 """
     OnIndex()
 
-The follower processes the new items after each `index!` of its leader, which is when they
-become searchable. The default policy.
+The follower processes the new items when they become searchable: after each `index!` of its
+leader, and after each `append_items!` of a leader that indexes on insertion (an exact dense or
+a sparse project). The default policy.
 """
 struct OnIndex <: SyncPolicy end
 
 """
     OnWrite()
 
-The follower processes the new items after each `append_items!` of its leader. A leader that
-stages its items (a graph, a text project, a quantized project) has no new indexed items at
-that point, so nothing is processed until its `index!`.
+Another name of [`OnIndex`](@ref), since 2026-11-23 (PLAN.md §5.15). It processed the new items
+after each `append_items!` of the leader. A follower processes indexed items only, so a leader
+that stages its items had nothing new for it until `index!`, and in the server, whose `append`
+indexes, it did the same work as `OnIndex`. A follower created with it keeps it.
 """
 struct OnWrite <: SyncPolicy end
 
@@ -165,9 +169,11 @@ struct Manual <: SyncPolicy end
 """
     Periodic(; seconds=nothing, items=nothing)
 
-The server processes the new items every `seconds`, or every `items` new items of the leader,
-as a task of `serve` (PLAN.md §5.12). At least one of the two is given. The engine itself treats
-it as [`Manual`](@ref).
+The follower processes the new items when it is `items` or more items behind its leader, or
+every `seconds`. At least one of the two is given. The follower checks `items` at each event of
+its leader, and processes in [`on_event`](@ref) (PLAN.md §5.15). The task of `serve` processes it
+every `seconds`, and when its lag reaches `items` (PLAN.md §5.12). The engine alone has no task,
+so a policy with only `seconds` is treated as [`Manual`](@ref).
 """
 struct Periodic <: SyncPolicy
     seconds::Union{Nothing,Float64}
@@ -252,7 +258,7 @@ An open follower (PLAN.md §5.11), from [`create_follower`](@ref) or [`open_foll
 It holds its leader handle, and it is registered in it: [`close_project!`](@ref) of the leader
 closes it.
 """
-mutable struct Follower
+mutable struct Follower <: ProjectObserver
     leader::EmbeddedEngine
     name::String
     dir::String
@@ -406,7 +412,7 @@ function create_follower(leader::EmbeddedEngine, name::AbstractString, spec::Fol
     # which the check above reports.
     Persistence.save_field!(leader.store, :followers, vcat(listed, name))
     leader.wrote[] = true
-    leader.followers[name] = f
+    _register_follower!(leader, name, f)
     try
         sync!(f)
     catch
@@ -474,8 +480,8 @@ canonical name with or without the leader part: `"by_repo"`, `"repos/by_repo"`. 
 
 A follower that is already open on `leader` is returned again, not opened twice. A follower
 opened from a read-only handle of its leader is read-only. Opening processes nothing: a follower
-that lags behind its leader stays behind until its policy or [`sync!`](@ref) processes the new
-items.
+that lags behind its leader stays behind until the next event of the leader, as its policy says,
+or until [`sync!`](@ref). The open follower is an observer of its leader (PLAN.md §5.15).
 
 Raises [`UnknownFollower`](@ref) for a name that the leader does not list,
 [`PluginNotLoaded`](@ref) when the follower needs a plugin that is not registered, and
@@ -487,7 +493,7 @@ function open_follower(leader::EmbeddedEngine, name::AbstractString)
     f = get(leader.followers, base, nothing)
     if f === nothing
         f = _open_existing_follower(leader, base)
-        leader.followers[base] = f
+        _register_follower!(leader, base, f)
     end
     value === nothing && return f
     check_follower_value(f.state, value)
@@ -511,6 +517,7 @@ function close_follower!(f::Follower)
         end
     end
     get(f.leader.followers, f.name, nothing) === f && delete!(f.leader.followers, f.name)
+    unobserve!(f.leader, f)
     return nothing
 end
 
@@ -597,23 +604,41 @@ function _leader_item(leader::EmbeddedEngine, id::Int, payload::Bool)
     return Schema.StoredItem(record, payload ? _stored_payload(leader, id) : nothing, meta)
 end
 
-# Processes the open followers of `handle` whose policy is `P`, after the leader saved its own
-# work. Every follower is tried; the first error is raised afterwards.
-function _sync_followers!(handle::EmbeddedEngine, ::Type{P}) where {P<:SyncPolicy}
-    isempty(handle.followers) && return nothing
-    first_error = nothing
-    for f in collect(values(handle.followers))
-        (f.policy isa P && !f.read_only) || continue
-        try
-            sync!(f)
-        catch e
-            # `sync!` wrote the error to the log.
-            first_error === nothing && (first_error = e)
-        end
+# An open follower is registered in its leader handle by name, and it observes the events of
+# the leader (PLAN.md §5.15).
+function _register_follower!(leader::EmbeddedEngine, name::String, f::Follower)
+    leader.followers[name] = f
+    observe!(leader, f)
+    return f
+end
+
+"""
+    on_event(f::Follower, leader::EmbeddedEngine, e::ItemsIndexed)
+
+What a follower does with new items of its leader, as its policy says (PLAN.md §5.15):
+[`OnIndex`](@ref) and [`OnWrite`](@ref) process them with [`sync!`](@ref);
+[`Periodic`](@ref) with `items` processes them when its lag reaches `items`; [`Manual`](@ref)
+and `Periodic` with only `seconds` do nothing. A follower opened from a read-only handle does
+nothing. An error of `sync!` is in the log and in `follower_status(f).error`, and the call of
+the leader returns.
+"""
+function on_event(f::Follower, leader::EmbeddedEngine, ::ItemsIndexed)
+    (f.closed || f.read_only) && return nothing
+    _processes_now(f.policy, f) || return nothing
+    try
+        sync!(f)
+    catch err
+        # `sync!` wrote the error to the log and keeps it for the status of the follower, which
+        # stays at the item it could not process. The change of the leader is saved.
+        err isa InterruptException && rethrow()
     end
-    first_error === nothing || throw(first_error)
     return nothing
 end
+
+_processes_now(::Union{OnIndex,OnWrite}, ::Follower) = true
+_processes_now(::Manual, ::Follower) = false
+_processes_now(p::Periodic, f::Follower) =
+    p.items !== nothing && IndexEngine.indexed_length(f.leader.engine) - f.position >= p.items
 
 """
     rebuild_follower!(leader::EmbeddedEngine, name) -> Follower
@@ -659,7 +684,7 @@ function rebuild_follower!(leader::EmbeddedEngine, name::AbstractString)
     rm(dir; recursive=true, force=true)
     mv(tmp, dir)
     f = _open_existing_follower(leader, name)
-    leader.followers[name] = f
+    _register_follower!(leader, name, f)
     return f
 end
 

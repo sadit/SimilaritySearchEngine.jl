@@ -127,9 +127,11 @@ end
         on_index = create_follower(h, "i", FTK.GroupsSpec(Keywords()))
         manual = create_follower(h, "m", FTK.GroupsSpec(Keywords()); policy=Manual())
         periodic = create_follower(h, "p", FTK.GroupsSpec(Keywords()); policy=Periodic(seconds=60))
+        # The append indexes the items, and reports them (PLAN.md §5.15): OnIndex and OnWrite,
+        # which is another name of it, process them there.
         append_items!(h, [follower_item(i) for i in 11:20])
-        @test on_write.position == 20
-        @test on_index.position == 10 && manual.position == 10 && periodic.position == 10
+        @test on_write.position == 20 && on_index.position == 20
+        @test manual.position == 10 && periodic.position == 10
         index!(h)
         @test on_index.position == 20 && manual.position == 10 && periodic.position == 10
         @test sync!(manual) == 10 && manual.position == 20
@@ -144,7 +146,7 @@ end
         f = create_follower(g, "kw", FTK.GroupsSpec(Keywords()); policy=OnWrite())
         @test f.position == 0
         index!(g)
-        @test f.position == 0                   # OnWrite: nothing new was indexed by a write
+        @test f.position == 40                  # OnWrite is OnIndex: the items were indexed
         fi = create_follower(g, "kwi", FTK.GroupsSpec(Keywords()))
         @test fi.position == 40                 # created after index!: it processes everything
         append_items!(g, [follower_item(i) for i in 41:50])
@@ -152,6 +154,17 @@ end
         index!(g)
         @test fi.position == 50 && groups(fi) == expected_groups(50, keywords_of)
         close_project!(g)
+
+        # Periodic(items=n) processes at the event that leaves it n or more items behind.
+        e = create_project(workdir, "every", DenseVectors(; index=Exhaustive()))
+        p = create_follower(e, "p", FTK.GroupsSpec(Keywords()); policy=Periodic(items=15))
+        append_items!(e, [follower_item(i) for i in 1:10])
+        @test p.position == 0 && follower_status(p).lag == 10
+        append_items!(e, [follower_item(i) for i in 11:20])
+        @test p.position == 20 && groups(p) == expected_groups(20, keywords_of)
+        append_items!(e, [follower_item(i) for i in 21:34])
+        @test p.position == 20
+        close_project!(e)
     end
 end
 
@@ -173,7 +186,8 @@ end
                 e
             end
         end
-        @test err isa PayloadMismatch
+        # The calls of the leader return: the error of an observer does not fail them.
+        @test err === nothing
         st = follower_status(f)
         @test st.position == 5 && st.lag == 2 && occursin("item 6", st.error)
         # It does not skip the item: the next sync! stops at it again.
@@ -202,11 +216,13 @@ end
         sync!(ref)
         @test groups(f) == groups(ref) == expected_groups(35, keywords_of)
 
-        # Through the leader: the leader keeps its work, and the error is raised afterwards.
+        # Through the leader: the leader keeps its work and returns, and the error is in the log
+        # and in the status of the follower.
         f2 = create_follower(h, "w", FTK.GroupsSpec(Keywords()); policy=OnWrite())
         f2.state.fail_at = 36
-        @test_throws ErrorException append_items!(h, [follower_item(36)])
+        @test (@test_logs (:error, r"w stopped at position 35") match_mode=:any append_items!(h, [follower_item(36)])) == 1
         @test IndexEngine.indexed_length(h.engine) == 36 && f2.position == 35
+        @test occursin("fail", something(follower_status(f2).error, ""))
         f2.state.fail_at = nothing
         @test sync!(f2) == 1
         close_project!(h)

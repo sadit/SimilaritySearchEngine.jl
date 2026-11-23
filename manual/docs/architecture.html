@@ -289,6 +289,11 @@ window.Quarto = {
   <li><a href="#partition-followers" id="toc-partition-followers" class="nav-link" data-scroll-target="#partition-followers">Partition Followers</a></li>
   <li><a href="#keyword-followers" id="toc-keyword-followers" class="nav-link" data-scroll-target="#keyword-followers">Keyword Followers</a></li>
   </ul></li>
+  <li><a href="#events-of-a-project" id="toc-events-of-a-project" class="nav-link" data-scroll-target="#events-of-a-project">Events of a Project</a>
+  <ul class="collapse">
+  <li><a href="#contract" id="toc-contract" class="nav-link" data-scroll-target="#contract">Contract</a></li>
+  <li><a href="#observers" id="toc-observers" class="nav-link" data-scroll-target="#observers">Observers</a></li>
+  </ul></li>
   <li><a href="#failure-reporting-typed-errors-and-their-boundaries" id="toc-failure-reporting-typed-errors-and-their-boundaries" class="nav-link" data-scroll-target="#failure-reporting-typed-errors-and-their-boundaries">Failure Reporting: Typed Errors and Their Boundaries</a></li>
   <li><a href="#logging-channels-reporters-and-observers" id="toc-logging-channels-reporters-and-observers" class="nav-link" data-scroll-target="#logging-channels-reporters-and-observers">Logging Channels: Reporters and Observers</a></li>
   <li><a href="#soft-deletions-and-dataset-operations" id="toc-soft-deletions-and-dataset-operations" class="nav-link" data-scroll-target="#soft-deletions-and-dataset-operations">Soft Deletions and Dataset Operations</a></li>
@@ -953,15 +958,15 @@ window.Quarto = {
 <tbody>
 <tr class="odd">
 <td><code>OnIndex()</code> (default)</td>
-<td>after each <code>index!</code> of the leader</td>
+<td>when the new items become searchable: after each <code>index!</code> of the leader, and after each <code>append_items!</code> of a leader that indexes on insertion</td>
 </tr>
 <tr class="even">
 <td><code>OnWrite()</code></td>
-<td>after each <code>append_items!</code> of the leader; on a leader that stages its items, nothing is indexed at that point</td>
+<td>another name of <code>OnIndex()</code> since 2026-11-23</td>
 </tr>
 <tr class="odd">
 <td><code>Periodic(; seconds, items)</code></td>
-<td>in the server, as a task of <code>serve</code>; the engine treats it as <code>Manual()</code></td>
+<td>when the follower is <code>items</code> or more items behind its leader, checked at each event of the leader; every <code>seconds</code>, in the server, by a task of <code>serve</code>. The engine has no task, so a policy with only <code>seconds</code> is processed as <code>Manual()</code></td>
 </tr>
 <tr class="even">
 <td><code>Manual()</code></td>
@@ -969,8 +974,12 @@ window.Quarto = {
 </tr>
 </tbody>
 </table>
-<p><code>open_follower</code> registers the follower in the handle of its leader. <code>index!</code> and <code>append_items!</code> of the leader call <code>sync!</code> on the registered followers whose policy applies, after the leader has saved its own work. When <code>sync!</code> of a follower raises, the other followers are processed, and the first error is raised afterwards. <code>close_project!</code> of the leader closes its followers first. <code>open_follower</code> processes nothing: a follower that lags behind its leader stays behind until its policy or <code>sync!</code> processes the new items. <code>follower_status(f)</code> and <code>followers(h)</code> report the position, the lag and whether a follower is synchronized.</p>
+<p>A leader that indexes on insertion is an exact dense project of <code>Float32</code> vectors, or a sparse project. Its items become searchable in <code>append_items!</code>. Other leaders stage their items, and <code>index!</code> makes them searchable.</p>
+<p>Before 2026-11-23, <code>OnWrite()</code> processed the new items after each <code>append_items!</code>. A follower processes indexed items only, so a leader that stages its items had nothing new for it at that point. In the server, <code>append</code> calls <code>index!</code>, so the two policies processed the same items. A follower created with <code>OnWrite()</code> keeps it.</p>
+<p>An open follower is an observer of its leader (see <a href="#events-of-a-project">Events of a Project</a>). <code>create_follower</code>, <code>open_follower</code> and <code>rebuild_follower!</code> add it to the observers of the leader, and <code>close_follower!</code> removes it. At each <code>ItemsIndexed</code> event of the leader, the follower applies its policy. <code>sync!</code> then runs in the task that called the leader, after the leader saved its items. <code>close_project!</code> of the leader closes its followers first.</p>
+<p><code>open_follower</code> processes nothing. A follower that lags behind its leader, because it was closed or because the process stopped, processes the missing items at the next event of its leader, or at <code>sync!</code>. <code>follower_status(f)</code> and <code>followers(h)</code> report the position, the lag and whether a follower is synchronized.</p>
 <p>A follower that cannot process an item stops before the block of that item. It does not skip the item, so the next <code>sync!</code> tries it again. An item stops a follower when its key source returns a value that is not a key, for example a number in <code>meta</code>, or several keys for a disjoint partition follower. Each failure of <code>sync!</code> is written to the log as an error, with the name of the follower and its position, and <code>follower_status(f).error</code> holds its message until a <code>sync!</code> succeeds. The leader keeps the item, and its searches return it.</p>
+<p>An error of a follower does not fail the call of its leader. <code>append_items!</code> and <code>index!</code> return normally, and the items they saved stay saved. Before 2026-11-23, the call of the leader raised the first error of its followers after it saved its items. The <code>append</code> of the server then answered that error for items that it had stored.</p>
 <p>A follower accepts no direct write. <code>append_items!</code>, <code>delete_item!</code> and <code>index!</code> on a follower raise <code>UnsupportedOperation</code>, and the message names the leader.</p>
 </section>
 <section id="plugins" class="level3">
@@ -999,6 +1008,71 @@ window.Quarto = {
 <li>A keyword follower has no restriction to one value, and it lists no keys. <code>follower_status(f).stats</code> gives the number of keys, the total length of the posting lists, the shortest, median and longest list, and the number of items without keys.</li>
 </ul>
 <p><code>posting_list(h, key; limit)</code> returns the <code>_id</code>s of the items that hold one key, in ascending order, for every index with posting lists: a keyword follower (a key), a text project (a token of its vocabulary, read from <code>invfile_postings</code> through the cache of lists) and a sparse project (a dimension). With <code>limit=n</code> it returns the first <code>n</code> ids, without a cursor. Deleted items are in the lists. A dense project has no posting lists and raises <code>UnsupportedOperation</code>.</p>
+</section>
+</section>
+<section id="events-of-a-project" class="level2">
+<h2 class="anchored" data-anchor-id="events-of-a-project">Events of a Project</h2>
+<p>An <strong>event</strong> is a change of a project that a consumer can need to act on (<code>server/PLAN.md</code> §5.15). An <strong>observer</strong> is a consumer of the events of a project. The engine reports events since 2026-11-23, and the followers are observers of their leader.</p>
+<p>There is one kind of event, <code>ItemsIndexed(sp, ep)</code>: the items with <code>_id</code> from <code>sp</code> to <code>ep</code> became searchable.</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>call</th>
+<th>reports</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>index!</code></td>
+<td>the items that it indexed</td>
+</tr>
+<tr class="even">
+<td><code>append_items!</code> of a project that indexes on insertion: an exact dense project of <code>Float32</code> vectors, or a sparse project</td>
+<td>the items that it appended</td>
+</tr>
+<tr class="odd">
+<td><code>append_items!</code> of a project that stages its items</td>
+<td>nothing; the next <code>index!</code> reports them</td>
+</tr>
+</tbody>
+</table>
+<section id="contract" class="level3">
+<h3 class="anchored" data-anchor-id="contract">Contract</h3>
+<ul>
+<li><strong>One event per call.</strong> A call reports one event, whatever the number of items. An <code>append_items!</code> of 10,000 items to an exact project is one event.</li>
+<li><strong>No items in the event.</strong> An event holds two integers. An observer reads the items it needs by <code>_id</code>, with <code>fetch_items</code>.</li>
+<li><strong>Each <code>_id</code> once.</strong> A handle reports each <code>_id</code> once, in increasing order. The handle counts the items it reported. The count starts at the number of indexed items when the handle is created or opened. A call that fails before it reports leaves its items to the next call, whose event includes them.</li>
+<li><strong>After the change is saved.</strong> The engine reports an event at the end of the call, after the call saved its change.</li>
+<li><strong>Not saved.</strong> An observer receives the events from <code>observe!</code> until <code>unobserve!</code> or <code>close_project!</code>. An observer that must not miss an item saves its own position, as a follower does, and compares it with the number of indexed items of the project.</li>
+<li><strong>Without observers.</strong> A call to a project without observers takes the lock of the events, compares two integers and moves the count. It builds no event.</li>
+</ul>
+</section>
+<section id="observers" class="level3">
+<h3 class="anchored" data-anchor-id="observers">Observers</h3>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="kw">abstract type</span> ProjectObserver <span class="kw">end</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="fu">on_event</span>(o<span class="op">::</span><span class="dt">ProjectObserver</span>, h<span class="op">::</span><span class="dt">EmbeddedEngine</span>, <span class="cn">e</span><span class="op">::</span><span class="dt">ProjectEvent</span>)   <span class="co"># the default does nothing</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="fu">observe!</span>(h<span class="op">::</span><span class="dt">EmbeddedEngine</span>, o<span class="op">::</span><span class="dt">ProjectObserver</span>) <span class="op">-&gt;</span> o</span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a><span class="fu">unobserve!</span>(h<span class="op">::</span><span class="dt">EmbeddedEngine</span>, o<span class="op">::</span><span class="dt">ProjectObserver</span>) <span class="op">-&gt;</span> h</span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a><span class="fu">observers</span>(h<span class="op">::</span><span class="dt">EmbeddedEngine</span>) <span class="op">-&gt;</span> <span class="dt">Vector</span>{ProjectObserver}</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>An observer is a subtype of <code>ProjectObserver</code> with a method of <code>on_event</code> for each kind of event it needs. The type of the event selects the method. <code>observe!</code> adds an observer after the ones already added, and an observer that the handle already has is not added again. <code>observers(h)</code> lists them, and the open followers of <code>h</code> are among them.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> IndexedRanges <span class="op">&lt;:</span><span class="dt"> ProjectObserver</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>    ranges<span class="op">::</span><span class="dt">Vector{UnitRange{Int}}</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="kw">end</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>SimilaritySearchEngine.<span class="fu">on_event</span>(o<span class="op">::</span><span class="dt">IndexedRanges</span>, <span class="op">::</span><span class="dt">EmbeddedEngine</span>, <span class="cn">e</span><span class="op">::</span><span class="dt">ItemsIndexed</span>) <span class="op">=</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>    <span class="fu">push!</span>(o.ranges, <span class="cn">e</span>.sp<span class="op">:</span><span class="cn">e</span>.ep)</span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>seen <span class="op">=</span> <span class="fu">observe!</span>(h, <span class="fu">IndexedRanges</span>(<span class="dt">UnitRange</span>{<span class="dt">Int</span>}[]))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<ul>
+<li><code>on_event</code> runs in the task that called <code>append_items!</code> or <code>index!</code>, in the order in which the observers were added. The events of a handle are reported one at a time.</li>
+<li>An error of <code>on_event</code> does not fail the call of the project, whose change is saved. The engine writes the error to the log with <code>@error</code>, with the observer and the event, and it calls the next observer.</li>
+<li>An observer with slow work records in <code>on_event</code> what is pending, and another task does the work. <code>on_event</code> must not wait for another task that changes the same project, because the events of a handle are reported one at a time.</li>
+<li><code>close_project!</code> removes every observer, and <code>observe!</code> on a closed handle raises <code>ProjectClosed</code>.</li>
+</ul>
+<p>The events are not the observers of SimilaritySearch (see <a href="#logging-channels-reporters-and-observers">Logging Channels</a>). Those belong to one index and report its internal changes, such as the adjacency lists of a graph. The events belong to a project and report the items that a search can return.</p>
 </section>
 </section>
 <section id="failure-reporting-typed-errors-and-their-boundaries" class="level2">
@@ -1043,13 +1117,13 @@ window.Quarto = {
 <p><code>ProjectClosed</code> is raised by every function that takes a handle after <code>close_project!</code> closed it. That handle stays closed, and the same call succeeds on a new handle from <code>open_project</code>. A follower raises it after <code>close_follower!</code>, or after <code>close_project!</code> of its leader.</p>
 <p>The concrete types carry the values a caller can use. <code>PendingBacklog</code> reports the number of staged items and the number of indexed items, <code>WrongDimension</code> reports the expected and the received length, and <code>InvalidOption</code> reports the keyword that was rejected.</p>
 <p><strong>The mapping is defined at each interface, not in the engine.</strong> The engine contains no reference to HTTP status codes or to process exit codes. Each consumer performs the translation:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="cf">try</span></span>
-<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>    <span class="fu">search</span>(handle, query, <span class="fl">10</span>)</span>
-<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="cf">catch</span> <span class="cn">e</span></span>
-<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>    <span class="cn">e</span> isa ConflictingState <span class="op">&amp;&amp;</span> <span class="cf">return</span> <span class="fu">retry_after_indexing</span>()</span>
-<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>    <span class="cn">e</span> isa NotFound <span class="op">&amp;&amp;</span> <span class="cf">return</span> <span class="fu">not_found</span>()</span>
-<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>    <span class="fu">rethrow</span>()</span>
-<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb8"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="cf">try</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>    <span class="fu">search</span>(handle, query, <span class="fl">10</span>)</span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="cf">catch</span> <span class="cn">e</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>    <span class="cn">e</span> isa ConflictingState <span class="op">&amp;&amp;</span> <span class="cf">return</span> <span class="fu">retry_after_indexing</span>()</span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>    <span class="cn">e</span> isa NotFound <span class="op">&amp;&amp;</span> <span class="cf">return</span> <span class="fu">not_found</span>()</span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>    <span class="fu">rethrow</span>()</span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p><code>SimilaritySearchServer</code> maps the categories to status codes: <code>NotFound</code> to 404, <code>ConflictingState</code> to 409, <code>InvalidRequest</code> to 400, and any other failure to 500. Its command lines map the same categories to exit codes 4, 5, 2 and 70, so that a shell script can select a branch without reading the output text. This mapping is the only coupling between the two packages of this repository, and the <a href="./server/manual.html#how-failures-are-reported">server manual</a> states it in one table.</p>
 <p>The alternative, <code>error("...")</code> with a message, requires every consumer to classify the failure by its text. Such a classification fails when the wording changes, and it fails without any error being reported. This had occurred in this repository: the concurrency test identified a rejected operation with <code>occursin("requires no pending backlog", e.msg)</code>. It now matches the type <code>PendingBacklog</code>.</p>
 </section>
@@ -1072,6 +1146,7 @@ window.Quarto = {
 </div>
 </div>
 </div>
+<p>These two channels belong to an index of SimilaritySearch. The changes of a project are reported on a separate channel of the engine, its events (see <a href="#events-of-a-project">Events of a Project</a>).</p>
 <hr>
 </section>
 <section id="soft-deletions-and-dataset-operations" class="level2">
