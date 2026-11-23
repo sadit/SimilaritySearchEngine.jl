@@ -436,7 +436,9 @@ of it exist.
     errors, `partition_by` and `migrate-partitions`, the command lines, `rebuild`, `dump` and
     `load`), and `[followers] check_seconds` in its configuration section. The server tutorial
     has a step that creates a partition follower and a keyword follower over HTTP. §5.12 has
-    "As built". Phase 5 is complete. Not done yet: phase 6, plugins in the server.
+    "As built". Phase 5 is complete.
+
+    Phase 6, plugins in the server: designed in §5.13 on 2026-11-23.
 
 The stemmer registry of §5.3 and §9's phase 5 is not on this list: it was discarded. Stemming
 was the way this specification proposed to make a query match a word it does not equal. That
@@ -1853,6 +1855,196 @@ phase.
   start with `_reload_one_dataset!`, the function of `POST .../reload`, and
   `server/test/api/test_18_followers.jl` tests that followers are open after `unload` and
   `reload`.
+
+#### Decided after phase 5 (2026-11-23)
+
+1. **An event dispatcher instead of the policies, to design later.** The policies may become
+   an event dispatcher like the two logs of SimilaritySearch: the information log (reporters)
+   and the event log (observers). A hook registered for an event receives it when the event
+   happens. Followers would be one consumer, and other consumers could be added. The open
+   question is what an event is (an `append`, an `index!`, a block of items), so that the
+   dispatch consumes few resources. Until then, `on_write` keeps its behavior.
+2. **A follower that cannot process an item stays stopped, and its errors go to the logs.** It
+   does not skip the item.
+3. **Recorded for later: skipping the item that fails.** It would be acceptable if `_id` were
+   entirely on the side of the engine and the server, and a client depended only on the key
+   it gives (`doc_id`). That was the intent of the design. Verified on 2026-11-23, `_id`
+   crosses the boundary today: search results, `fetch` and `exists` return it; `delete` takes
+   only `_id`; the hybrid search combines two datasets by `_id`; posting lists and the results
+   of `allknn`, `fft` and `neardup` are `_id`s; and `rebuild` numbers the items again.
+
+### 5.13. Plugins in the Server (design, 2026-11-23)
+
+Status: designed on 2026-11-23 for issue #5, phase 6. Phase 5 is done (§5.12): the server, the
+two command lines and the two clients expose the followers of the engine, with the kinds and
+the key sources that the engine includes. This section designs how the server and the command
+line `similarity-search` load plugins: Julia modules that add key sources and kinds of
+follower.
+
+#### What exists
+
+- `register_plugin!(mod)` registers a module in the engine (§5.11). The name of the plugin is
+  `nameof(mod)`. `create_follower` refuses a spec or a key source whose type belongs to a
+  module that is not registered, and `open_follower` raises `PluginNotLoaded` for a follower
+  whose plugin is not registered. The engine saves the spec with `Serialization`, so a plugin
+  must be loaded under the same module path each time it is used.
+- The wire names a key source with a string (`keywords`, `refs`, `doc_id`, `meta:<field>`) and
+  a kind with `partition` or `keyword` (§5.12). `Server.parse_follower_request` maps them to
+  engine values.
+- `serve` reads `config.toml`. `similarity-search` has a `--config` argument that no data
+  command reads. A job is a subprocess of `similarity-search`, and no job opens a follower.
+
+#### Decisions
+
+These follow the decisions of issue #5: a plugin is a Julia module, not necessarily a package;
+a plugin that needs a program outside Julia calls it with `run` from its own code; the
+configuration is mixed, settings in TOML and code in `.jl` modules.
+
+1. **A plugin is declared in `config.toml`.** The server loads the plugins of `[plugins]` when
+   it starts, before it opens any dataset. There is no route to load a plugin; a new plugin
+   needs a restart of `serve`.
+2. **A plugin that fails to load stops `serve`.** The message names the plugin, its file and
+   the error. A plugin that the configuration declares is expected, and a server that starts
+   without it would leave its followers closed with `PluginNotLoaded`.
+3. **A plugin does not depend on the server.** It declares its wire names with two constants
+   and an optional function, read by convention. The same module works in an application that
+   uses the engine alone.
+4. **The wire name of a plugin type is `Plugin.name`.** The options of a request go in an object
+   with the field `name`.
+5. **`similarity-search` loads the plugins of `--config` only for the commands that open a
+   follower,** because loading a plugin compiles its code at each start.
+
+#### Configuration
+
+```toml
+[plugins.Decades]
+path = "plugins/decades.jl"     # a file that defines `module Decades`
+
+[plugins.Decades.settings]      # optional; passed to Decades.setup
+labels = "short"
+
+[plugins.ReposMxKeys]
+package = "ReposMxKeys"         # a package of the active environment, loaded with `using`
+```
+
+- The key of the table is the name of the module, and the name of the plugin.
+- `path` is a file, relative to the directory of the configuration file. The server includes it
+  into `Main`, and the file must define a module with the name of the table. `package` is a
+  package of the active environment. A table has one of the two.
+- `settings` is passed to the function `setup` of the module, if it has one, as a
+  `Dict{String,Any}`.
+- A module that is already loaded and registered in the process is not loaded again.
+
+#### A plugin module
+
+```julia
+module Decades
+
+using SimilaritySearchEngine
+const SSE = SimilaritySearchEngine
+
+"The decade of a year in `meta`: 1987 is \"1980s\"."
+struct Decade <: SSE.KeySource
+    field::String
+end
+
+function SSE.keys_of(s::Decade, item)
+    year = get(item.meta, s.field, nothing)
+    year isa Integer ? string(10 * fld(year, 10), "s") : nothing
+end
+
+# Optional: the settings of [plugins.Decades.settings].
+setup(settings::Dict{String,Any}) = nothing
+
+# Optional: the wire names. Each constructor takes the options of the request.
+const KEY_SOURCES = Dict{String,Function}("decade" => opts -> Decade(opts["field"]))
+const FOLLOWER_KINDS = Dict{String,Function}()   # name => (source, opts) -> FollowerSpec
+
+end
+```
+
+The server calls `setup`, then `SSE.register_plugin!`, then reads `KEY_SOURCES` and
+`FOLLOWER_KINDS`. A constructor that raises an `EngineError` answers `400` with its kind; an
+`ArgumentError` or a `KeyError` answers `400` with its message.
+
+#### Wire format
+
+A key source or a kind of a plugin is a string, or an object with `name` and its options:
+
+```json
+{"name": "by_decade", "kind": "partition",
+ "source": {"name": "Decades.decade", "field": "year"}}
+
+{"name": "coauthors", "kind": {"name": "Graphs.coauthors", "min_weight": 2},
+ "source": "refs"}
+```
+
+- `Plugin.name` selects an entry of `KEY_SOURCES` or `FOLLOWER_KINDS` of the plugin `Plugin`.
+  A source that starts with `meta:` is the engine's, whatever its field name holds. Any other
+  name of the engine has no dot, so the two never collide.
+- A name with a dot whose plugin is not loaded answers `404` with the kind `PluginNotLoaded`.
+  A plugin that does not have that name answers `400`, and the message lists the names it has.
+- A key source of a plugin works with the kinds of the engine. `disjoint`, `graph_min`,
+  `distance` and `policy` keep their meaning.
+- A kind of a plugin takes the key source of the request. The other fields of the request,
+  except `policy`, are not accepted with it: its options go in the object of `kind`.
+- The status reports the plugin in `plugin`, as it does now.
+
+#### Routes
+
+- `GET /api/v1/plugins` (permission `read` over `*`): the loaded plugins, each one with its
+  source (`path` or `package`), its key sources and its kinds by wire name. It is a list of the
+  configuration of the process, not of data.
+- The routes of §5.12 do not change. A follower of a plugin kind supports creation, deletion,
+  `sync`, `rebuild` and its status. The search routes and `postings` call the functions of the
+  engine, which accept the kinds of the engine; a plugin kind answers them with
+  `UnsupportedOperation`.
+
+#### Command lines
+
+- `similarity-search --config FILE` loads the plugins of `FILE` before `follower-create`,
+  `follower-sync`, `follower-rebuild`, `rebuild --rebuild-followers`, `searchbatch --follower`
+  and `postings --follower`. A missing file with any of these commands is not an error when no
+  follower needs a plugin; when one does, the error is `PluginNotLoaded`, and the message names
+  `--config` and `[plugins]`.
+- `follower-create --source` takes a wire name. `--source-options JSON` and `--kind-options
+  JSON` give the options of a plugin type as a JSON object.
+- `similarity-search-ctl follower-create` takes the same arguments and sends them.
+- `similarity-search-ctl plugins` calls `GET /api/v1/plugins`.
+
+#### Clients
+
+- Julia: `create_follower(h, name; kind, source, ...)` accepts a `Dict` for `kind` and
+  `source`, and sends it as it is. `plugins(conn)` returns the list of `GET /api/v1/plugins`.
+- Python: `create_follower` accepts a dict for `kind` and `source`. `list_plugins()`.
+
+#### Phases
+
+6a. The server: loading `[plugins]` at the start of `serve`, the wire names, `GET
+    /api/v1/plugins`, and a test plugin in `server/test/plugins/`.
+6b. The command lines, the two clients, the manual and this section with what differs.
+
+#### Tests
+
+- `serve` with a test plugin that defines a key source and a kind: a partition follower over
+  the key source of the plugin, searched in one partition; a follower of the kind of the
+  plugin, created, processed and reported.
+- The plugin is not loaded twice in one process.
+- A plugin that fails to load stops the start with a message that names it.
+- A request with `Plugin.name` of a plugin that is not loaded answers `404` with
+  `PluginNotLoaded`; a name that the plugin does not have answers `400`.
+- A follower of a plugin opened by a process that has not loaded the plugin reports
+  `PluginNotLoaded` in its status, and the leader stays available.
+- `similarity-search --config` with a plugin: `follower-create`, `follower-sync` and
+  `searchbatch --follower`.
+
+#### Not in this version
+
+- A route of queries for a plugin kind. The search routes call the functions of the engine,
+  which do not dispatch on a kind outside the engine. It needs a function of the engine that a
+  plugin kind implements, and it is worth adding when a plugin kind needs a query.
+- Loading or unloading a plugin while `serve` runs.
+- Plugins in a job. No job opens a follower.
 
 ## 6. Hybrid Search Readiness (Suggestions & Specifications)
 
