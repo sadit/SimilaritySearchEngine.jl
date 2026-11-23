@@ -67,7 +67,13 @@ The parameter `index_kind` of the API names a pair: the type of data a project h
 | `invfile` | `TextDocuments(FitFromCorpus(); index=VectorSpace(distance))` | TF-IDF cosine |
 | `sparse_invfile` | `SparseVectors(dimension, distance)` | sparse vectors encoded by the caller; requires `dimension` |
 
-The server builds the spec from the fields of the request with `dataset_spec(index_kind, distance, dimension)`. When the request gives no distance, a dense dataset uses `SqL2`, and `invfile` and `sparse_invfile` use `NormCosine`. BM25 scoring does not use a distance. See [Project Specifications](../architecture.qmd#project-specifications) in the engine manual.
+The server builds the spec from the fields of the request with `dataset_spec(index_kind, distance, dimension, storage)`. When the request gives no distance, a dense dataset uses `SqL2`, and `invfile` and `sparse_invfile` use `NormCosine`. BM25 scoring does not use a distance. See [Project Specifications](../architecture.qmd#project-specifications) in the engine manual.
+
+The names of `distance` are `L2`, `SqL2`, `Cosine`, `NormCosine`, `Angle` and `NormAngle`, in
+upper or lower case. `L2` is computed as `SqL2`, which orders the results in the same way.
+Another name is refused with `400` and the kind `InvalidOption`. Until 2026-11-23 the server
+also listed `jaccard`, and a dataset created with it failed with `500`. `storage` selects how a
+dense dataset stores its vectors (see "Storage of Dense Vectors").
 
 A text project is created with `FitFromCorpus`. Its vocabulary is fitted from the documents the
 dataset has received when `index!` is called for the first time. Sending a pre-computed text
@@ -108,8 +114,8 @@ is read through `GET /api/v1/datasets/{id}/log`.
 
 - `POST /api/v1/datasets` — creates one. Accepts `id`, `index_kind` (see section 3),
   `distance`, `dimension`, an optional `meta_schema`, `edit_correction` for a text dataset,
-  `partition_by` for a text or dense dataset, and `partition_graph_min` for a dense dataset
-  with `partition_by`. Answers `201`. The fields `join_group`,
+  `partition_by` for a text or dense dataset, `partition_graph_min` for a dense dataset
+  with `partition_by`, and `storage` for a dense dataset. Answers `201`. The fields `join_group`,
   `holds_metadata` and `key` were removed on 2026-11-10, and a request that contains one of
   them answers `400` (see "Searching Several Text Fields").
 - `GET /api/v1/datasets?offset=&limit=` — every dataset on disk, loaded or not.
@@ -135,15 +141,17 @@ GET /api/v1/datasets/{id}
  "doc_count":5, "tombstone_count":0, "tombstone_ratio":0,
  "edit_correction":false,
  "meta_schema":[{"name":"year","type":"int64"}], "partition_by":null,
- "beamsearch_baseline":{"bsize":4,"delta":1,"maxvisits":1000000}}
+ "beamsearch_baseline":{"bsize":4,"delta":1,"maxvisits":1000000},
+ "storage":{"kind":"float32"}, "encoder":null}
 ```
 
 `GET /api/v1/datasets` wraps a list of those objects: `{"status":"ok", "datasets":[...],
 "total":2, "offset":0, "limit":2}`. `doc_count`, `tombstone_count`, `tombstone_ratio`,
-`meta_schema`, `partition_by`, `partition_graph_min` and `beamsearch_baseline` are reported
-for a dataset that is open;
-`beamsearch_baseline` is `null` for one that is not backed by a graph, and `meta_schema` is
-`null` for one that declares nothing.
+`meta_schema`, `partition_by`, `partition_graph_min`, `beamsearch_baseline`, `storage` and
+`encoder` are reported for a dataset that is open;
+`beamsearch_baseline` is `null` for one that is not backed by a graph, `meta_schema` is
+`null` for one that declares nothing, and `storage` and `encoder` are `null` for one that is
+not dense. `encoder` is `null` for a dense dataset of `Float32` vectors.
 
 `meta_schema` declares which fields of an item's metadata the dataset expects and what each
 one holds:
@@ -225,6 +233,150 @@ The command line has `similarity-search build --partition-by <field>`,
 A partition follower (see "Followers") divides the items in the same way, outside the project.
 A dataset can have several, and `migrate-partitions` moves the partitions of `partition_by` to
 one.
+
+### Storage of Dense Vectors
+
+A dense dataset stores each vector in one of three forms. The field `storage` of
+`POST /api/v1/datasets` selects the form, and only its `kind` is required. The default is
+`float32`. The engine manual describes each form in
+[Quantized Dense Indexes](../architecture.qmd#quantized-dense-indexes) and
+[Sketched Dense Indexes](../architecture.qmd#sketched-dense-indexes).
+
+| `kind` | engine storage | bytes per vector of dimension `d` |
+| :--- | :--- | :--- |
+| `float32` | `Float32Vectors()` | `4 d` |
+| `quantized` | `Quantized(SQ(bits; range); rotation, keep_vectors)` | `d × bits / 8`, and 8 more with the range `per_vector` |
+| `sketched` | `Sketched(hyperplanes; bits, rerank, keep_vectors, center, ...)` | `hyperplanes × bits / 8` |
+
+```json
+{"id": "papers", "index_kind": "searchgraph", "distance": "NormCosine",
+ "storage": {"kind": "quantized", "bits": 4}}
+```
+
+The fields of `quantized`:
+
+| field | value | default |
+| :--- | :--- | :--- |
+| `bits` | 8, 4 or 2 bits per coordinate | 8 |
+| `range` | `global`, one range for every coordinate of every vector, or `per_vector`, one range for each vector | `global` |
+| `minmax` | `[lo, hi]`, the range of `global`, given instead of estimated | `null` |
+| `samplesize` | the number of vectors the range is estimated from | 4096 |
+| `rotation` | `none`, `qr` or `hadamard` | `none` |
+| `keep_vectors` | keep the `Float32` vectors on disk next to the codes | `false` |
+
+The fields of `sketched`:
+
+| field | value | default |
+| :--- | :--- | :--- |
+| `hyperplanes` | the number of hyperplanes, a multiple of 64 | 256 |
+| `bits` | 1, 2, 4 or 8 bits per hyperplane | 8 |
+| `rerank` | 0, or the number of candidates, as a multiple of `k`, that are evaluated again with the `Float32` vectors; a value above 0 needs `keep_vectors` | 0 |
+| `keep_vectors` | keep the `Float32` vectors on disk next to the sketches | `false` |
+| `center` | subtract the mean of the fitting sample from each vector and each query | `false` |
+| `samplesize`, `hsel`, `henc`, `entquantile`, `anchorpolicy` | the options of the fitting, described in the engine manual | 16384, 16 × `hyperplanes`, 1024, 0.5, `random` |
+
+A field that is absent takes the default of the engine. `GET /api/v1/datasets/{id}` reports
+`storage` with every field, and `encoder`:
+
+```json
+{"id":"vecs", "index_kind":"exhaustive_search", "distance":"NormCosine", ...,
+ "storage":{"kind":"quantized", "bits":8, "range":"global", "minmax":null,
+            "samplesize":4096, "rotation":"none", "keep_vectors":false},
+ "encoder":{"fitted":true, "dimension":4, "min":0.0, "max":1.7000009,
+            "bytes_per_vector":4, "staged":0}}
+```
+
+- `fitted` is whether the encoder exists.
+- `dimension` is the dimension of the vectors, or `null` before the encoder exists.
+- `min` and `max` are the range of a global quantizer or of sketches of 2 to 8 bits, and
+  `null` otherwise.
+- `bytes_per_vector` is the size of one code.
+- `staged` is the number of appended vectors that are not encoded yet.
+- A sketched dataset also reports `bytes_on_disk_per_vector`, which includes the kept vectors.
+
+The storage and the encoder are saved inside the project, not in `descriptor.json`. `dump`,
+`load` and `rebuild` keep the storage, and `dump` and `load` also keep the fitted encoder.
+
+**Measurements.** Measured on 2026-11-23 on SISAP 2025 `ccnews` (dev): 603,664 vectors of
+dimension 384, the distance `NormCosine`, an `exhaustive_search` dataset, and the first 1,000
+`otest` queries. Recall@10 is the fraction of the exact 10 nearest neighbors in the results.
+The engine ran with 32 threads on a Xeon Silver 4216. The column `searchbatch` divides the time
+of one batch of 1,000 queries by 1,000. The column `search` is the time of one query, which an
+exact scan answers with one thread. The disk column is the whole project directory.
+
+| storage | bytes per vector | recall@10 | `searchbatch`, ms | `search`, ms | disk |
+| :--- | ---: | ---: | ---: | ---: | ---: |
+| `float32` | 1,536 | 0.999 | 5.36 | 110 | 1,593 MB |
+| `quantized`, 8 bits | 384 | 0.988 | 1.95 | 36 | 441 MB |
+| `quantized`, 4 bits | 192 | 0.909 | 2.06 | 28 | 249 MB |
+| `quantized`, 2 bits | 96 | 0.757 | 3.37 | 28 | 153 MB |
+| `sketched`, the defaults (256 hyperplanes, 8 bits) | 256 | 0.490 | 0.92 | 19 | 313 MB |
+| `sketched`, the defaults, `rerank` 4, `keep_vectors` | 256 | 0.734 | 0.86 | 23 | 1,849 MB |
+
+Encoding the 603,664 vectors took 2 to 3 s for a quantized dataset and 2 to 7 s for a sketched
+one.
+
+**Which storage to use.** For the vectors of a language model, use `quantized`. On `ccnews`, 8
+bits kept a recall@10 of 0.988 with a quarter of the bytes, and 4 bits kept 0.909 with an
+eighth. At the same memory, sketches gave a lower recall: 0.49 with 256 bytes per vector. A
+sketch is defined by distances only, so `sketched` takes the distances that `quantized` does
+not: `Angle` and `NormAngle`. `quantized` takes `L2`, `SqL2`, `Cosine` and `NormCosine`. A
+second evaluation (`rerank`) raises the recall of sketches, but it needs the `Float32` vectors
+on disk.
+
+**Rotation and centering.** Both are off by default. Whether to use them is a decision of the
+user, and the facts are these:
+
+- `rotation` applies to `quantized`. A random rotation gives every coordinate the same scale
+  before the quantization. The coordinates of the vectors of most neural embedding models
+  already have similar scales: on `ccnews`, a QR rotation changed recall@10 by less than 0.01
+  at every width. Use `qr` for vectors that are not normalized, for vectors of several models in
+  one dataset, for features that a neural model did not produce, or when the recall on a sample
+  of queries is clearly below that of an exact search. `qr` costs `d²` operations for each query
+  and each inserted vector, and `4 d²` bytes of storage: 4 MB at dimension 1024. `hadamard`
+  costs `d log d` operations, and the dimension must be a power of two.
+- `center` applies to `sketched`. It subtracts the mean of the fitting sample from every vector
+  and every query. Under `L2` and `SqL2` it changes no distance, because those distances do not
+  change when every vector moves by the same amount. Under `Cosine` and `NormCosine` it changes
+  the angles between the vectors. The vectors of a language model seldom need it. A rotation
+  changes no distance, so `sketched` has no rotation.
+
+**Fitting.** An append indexes its items, so the first append fits the encoder on its own
+vectors, on at most `samplesize` of them. A quantized dataset whose first request has a few
+vectors estimates its range from those few. Send at least `samplesize` vectors in the first
+request, 4096 with the defaults, or give `minmax`. A sketched dataset fits its encoder on more
+than 64 vectors. Before that, its vectors stay staged, `encoder.staged` counts them, and a
+search answers `409`:
+
+```json
+{"kind":"NotTrained","error":"this sketched project holds 1 staged vector(s) and no encoder: the encoder is fitted at an index! with more than 64 staged vectors, and until then the project has nothing to search"}
+```
+
+**Distances of the results.** A quantized dataset reports the distance between the query, in
+`Float32`, and the codes, which is close to the distance of the dataset. A sketched dataset
+without `rerank` reports the distance between sketches: the number of different bits at 1 bit,
+and the squared Euclidean distance between the codes at 2, 4 and 8 bits. That distance orders
+the results, and it is not the distance of the dataset. With `rerank` above 0, the results
+have the distance of the dataset.
+
+**The `Float32` vectors.** With `keep_vectors` set to `false`, the default, the `Float32`
+vectors are removed once they are encoded. `fetch` does not return the vector of an item with
+any storage. `rebuild` encodes the kept vectors again with a new encoder. It refuses a quantized
+or sketched dataset without them, exits with code 2, and leaves the dataset as it was.
+
+**Errors.** A `storage` is refused with `400` and the kind `InvalidOption` when its kind or one
+of its fields is unknown, when a value has the wrong type or is out of range, when the dataset
+is not dense, or when the storage does not take the distance:
+
+```json
+{"kind":"InvalidOption","error":"the storage quantized has no field(s) bitz; it takes bits, range, minmax, samplesize, rotation, keep_vectors"}
+{"kind":"InvalidOption","error":"a quantized project searches with SqL2, L2, L1, Cosine or NormCosine; Angle has no distance over codes"}
+```
+
+The command line takes the same object: `similarity-search build --storage '{"kind":
+"quantized", "bits": 4}'`. `describe` reports the distance of the dataset, `storage` and
+`encoder`. Its `distance_stats` search with the kept vectors, and they are `null` without them
+or for a sketched dataset without `rerank`.
 
 ### Search and indexing
 
@@ -872,13 +1024,13 @@ The number of threads the server itself has is the one given to Julia when it st
 
 The suite has two levels. A run can also select some of its files.
 
-- **light** (288 assertions, approximately 26 s, measured on 2026-11-23): the interface with
+- **light** (321 assertions, approximately 28 s, measured on 2026-11-23): the interface with
   the engine. It verifies the mapping from the names used in requests to engine types, from
   engine errors to status codes and exit codes, and from the items of a request to engine
   items. It also verifies that the Julia client has every error type of the engine. No server
   is started and no subprocess is created. This level detects a change in the engine on the
   day it is made.
-- **full** (1,273 assertions, approximately 37 minutes, measured on 2026-11-23): the end-to-end
+- **full** (1,372 assertions, approximately 39 minutes, measured on 2026-11-23): the end-to-end
   suites for the API, the jobs, the command lines and the Julia client. They start servers and
   execute subprocesses. Near the end, the run produces no output for about ten minutes, while
   the command-line suite waits for jobs to expire. The run has not stopped.
@@ -890,8 +1042,8 @@ julia --project=server -e 'using Pkg; Pkg.test(test_args=["full"])'
 
 Each test file has a name and a list of tags. The table `TEST_FILES` in
 `server/test/runtests.jl` lists them. The names are `config`, `boundary`, `dispatcher`, `e2e`, `api/01` to
-`api/19` and `cli/01` to `cli/07`. Examples of tags are `jobs`, `cursors`, `client`,
-`partitions`, `followers`, `plugins`, `auth` and `cli`. A run that receives names or tags includes only the files that
+`api/20` and `cli/01` to `cli/08`. Examples of tags are `jobs`, `cursors`, `client`,
+`partitions`, `followers`, `plugins`, `storage`, `auth` and `cli`. A run that receives names or tags includes only the files that
 match one of them. The word `light` adds the files of the light level.
 
 ```bash

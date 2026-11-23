@@ -573,7 +573,14 @@ of it exist.
       listed `NormalizedCosine`, which `parse_distance` did not accept; they are now `L2`,
       `SqL2`, `Cosine`, `NormCosine`, `Angle` and `NormAngle`.
     - `fetch` does not return the vector of an item, for any storage, as before.
-    - Not done yet: 7c (the manual and the tutorial).
+
+    Phase 7c, the documentation, written on 2026-11-23: "Storage of Dense Vectors" in the
+    server manual (the fields, the measurements on `ccnews`, which storage to use, rotation and
+    centering, the fitting at the first `append`, the distances of the results, the errors),
+    step 9 of the server tutorial, the `storage` keyword in the page of the Julia client, and
+    "Sketched Dense Indexes" in the architecture page of the engine, with the comparison of the
+    models and the measurements of the defaults. The requests of the manual and the tutorial
+    were sent to a server, and their responses are copied from it.
 
     The order of the queue, set on 2026-11-23: phase 6b of issue #5; then binary sketches; then
     the decisions after phase 5 of issue #5 (§5.12, "Decided after phase 5": the event
@@ -2220,7 +2227,8 @@ phase.
 
 ### 5.14. Sketched Dense Projects (design, 2026-11-23)
 
-Status: designed on 2026-11-23, item 16 of §0. Issue #1 listed binary sketches under "Later,
+Status: designed and implemented on 2026-11-23, item 16 of §0; see "As built" at the end of
+this section. Issue #1 listed binary sketches under "Later,
 not required for a first version"; on 2026-11-23 they became required. This section designs
 them in the engine and in the server. It also covers the part of issue #1 that the server does
 not have yet, scalar quantization on the wire, because both are a storage of a dense project.
@@ -2348,6 +2356,27 @@ not have yet, scalar quantization on the wire, because both are a storage of a d
   encoder and found.
 - The server creates a quantized and a sketched dataset, and `dump`, `load` and `rebuild` keep
   their storage.
+
+#### As built (2026-11-23)
+
+Phases 7a (commit 2030ada), 7b (commit 58b54f4) and 7c are done. Item 16 of §0 lists what
+each phase implements and the measurements. What differs from this design:
+
+- The measurements of item 7 were taken on SISAP 2025 `ccnews` (603,664 vectors of dimension
+  384), not on the collections of issue #1. At the same memory, `AnchoredDistantHyperplanes`
+  gave the lowest recall of the models measured, below rotations and PCA, and below the scalar
+  quantizer of `Quantized`. The user decided that hyperplane sketches are not the storage for the
+  vectors of language models; `Sketched` stays, with defaults that are good and scale
+  (`hsel=16hyperplanes`, `henc=1024`, `entquantile=0.5`), and the manual recommends `Quantized`.
+- `Sketched` checks `hsel * (1 - entquantile) >= hyperplanes` when it is created.
+- `rebuild` of a quantized or sketched dataset needs the kept vectors (`keep_vectors=true`);
+  without them it exits with code 2.
+- The first `append` of the server fits the encoder, because an `append` indexes. The manual
+  says to send at least `samplesize` vectors in the first request; a way to delay the fitting is
+  not designed.
+- Item 5's `sketch_info(h)` reports the storage, whether the encoder is fitted, the dimension,
+  the range, and the bytes per vector in memory and on disk. The options of the fitting are in
+  the storage that it reports.
 
 ## 6. Hybrid Search Readiness (Suggestions & Specifications)
 

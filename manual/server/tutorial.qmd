@@ -162,7 +162,52 @@ result = run_job(client, kind="allknn", command=["--dataset", ds_id, "--k", "5"]
 python stress_client.py --jobs 3
 ```
 
-## Step 9: Organize the items with followers
+## Step 9: Store dense vectors in fewer bytes
+
+A dense dataset stores `Float32` vectors by default: 4 bytes per coordinate. With `storage`, it
+stores the codes of a scalar quantizer instead. At 8 bits a vector takes a quarter of the bytes:
+
+```bash
+curl -s -X POST localhost:8080/api/v1/datasets \
+     -H 'Content-Type: application/json' \
+     -d '{"id": "vecs", "index_kind": "exhaustive_search", "distance": "NormCosine",
+          "storage": {"kind": "quantized", "bits": 8}}'
+
+curl -s -X POST localhost:8080/api/v1/datasets/vecs/append \
+     -H 'Content-Type: application/json' \
+     -d '{"items": [
+           {"doc_id": "v1", "vector": [1.0, 0.0, 0.0, 0.0]},
+           {"doc_id": "v2", "vector": [0.8, 0.6, 0.0, 0.0]},
+           {"doc_id": "v3", "vector": [0.0, 1.0, 0.0, 0.0]},
+           {"doc_id": "v4", "vector": [0.0, 0.0, 0.6, 0.8]}
+         ]}'
+
+curl -s -X POST localhost:8080/api/v1/datasets/vecs/search \
+     -H 'Content-Type: application/json' \
+     -d '{"vector": [0.9, 0.1, 0.0, 0.0], "k": 2}'
+```
+
+The search returns `v1` at distance 0.09999955 and `v2` at 0.21999598. The exact distances are
+0.1 and 0.22: the codes give distances close to those of the `Float32` vectors.
+
+The first append fits the encoder on its own vectors, here 4 of them. A real dataset sends at
+least 4096 vectors in its first request, which is the default `samplesize` of the quantizer.
+`GET /api/v1/datasets/vecs` reports the storage with every field, and the encoder:
+
+```json
+"storage": {"kind": "quantized", "bits": 8, "range": "global", "minmax": null,
+            "samplesize": 4096, "rotation": "none", "keep_vectors": false},
+"encoder": {"fitted": true, "dimension": 4, "min": 0.0, "max": 1.7000009,
+            "bytes_per_vector": 4, "staged": 0}
+```
+
+With `keep_vectors` set to `false`, the default, the `Float32` vectors are removed once they are
+encoded. The [server manual](manual.qmd#storage-of-dense-vectors) describes the other fields,
+the sketches (`"kind": "sketched"`), and the recall of each storage on a collection of 603,664
+vectors. The command line takes the same object: `build --storage '{"kind": "quantized",
+"bits": 4}'`.
+
+## Step 10: Organize the items with followers
 
 A follower reads the items of a dataset and organizes them by keys. A partition follower
 restricts a search to the items with one key. Here the key is the metadata field `section`:
@@ -201,7 +246,7 @@ Each `append` to `demo` processes both followers before it answers.
 with followers cannot be deleted until its followers are deleted. The
 [server manual](manual.qmd#followers) describes the policies, the routes and the command lines.
 
-## Step 10: Add a key source with a plugin
+## Step 11: Add a key source with a plugin
 
 The keys of a follower come from `keywords`, `refs`, `doc_id` or a field of `meta`. A plugin
 adds other key sources. A plugin is a Julia module. This one makes the decade of the field
@@ -252,7 +297,7 @@ year, so they have no key. A plugin that cannot be loaded stops the start of the
 the message names the plugin. The [server manual](manual.qmd#plugins) describes the plugins,
 their kinds of follower and the command lines.
 
-## Step 11: Require a token
+## Step 12: Require a token
 
 Everything above answered without credentials, which is the default. To require a token on
 every `/api/v1` endpoint, create the first token against the working directory and enable

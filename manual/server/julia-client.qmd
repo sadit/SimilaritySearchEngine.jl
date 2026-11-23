@@ -48,6 +48,15 @@ hybrid_search(h, t; vector=q, text="redes neuronales", k=5)
 
 The index types are `searchgraph`, `exhaustive_search`, `parallel_exhaustive_search`, `bm25_invfile`, `invfile` and `sparse_invfile`. Section 3 of the [server manual](manual.qmd) describes them. A keyword of `create_project` that is `nothing` is not sent, and the server applies its own default.
 
+`storage` selects how a dense dataset stores its vectors. It is a `Dict` or a `NamedTuple` with the fields of the `storage` object of the server, which "Storage of Dense Vectors" in the [server manual](manual.qmd) describes. The client sends it without changes. `project_info(h)` reports the storage with every field, and its encoder:
+
+```julia
+h = create_project(conn, "papers_q"; index_type="searchgraph", distance="NormCosine",
+                   storage=(kind="quantized", bits=4))
+project_info(h)["storage"]        # Dict("kind" => "quantized", "bits" => 4, "range" => "global", ...)
+project_info(h)["encoder"]        # "fitted" is false until the first append fits it
+```
+
 ## 3. Differences with the Engine
 
 The client sends each call to the server. The server does not accept every argument of the engine, and it does not return every field. The differences are these:
@@ -63,6 +72,7 @@ The client sends each call to the server. The server does not accept every argum
 | `ftsearch` | a string or a list of tokens | a string |
 | `fetch_items` | `payload` is the vector or the text | `payload` is `nothing` |
 | `calibrate!` | several `levels` in one call | one level per call |
+| `create_project` | a `ProjectSpec`, such as `DenseVectors(Dist.NormCosine(); storage=Quantized(SQ(4)))` | the fields of the server: `index_type`, `distance`, `storage` |
 | `close_project!` | closes the RocksDB database | does nothing |
 | `allknn`, `fft`, `neardup` | run in the calling process | run as a job on the server (section 5) |
 | `fft` | `start` and `verbose` keywords | not accepted |

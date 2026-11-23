@@ -84,11 +84,12 @@ developed by path.
 - **Project specifications**: `create_project` takes one value that describes the project (issue #2):
   - What it holds: `DenseVectors`, `SparseVectors` or `TextDocuments`.
   - Its index: `Graph` or `Exhaustive` for dense vectors, `BM25` or `VectorSpace` for text.
-  - The storage of dense vectors: `Float32Vectors` or `Quantized`.
+  - The storage of dense vectors: `Float32Vectors`, `Quantized` or `Sketched`.
   - Each type holds only its own options. For example, `minrecall` is an option of `Graph`, and the dimension is an argument of `SparseVectors`.
   - The spec is saved with the project. `project_spec(h)` returns it, and `payload_kind(h.engine)` reports the type of data.
 - **Dense vector search**: approximate nearest neighbor search with `SearchGraph`, which tunes its beam search parameters, or exact search with `ExhaustiveSearch` and `ParallelExhaustiveSearch`. For `SearchGraph`, insertion (`append_items!`) and graph construction (`index!`) are separate operations, so the caller determines when indexing latency is incurred.
 - **Quantized dense vectors**: `DenseVectors(distance; storage=Quantized(SQ(8)))` stores each vector as 8, 4 or 2 bits per coordinate instead of a `Float32`, with the `Graph` index and with the `Exhaustive` index. At 8 bits a vector takes a quarter of the memory and of the disk space. `quantizer_info(h)` reports the quantizer, its range and the bytes per vector.
+- **Sketched dense vectors**: `DenseVectors(distance; storage=Sketched(256; bits=8))` stores a sketch of each vector: its position against 256 hyperplanes defined by pairs of vectors, at 1, 2, 4 or 8 bits each. It works with any `SemiMetric` distance. `rerank=r` evaluates `r × k` candidates again with the `Float32` vectors. On SISAP 2025 `ccnews` it gave a lower recall than `Quantized` at the same memory, so `Quantized` is the storage for the vectors of a language model. `sketch_info(h)` reports the sketches.
 - **Sparse vector search**: inverted index search (`InvertedFile`) over sparse representations encoded by the caller, of fixed dimension. The available distance functions are cosine distance over the weights and set distances (`Dist.Sets.*`) over the support of the non-zero coordinates.
 - **Full-text retrieval**: lexical search with `BM25InvertedFile` or with TF-IDF weighting (`TextInvertedFile`). The first call to `index!` fits or initializes a `TextProfile` from the staged texts, which determines the vocabulary and the term weighting model.
 - **Explicit text modeling**: `TextDocuments` requires an `AbstractTextModelSpec`:

@@ -274,6 +274,7 @@ window.Quarto = {
   <li><a href="#partitioned-text-indexes" id="toc-partitioned-text-indexes" class="nav-link" data-scroll-target="#partitioned-text-indexes">Partitioned Text Indexes</a></li>
   <li><a href="#partitioned-dense-indexes" id="toc-partitioned-dense-indexes" class="nav-link" data-scroll-target="#partitioned-dense-indexes">Partitioned Dense Indexes</a></li>
   <li><a href="#quantized-dense-indexes" id="toc-quantized-dense-indexes" class="nav-link" data-scroll-target="#quantized-dense-indexes">Quantized Dense Indexes</a></li>
+  <li><a href="#sketched-dense-indexes" id="toc-sketched-dense-indexes" class="nav-link" data-scroll-target="#sketched-dense-indexes">Sketched Dense Indexes</a></li>
   <li><a href="#external-identifier-resolution" id="toc-external-identifier-resolution" class="nav-link" data-scroll-target="#external-identifier-resolution">External Identifier Resolution</a></li>
   <li><a href="#compaction" id="toc-compaction" class="nav-link" data-scroll-target="#compaction">Compaction</a></li>
   <li><a href="#storage-subsystems" id="toc-storage-subsystems" class="nav-link" data-scroll-target="#storage-subsystems">Storage Subsystems</a></li>
@@ -408,7 +409,7 @@ window.Quarto = {
 </tr>
 <tr class="even">
 <td>Dense storage</td>
-<td><code>Float32Vectors()</code>, <code>Quantized(SQ(bits; range); rotation, keep_vectors)</code></td>
+<td><code>Float32Vectors()</code>, <code>Quantized(SQ(bits; range); rotation, keep_vectors)</code>, <code>Sketched(hyperplanes; bits, rerank, keep_vectors, center, ...)</code></td>
 </tr>
 </tbody>
 </table>
@@ -532,10 +533,10 @@ window.Quarto = {
 <li>An exact project of <code>Float32</code> vectors writes its vectors to <code>dense_vectors.mmapdb</code>, as on <code>SearchGraph</code>. <code>open_project</code> rebuilds the exact index from that file. Nothing else of the index is saved (issue #3).</li>
 <li>Before 2026-11-22, an exact project saved its whole index in the engine field <code>:index</code> after each inserted item, so an append of <span class="math inline">\(n\)</span> items wrote <span class="math inline">\(O(n^2)\)</span> bytes. A writable <code>open_project</code> of such a project moves its vectors to <code>dense_vectors.mmapdb</code> and removes <code>:index</code>. A read-only open reads <code>:index</code>.</li>
 </ul></li>
-<li><strong>Quantized dense projects, on every dense backend</strong>:
+<li><strong>Quantized and sketched dense projects, on every dense backend</strong>:
 <ul>
 <li><code>append_items!</code> writes the <code>Float32</code> vectors to <code>dense_vectors.mmapdb</code>, as on <code>SearchGraph</code>. An item is not searchable until <code>index!</code>, also on <code>ExhaustiveSearch</code>.</li>
-<li><code>index!</code> fits the quantizer on its first call, encodes the staged vectors, and inserts the codes into the index. On <code>SearchGraph</code> it then builds the graph connections of the new codes. See <a href="#quantized-dense-indexes">Quantized Dense Indexes</a>.</li>
+<li><code>index!</code> fits the encoder on its first call, encodes the staged vectors, and inserts the codes into the index. On <code>SearchGraph</code> it then builds the graph connections of the new codes. A sketched project fits its encoder at the first <code>index!</code> with more than 64 staged vectors. See <a href="#quantized-dense-indexes">Quantized Dense Indexes</a> and <a href="#sketched-dense-indexes">Sketched Dense Indexes</a>.</li>
 </ul></li>
 </ol>
 <hr>
@@ -763,12 +764,81 @@ window.Quarto = {
 <p>A dense project created with <code>storage=Quantized(SQ(bits))</code> stores the codes of a scalar quantizer of <code>SimilaritySearch.ScalarQuant</code> instead of <code>Float32</code> vectors (issue #1). The index is the one the project was created with, <code>Graph</code> or <code>Exhaustive</code>, built over a <code>QuantDatabase</code>. A query is rotated and prepared once by <code>encodequery</code>, and then evaluated against the codes with the distance of <code>ScalarQuant</code> that corresponds to the distance of the project: <code>SqL2</code>, <code>L2</code>, <code>L1</code>, <code>Cosine</code> or <code>NormCosine</code>.</p>
 <ul>
 <li><strong>Quantizers.</strong> <code>SQ(bits)</code> has 8, 4 or 2 bits per coordinate. <code>SQ(bits; range=GlobalRange())</code>, the default, uses one range for every coordinate of every vector. <code>SQ(bits; range=PerVectorRange())</code> uses one range per vector, which costs 8 bytes per vector.</li>
-<li><strong>Rotation.</strong> <code>rotation=NoRotation()</code> is the default. It works for the output of most modern neural embedding models, whose coordinates have similar scales. <code>rotation=QRRotation()</code> gives every coordinate the same scale. Use it for vectors that are not normalized, for vectors of several models in one project, for features that a neural model did not produce, or when the recall on a sample of queries is clearly below the exact search.</li>
-<li><strong>Fitting.</strong> The first <code>index!</code> fits the encoder on <code>samplesize</code> staged vectors, chosen at random. A global quantizer estimates its range from them, unless <code>GlobalRange(minmax=(lo, hi))</code> gives it. A per-vector quantizer calibrates how it rounds each range. <code>fit_quantizer!(h; rng)</code> fits the encoder without encoding. The fitted encoder, with its rotation matrix, is saved in the engine field <code>:encoder</code>.</li>
+<li><strong>Rotation.</strong> <code>rotation=NoRotation()</code> is the default. It works for the output of most modern neural embedding models, whose coordinates have similar scales: on SISAP 2025 <code>ccnews</code>, a QR rotation changed recall@10 by less than 0.01 at every width. <code>rotation=QRRotation()</code> gives every coordinate the same scale. Use it for vectors that are not normalized, for vectors of several models in one project, for features that a neural model did not produce, or when the recall on a sample of queries is clearly below the exact search. It costs <code>dim²</code> operations for each query and each inserted vector, and <code>4 dim²</code> bytes of storage. <code>rotation=HadamardRotation()</code> costs <code>dim log dim</code> operations, and the dimension must be a power of two.</li>
+<li><strong>Fitting.</strong> The first <code>index!</code> fits the encoder on <code>samplesize</code> staged vectors, chosen at random. Before 2026-11-23 the sample was built with <code>reduce(hcat, ...)</code> over a generator, which copies the matrix at each column: the first <code>index!</code> of 603,664 vectors of dimension 384 took 5 to 7 s, and it takes 2 to 3 s now. A global quantizer estimates its range from them, unless <code>GlobalRange(minmax=(lo, hi))</code> gives it. A per-vector quantizer calibrates how it rounds each range. <code>fit_quantizer!(h; rng)</code> fits the encoder without encoding. The fitted encoder, with its rotation matrix, is saved in the engine field <code>:encoder</code>.</li>
 <li><strong>Storage.</strong> The codes are in <code>dense_codes.mmapdb</code>, a memory-mapped file with one row of bytes per vector. The ranges of a per-vector quantizer are in <code>dense_code_ranges.mmapdb</code>, two <code>Float32</code> per vector. <code>index!</code> reads, encodes and inserts the staged vectors in blocks of <code>QUANT_ENCODE_BLOCK</code> (16,384). With <code>keep_vectors=false</code>, the default, <code>index!</code> then removes <code>dense_vectors.mmapdb</code>, and the next <code>append_items!</code> starts a new one. The engine field <code>:raw_offset</code> holds the number of items before its first row.</li>
 <li><strong>Reading back.</strong> <code>fetch_items</code> returns the vector of an item whose <code>Float32</code> vector is still on disk: every item with <code>keep_vectors=true</code>, and an item not yet encoded otherwise. It returns <code>nothing</code> as the payload of any other item, because the codes do not give back the vector that was appended.</li>
 <li><strong>Opening.</strong> <code>open_project</code> reads the encoder, maps the codes file, and on <code>SearchGraph</code> restores the graph from the adjacency store. The staged vectors not yet encoded are the rows of <code>dense_vectors.mmapdb</code> after <code>:raw_offset</code> plus the number of codes. A file whose rows are all encoded, in a project that does not keep them, is what an interrupted <code>index!</code> leaves, and it is removed.</li>
 <li><strong>Memory.</strong> The codes stay in the mapped file, and only the code sums (8 bytes per vector) and, for a per-vector quantizer, the ranges (8 bytes per vector) are in memory. A <code>Float32</code> project holds every vector in memory: a graph project and an exact project copy the vectors out of <code>dense_vectors.mmapdb</code> when they are opened. Measured on 2026-11-20 with 200,000 vectors of dimension 256 (test <code>quantized project: resident memory follows the size of the codes</code>): opening the project and running one search added 403 MB of resident memory for the <code>Float32</code> vectors of a graph project, and 50 MB for the 8-bit codes, whose file holds 51 MB.</li>
+</ul>
+</section>
+<section id="sketched-dense-indexes" class="level3">
+<h3 class="anchored" data-anchor-id="sketched-dense-indexes">Sketched Dense Indexes</h3>
+<p>A dense project created with <code>storage=Sketched(hyperplanes; bits)</code> stores a sketch of each vector instead of the vector (PLAN.md §5.14). The sketch is built by <code>SimilaritySearch.Projections</code>:</p>
+<ul>
+<li>An <code>AnchoredDistantHyperplanes</code> model selects <code>hyperplanes</code> pairs of vectors of a sample, the anchors. Each pair <code>(a, b)</code> defines a hyperplane: the vectors closer to <code>a</code> than to <code>b</code> under the distance of the project are on one side.</li>
+<li>A <code>QuantSketch</code> encodes the signed margin of a vector <code>v</code> against each pair, <code>d(v, b) - d(v, a)</code>, divided by <code>d(a, b)</code>, at <code>bits</code> bits. At 1 bit it keeps the sign, in <code>UInt64</code> words compared with the Hamming distance. At 2, 4 and 8 bits it keeps a <code>UInt8</code> code of the margin, and the codes are compared with the squared Euclidean distance of <code>SQgu2</code>, <code>SQgu4</code> or <code>SQgu8</code>.</li>
+</ul>
+<p>A sketch takes <code>hyperplanes × bits / 8</code> bytes. The index of the project, <code>Graph</code> or <code>Exhaustive</code>, is built over the sketches, and a query is sketched as the vectors are. The model uses only distances, so the distance of the project can be any <code>SemiMetric</code>. A scalar quantizer takes only <code>SqL2</code>, <code>L2</code>, <code>L1</code>, <code>Cosine</code> and <code>NormCosine</code>.</p>
+<ul>
+<li><strong>Second evaluation.</strong> <code>rerank=r</code> searches <code>r × k</code> candidates among the sketches, evaluates them again with the distance of the project and the <code>Float32</code> vectors, and returns the best <code>k</code>. It needs <code>keep_vectors=true</code>. It applies to <code>search</code>, <code>searchbatch</code>, a search of one partition, and a search of a view of a partition follower. Without it, a result has the distance between sketches, which orders the results and is not the distance of the project.</li>
+<li><strong>Centering.</strong> <code>center=true</code> subtracts the mean of the fitting sample from every vector and every query. Under <code>L2</code> and <code>SqL2</code> it changes no distance. Under <code>Cosine</code> and <code>NormCosine</code> it changes the angles between the vectors. It is off by default. A rotation changes no distance, so <code>Sketched</code> has no rotation.</li>
+<li><strong>Fitting.</strong> The first <code>index!</code> fits the encoder on at most <code>samplesize</code> staged vectors. The model evaluates <code>hsel</code> candidate pairs on <code>henc</code> vectors of the sample, which costs <code>2 × hsel × henc</code> distances. It keeps the pairs whose sides have an entropy above the <code>entquantile</code> quantile, about <code>hsel × (1 - entquantile)</code> of them, and selects the <code>hyperplanes</code> most diverse of those. <code>Sketched</code> refuses options that keep fewer pairs than <code>hyperplanes</code>. The encoder needs more than 64 staged vectors. With fewer, <code>index!</code> leaves them staged, and <code>search</code> raises <code>NotTrained</code>. The encoder saves only the anchors its hyperplanes use, not the sample, in the engine field <code>:encoder</code>.</li>
+<li><strong>Random numbers.</strong> <code>AnchoredDistantHyperplanes</code> and <code>QuantSketch</code> draw their samples from the default random generator of Julia. The <code>rng</code> of <code>fit_quantizer!</code> selects only the rows of the sample, so two fittings of the same data can select other anchors.</li>
+<li><strong>Ties.</strong> At 1 and 2 bits, many distances between sketches are equal. A graph reopened from disk can order the tied results differently, because it visits the neighbors of a vertex in another order. The distances are the same.</li>
+<li><strong>Storage.</strong> As in a quantized project: the sketches are in <code>dense_codes.mmapdb</code>, <code>keep_vectors</code> decides whether <code>dense_vectors.mmapdb</code> stays, and <code>fetch_items</code> returns the vector only when it is still on disk. <code>sketch_info(h)</code> reports the storage, whether the encoder is fitted, the dimension, the range of the codes, and the bytes per vector in memory and on disk.</li>
+</ul>
+<p><strong>Measurements.</strong> Measured on 2026-11-23 on SISAP 2025 <code>ccnews</code> (dev): 603,664 vectors of dimension 384, <code>NormCosine</code>, the first 1,000 <code>otest</code> queries, an exact search over the sketches, and 32 threads of a Xeon Silver 4216. Recall@10 is the fraction of the exact 10 nearest neighbors in the results, without a second evaluation. The rotations in this table are <code>QuantSketch</code> over <code>RandomProjections</code>: a random orthogonal matrix (the QR factorization of a matrix of normal values), and a PCA fitted on the sample. The hyperplanes used <code>hsel=16m</code>, <code>henc=4096</code> and <code>entquantile=0.9</code>.</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: left;">bytes per vector</th>
+<th style="text-align: right;"><code>AnchoredDistantHyperplanes</code></th>
+<th style="text-align: right;">random orthogonal projection</th>
+<th style="text-align: right;">PCA</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">64 (256 components, 2 bits)</td>
+<td style="text-align: right;">0.388</td>
+<td style="text-align: right;">0.580</td>
+<td style="text-align: right;">0.579</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">128 (256 components, 4 bits)</td>
+<td style="text-align: right;">0.430</td>
+<td style="text-align: right;">0.714</td>
+<td style="text-align: right;">0.805</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">256 (256 components, 8 bits)</td>
+<td style="text-align: right;">0.432</td>
+<td style="text-align: right;">0.734</td>
+<td style="text-align: right;">0.929</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">384 (384 components, 8 bits)</td>
+<td style="text-align: right;">0.456</td>
+<td style="text-align: right;">0.988</td>
+<td style="text-align: right;">0.951</td>
+</tr>
+</tbody>
+</table>
+<p>At the same memory, the hyperplanes gave the lowest recall at every width. Through the engine on the same data, <code>Quantized(SQ(8))</code> (384 bytes) gave 0.988, and <code>Quantized(SQ(4))</code> (192 bytes) gave 0.909. For the vectors of a language model, use <code>Quantized</code>.</p>
+<p><strong>Defaults.</strong> The defaults are <code>Sketched(256; bits=8, rerank=0, keep_vectors=false, center=false, samplesize=16_384, hsel=16hyperplanes, henc=1024, entquantile=0.5, anchorpolicy=:random)</code>. On the same data:</p>
+<ul>
+<li><code>henc</code> from 1,024 to 8,192 and <code>samplesize</code> from 4,096 to 65,536 changed recall@10 by less than 0.015, with one seed.</li>
+<li><code>entquantile=0.5</code> raised recall@10 by 0.06 to 0.075 over 0.9, at the same cost.</li>
+<li>With the defaults, over 3 seeds, recall@10 was 0.483 to 0.493, and 0.73 to 0.74 with <code>rerank=4</code>. The fitting took 0.1 s at 256 hyperplanes, 0.8 s at 1,024, 2.6 to 3.9 s at 2,048 and 8.2 to 11.9 s at 4,096, independent of the size of the collection.</li>
+<li>At 256 bytes per vector, more hyperplanes with fewer bits gave more recall: 0.49 with 256 × 8 bits, 0.53 with 512 × 4, 0.56 with 1,024 × 2, and 0.55 with 2,048 × 1. Encoding a vector costs <code>2 × hyperplanes</code> distances: 1.2 µs per vector at 256 hyperplanes and 15.5 µs at 2,048, with 32 threads.</li>
+<li>The defaults of <code>AnchoredDistantHyperplanes</code> in SimilaritySearch (<code>hsel=1024m</code>, <code>henc=8192</code>, <code>entquantile=0.9</code>) gave 0.03 to 0.04 more recall@10 with a fitting 100 to 140 times as long: 10 s at 256 hyperplanes and 41 s at 1,024. SimilaritySearch issue #153 proposes the defaults of the engine for the library.</li>
 </ul>
 </section>
 <section id="external-identifier-resolution" class="level3">
@@ -792,12 +862,12 @@ window.Quarto = {
 </ul></li>
 <li><strong>Dense Vector Storage (<code>dense_vectors.mmapdb</code>)</strong>:
 <ul>
-<li>Dense vectors are stored in a dedicated memory-mapped binary file managed by <code>MMapMatrixDatabase</code>. Every dense project writes it: a graph project, an exact project of <code>Float32</code> vectors, and a quantized project until <code>index!</code> encodes the vectors.</li>
+<li>Dense vectors are stored in a dedicated memory-mapped binary file managed by <code>MMapMatrixDatabase</code>. Every dense project writes it: a graph project, an exact project of <code>Float32</code> vectors, and a quantized or sketched project until <code>index!</code> encodes the vectors.</li>
 <li>Avoids key-value serialization. Appends are sequential, and random access reads the vector without copying it.</li>
 </ul></li>
-<li><strong>Quantized Code Storage (<code>dense_codes.mmapdb</code>, <code>dense_code_ranges.mmapdb</code>)</strong>:
+<li><strong>Quantized and Sketched Code Storage (<code>dense_codes.mmapdb</code>, <code>dense_code_ranges.mmapdb</code>)</strong>:
 <ul>
-<li>The codes of a quantized project, and the ranges of a per-vector quantizer. See <a href="#quantized-dense-indexes">Quantized Dense Indexes</a>.</li>
+<li>The codes of a quantized project or the sketches of a sketched project, and the ranges of a per-vector quantizer. See <a href="#quantized-dense-indexes">Quantized Dense Indexes</a> and <a href="#sketched-dense-indexes">Sketched Dense Indexes</a>.</li>
 </ul></li>
 <li><strong><code>AdjacencyStore</code> (Graph Topology)</strong>:
 <ul>
