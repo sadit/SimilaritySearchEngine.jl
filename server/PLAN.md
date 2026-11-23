@@ -409,7 +409,28 @@ of it exist.
       (`CLI_CHOICES["follower-create:distance"]`, `field_choices`), because `--distance` of
       `follower-create` takes distances between sets. The interactive mode offers `(omit)` for an
       optional argument without a default.
-    - Not done yet: 5c (the clients), 5d (the manual).
+
+    Phase 5c, the clients, done on 2026-11-23 (`server/julia/src/followers.jl`, the follower
+    functions of `server/python/similarity_search/`, and the testset "followers, with the
+    engine's names" of `server/test/api/test_17_julia_client.jl`). What it implements, and what
+    differs from §5.12:
+    - The Julia client has the names of §5.12. `open_follower` asks the server for the status of
+      the follower, so an unknown name raises `UnknownFollower`. It does not check the value of a
+      view: the first search with an unknown value raises `UnknownPartition`.
+    - Its `FollowerStatus` has the fields of the engine's and `error`. A light test of the server
+      checks that the fields stay equal. `close_follower!` does nothing.
+    - `sync!` returns the number of items processed, as in the engine. `rebuild_follower!` and
+      `migrate_partitions!` return a `RemoteFollower`.
+    - The Python client has the functions of §5.12, in the synchronous and the asynchronous
+      client. `follower_search` takes `vector` or `keys`, not both. `migrate_partitions` refuses
+      a `disjoint` that is not a `bool` before it sends the request. The repository has no
+      Python tests; the functions were checked on 2026-11-23 against a server started for the
+      purpose, with httpx 0.28.1.
+    - The calibration route of a partition of a follower now sends `confidence` and `heldout`,
+      as the calibration route of a dataset does, because the `CalibrationLevel` of the Julia
+      client needs them.
+    - `manual/server/julia-client.qmd` has a section on followers.
+    - Not done yet: 5d (the server manual and tutorial).
 
 The stemmer registry of §5.3 and §9's phase 5 is not on this list: it was discarded. Stemming
 was the way this specification proposed to make a query match a word it does not equal. That

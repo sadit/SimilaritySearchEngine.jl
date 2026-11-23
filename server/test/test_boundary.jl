@@ -471,6 +471,12 @@ import SimilaritySearchClient as Client
 end
 
 
+# The client's `FollowerStatus` has the fields of the engine's, in the same order, and `error`,
+# which the server adds.
+@testset "the Julia client's follower status has the engine's fields" begin
+    @test fieldnames(Client.FollowerStatus) == (fieldnames(SSE.FollowerStatus)..., :error)
+end
+
 # ---------------------------------------------------------------------------------------
 # Followers on the wire (PLAN.md §5.12): strings to the engine's spec, source and policy.
 # ---------------------------------------------------------------------------------------

@@ -97,6 +97,48 @@ class AsyncSimilaritySearchClient:
     async def calibrate(self, index, minrecall=None, numqueries=None, ksearch=None, queries=None, partition=None):
         return await self._call(*p.calibrate(index, minrecall, numqueries, ksearch, queries, partition))
 
+    # --- followers (PLAN.md §5.12) ------------------------------------------------------
+
+    async def create_follower(self, index, name, kind, source, disjoint=None, graph_min=None, distance=None, policy=None):
+        return await self._call(*p.create_follower(index, name, kind, source, disjoint, graph_min, distance, policy))
+
+    async def list_followers(self, index):
+        return await self._call(*p.list_followers(index))
+
+    async def get_follower(self, index, name):
+        return await self._call(*p.get_follower(index, name))
+
+    async def delete_follower(self, index, name):
+        return await self._call(*p.delete_follower(index, name))
+
+    async def sync_follower(self, index, name):
+        return await self._call(*p.sync_follower(index, name))
+
+    async def rebuild_follower(self, index, name):
+        return await self._call(*p.rebuild_follower(index, name))
+
+    async def follower_partitions(self, index, name):
+        return await self._call(*p.follower_partitions(index, name))
+
+    async def follower_search(self, index, follower, vector=None, keys=None, k=10, t=None, filter=None, minrecall=None,
+                              page_size=None):
+        return await self._call(*p.follower_search(index, follower, vector, keys, k, t, filter, minrecall, page_size))
+
+    async def follower_ftsearch(self, index, follower, text, k=10, filter=None):
+        return await self._call(*p.follower_ftsearch(index, follower, text, k, filter))
+
+    async def follower_calibrate(self, index, follower, minrecall=None, numqueries=None, ksearch=None):
+        return await self._call(*p.follower_calibrate(index, follower, minrecall, numqueries, ksearch))
+
+    async def posting_list(self, index, key, follower=None, limit=None):
+        return await self._call(*p.posting_list(index, key, follower, limit))
+
+    async def migrate_partitions(self, index, name, disjoint):
+        return await self._call(*p.migrate_partitions(index, name, disjoint))
+
+    async def get_group(self, index):
+        return await self._call(*p.get_group(index))
+
     # --- jobs -------------------------------------------------------------------------
 
     async def submit_job(self, kind, command=None, **params):

@@ -11,6 +11,8 @@ Both ``client.py`` (sync) and ``async_client.py`` (async) call these same functi
 two clients can never drift apart on what a request actually looks like.
 """
 
+from urllib.parse import quote as _quote
+
 try:
     import numpy as _np
 except ImportError:  # pragma: no cover - numpy is an optional convenience only
@@ -128,6 +130,92 @@ def calibrate(index, minrecall=None, numqueries=None, ksearch=None, queries=None
         "partition": partition,
     })
     return "POST", f"/api/v1/datasets/{index}/calibrate", body, None
+
+
+# --- followers (PLAN.md §5.12) ------------------------------------------------------
+
+def _follower_path(index, follower, rest=""):
+    """The path of a route of a follower. ``follower`` is a name, or ``name=value`` for one
+    partition; it is escaped as one path segment."""
+    return f"/api/v1/datasets/{index}/followers/{_quote(follower, safe='')}{rest}"
+
+
+def create_follower(index, name, kind, source, disjoint=None, graph_min=None, distance=None, policy=None):
+    """``kind`` is ``partition`` or ``keyword``; ``source`` is ``keywords``, ``refs``, ``doc_id``
+    or ``meta:<field>``; ``policy`` is ``on_index``, ``on_write``, ``manual`` or
+    ``{"periodic": {"seconds": 60, "items": 1000}}``."""
+    body = _compact({
+        "name": name, "kind": kind, "source": source, "disjoint": disjoint,
+        "graph_min": graph_min, "distance": distance, "policy": policy,
+    })
+    return "POST", f"/api/v1/datasets/{index}/followers", body, None
+
+
+def list_followers(index):
+    return "GET", f"/api/v1/datasets/{index}/followers", None, None
+
+
+def get_follower(index, name):
+    return "GET", _follower_path(index, name), None, None
+
+
+def delete_follower(index, name):
+    return "DELETE", _follower_path(index, name), None, None
+
+
+def sync_follower(index, name):
+    return "POST", _follower_path(index, name, "/sync"), None, None
+
+
+def rebuild_follower(index, name):
+    return "POST", _follower_path(index, name, "/rebuild"), None, None
+
+
+def follower_partitions(index, name):
+    return "GET", _follower_path(index, name, "/partitions"), None, None
+
+
+def follower_search(index, follower, vector=None, keys=None, k=10, t=None, filter=None, minrecall=None,
+                    page_size=None):
+    """A vector in one partition (``follower="name=value"``), or keys in a keyword follower
+    (``follower="name"``) -- one of ``vector`` and ``keys``."""
+    if (vector is None) == (keys is None):
+        raise ValueError("follower_search takes a vector (a partition, name=value) or keys (a keyword follower), not both")
+    body = _compact({
+        "vector": _as_vector(vector), "keys": None if keys is None else list(keys), "k": k, "t": t,
+        "filter": filter, "minrecall": minrecall, "page_size": page_size,
+    })
+    return "POST", _follower_path(index, follower, "/search"), body, None
+
+
+def follower_ftsearch(index, follower, text, k=10, filter=None):
+    body = _compact({"text": text, "k": k, "filter": filter})
+    return "POST", _follower_path(index, follower, "/ftsearch"), body, None
+
+
+def follower_calibrate(index, follower, minrecall=None, numqueries=None, ksearch=None):
+    body = _compact({"minrecall": minrecall, "numqueries": numqueries, "ksearch": ksearch})
+    return "POST", _follower_path(index, follower, "/calibrate"), body, None
+
+
+def posting_list(index, key, follower=None, limit=None):
+    """The ids of the items that hold ``key``: a token of a text dataset, a dimension of a sparse
+    dataset, or with ``follower`` a key of a keyword follower. A whole list of a frequent key in
+    a large dataset can hold most of its items; ``limit`` returns the first ``limit`` ids."""
+    params = _compact({"key": str(key), "limit": limit})
+    path = f"/api/v1/datasets/{index}/postings" if follower is None else _follower_path(index, follower, "/postings")
+    return "GET", path, None, params
+
+
+def migrate_partitions(index, name, disjoint):
+    """``disjoint`` is required: the migration does not choose the kind of partition."""
+    if not isinstance(disjoint, bool):
+        raise ValueError("migrate_partitions needs disjoint=True or disjoint=False")
+    return "POST", f"/api/v1/datasets/{index}/migrate-partitions", {"name": name, "disjoint": disjoint}, None
+
+
+def get_group(index):
+    return "GET", f"/api/v1/datasets/{index}/group", None, None
 
 
 # --- jobs -------------------------------------------------------------------------

@@ -342,13 +342,9 @@ function handle_follower_calibrate(req::HTTP.Request, app, id::String, f::String
         view = lock(() -> SSE.open_follower(handle, _follower_param(f)), app.lock)
         view isa SSE.FollowerView ||
             return json_response(400, Dict("error" => "calibrate on a follower needs a partition: followers/{name}={value}/calibrate"))
-        cal = only(SSE.calibrate!(view; levels=minrecall, numqueries, ksearch))
-        algo = cal.beamsearch
+        baseline, calibration = _calibration_response(only(SSE.calibrate!(view; levels=minrecall, numqueries, ksearch)))
         json_response(200, Dict("status" => "calibrated", "id" => id, "follower" => _follower_param(f),
-            "baseline" => Dict("bsize" => Int(algo.bsize), "delta" => Float64(algo.Δ), "maxvisits" => Int(algo.maxvisits)),
-            "calibration" => Dict("minrecall" => Float64(cal.minrecall), "recall" => cal.recall,
-                                  "recall_lo" => cal.recall_lo, "recall_hi" => cal.recall_hi,
-                                  "numqueries" => cal.numqueries, "distance_evaluations" => cal.distance_evaluations)))
+                                "baseline" => baseline, "calibration" => calibration))
     end
 end
 

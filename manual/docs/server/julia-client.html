@@ -220,8 +220,9 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <li><a href="#errors" id="toc-errors" class="nav-link" data-scroll-target="#errors">4. Errors</a></li>
   <li><a href="#jobs" id="toc-jobs" class="nav-link" data-scroll-target="#jobs">5. Jobs</a></li>
   <li><a href="#pages-of-a-search" id="toc-pages-of-a-search" class="nav-link" data-scroll-target="#pages-of-a-search">6. Pages of a Search</a></li>
-  <li><a href="#what-the-client-does-not-cover-yet" id="toc-what-the-client-does-not-cover-yet" class="nav-link" data-scroll-target="#what-the-client-does-not-cover-yet">7. What the Client Does Not Cover Yet</a></li>
-  <li><a href="#tests" id="toc-tests" class="nav-link" data-scroll-target="#tests">8. Tests</a></li>
+  <li><a href="#followers" id="toc-followers" class="nav-link" data-scroll-target="#followers">7. Followers</a></li>
+  <li><a href="#what-the-client-does-not-cover-yet" id="toc-what-the-client-does-not-cover-yet" class="nav-link" data-scroll-target="#what-the-client-does-not-cover-yet">8. What the Client Does Not Cover Yet</a></li>
+  <li><a href="#tests" id="toc-tests" class="nav-link" data-scroll-target="#tests">9. Tests</a></li>
   </ul>
 </nav>
     </div>
@@ -485,17 +486,90 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="cf">end</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p>The server computes all <code>k</code> results at once. Each page after the first is one request. The iterator can be read once, and the cursor expires 300 seconds after the search. A page requested after that, or a second pass, raises <code>StateConflict</code>. The engine has no counterpart, because it returns every result at once.</p>
 </section>
+<section id="followers" class="level2">
+<h2 class="anchored" data-anchor-id="followers">7. Followers</h2>
+<p>A follower of a dataset reads the items of the dataset and organizes them by keys. A partition follower restricts a search to the items of one key. A keyword follower indexes the keys of each item in an inverted file. The <a href="../architecture.html#leader-and-follower-datasets">architecture page</a> describes both kinds. The client has the functions of the engine for them:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>f <span class="op">=</span> <span class="fu">create_follower</span>(h, <span class="st">"by_repo"</span>; kind<span class="op">=</span><span class="st">"partition"</span>, source<span class="op">=</span><span class="st">"meta:repo"</span>, disjoint<span class="op">=</span><span class="cn">false</span>)</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>kw <span class="op">=</span> <span class="fu">create_follower</span>(t, <span class="st">"kw"</span>; kind<span class="op">=</span><span class="st">"keyword"</span>, source<span class="op">=</span><span class="st">"keywords"</span>, policy<span class="op">=</span><span class="st">"manual"</span>)</span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>v <span class="op">=</span> <span class="fu">open_follower</span>(h, <span class="st">"by_repo=unicach"</span>)          <span class="co"># RemoteFollowerView</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a><span class="fu">search</span>(v, q, <span class="fl">10</span>)                                 <span class="co"># one partition of a dense dataset</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a><span class="fu">ftsearch</span>(<span class="fu">open_follower</span>(t, <span class="st">"by_repo=unicach"</span>), <span class="st">"redes neuronales"</span>, <span class="fl">10</span>)  <span class="co"># a text dataset</span></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a><span class="fu">calibrate!</span>(v; levels<span class="op">=</span><span class="fl">0.9</span>)                        <span class="co"># the graph of the partition</span></span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a><span class="fu">partitions</span>(f)                                    <span class="co"># (name, items, graph) per partition</span></span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a><span class="fu">search</span>(kw, [<span class="st">"Elizabeth"</span>, <span class="st">"Geneva"</span>], <span class="fl">10</span>; t<span class="op">=</span><span class="fl">1</span>)     <span class="co"># items ranked by their keys</span></span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a><span class="fu">posting_list</span>(kw, <span class="st">"Elizabeth"</span>; limit<span class="op">=</span><span class="fl">100</span>)         <span class="co"># Vector{Int32}, in ascending order</span></span>
+<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a><span class="fu">posting_list</span>(t, <span class="st">"monster"</span>)                       <span class="co"># a token of a text dataset</span></span>
+<span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-14"><a href="#cb6-14" aria-hidden="true" tabindex="-1"></a><span class="fu">followers</span>(h)                                     <span class="co"># Vector{FollowerStatus}</span></span>
+<span id="cb6-15"><a href="#cb6-15" aria-hidden="true" tabindex="-1"></a><span class="fu">follower_status</span>(kw).lag                          <span class="co"># items not processed yet</span></span>
+<span id="cb6-16"><a href="#cb6-16" aria-hidden="true" tabindex="-1"></a><span class="fu">sync!</span>(kw)                                        <span class="co"># processes them; returns their number</span></span>
+<span id="cb6-17"><a href="#cb6-17" aria-hidden="true" tabindex="-1"></a><span class="fu">rebuild_follower!</span>(t, <span class="st">"kw"</span>)</span>
+<span id="cb6-18"><a href="#cb6-18" aria-hidden="true" tabindex="-1"></a><span class="fu">delete_follower!</span>(t, <span class="st">"kw"</span>)</span>
+<span id="cb6-19"><a href="#cb6-19" aria-hidden="true" tabindex="-1"></a><span class="fu">migrate_partitions!</span>(h, <span class="st">"repo"</span>; disjoint<span class="op">=</span><span class="cn">true</span>)    <span class="co"># the partitions of partition_by, to a follower</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><code>create_follower</code>, <code>rebuild_follower!</code>, <code>delete_follower!</code> and <code>migrate_partitions!</code> need the <code>admin</code> permission. <code>sync!</code> and <code>calibrate!</code> need the <code>write</code> permission.</p>
+<p><code>posting_list</code> of a frequent key in a large dataset can return most of the items of the dataset in one response. Pass <code>limit</code> when only some of them are needed.</p>
+<p>The differences with the engine are these:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: left;">function</th>
+<th style="text-align: left;">in the engine</th>
+<th style="text-align: left;">in the client</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;"><code>create_follower</code></td>
+<td style="text-align: left;">a spec, such as <code>PartitionFollower(MetaValue("repo"); disjoint=false)</code></td>
+<td style="text-align: left;">the names of the HTTP API: <code>kind="partition", source="meta:repo", disjoint=false</code></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>open_follower(h, "name=value")</code></td>
+<td style="text-align: left;">raises <code>UnknownPartition</code> for a value that is not a partition</td>
+<td style="text-align: left;">does not check the value; the first search with it raises <code>UnknownPartition</code></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>search</code> of a view</td>
+<td style="text-align: left;">a filter function, <code>minrecall</code>, <code>candidates</code>, <code>stats</code></td>
+<td style="text-align: left;">a filter object and <code>minrecall</code></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>FollowerStatus</code></td>
+<td style="text-align: left;">14 fields</td>
+<td style="text-align: left;">the same 14 fields, and <code>error</code>: the last error of the server when it opened or processed the follower</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>close_follower!</code></td>
+<td style="text-align: left;">closes the database of the follower</td>
+<td style="text-align: left;">does nothing</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>attach_follower!</code></td>
+<td style="text-align: left;">exists</td>
+<td style="text-align: left;">not available; the commands <code>rebuild</code> and <code>load</code> of <code>similarity-search</code> use it</td>
+</tr>
+</tbody>
+</table>
+<p>The client does not declare the spec types of the engine, <code>PartitionFollower</code> and <code>KeywordFollower</code>. A follower is created with the names of the HTTP API, as <code>create_project</code> creates a dataset.</p>
+</section>
 <section id="what-the-client-does-not-cover-yet" class="level2">
-<h2 class="anchored" data-anchor-id="what-the-client-does-not-cover-yet">7. What the Client Does Not Cover Yet</h2>
+<h2 class="anchored" data-anchor-id="what-the-client-does-not-cover-yet">8. What the Client Does Not Cover Yet</h2>
 <ul>
 <li>The administration routes: tokens, unloading and reloading a dataset, and the operation log. The Python client in <code>server/python/</code> covers them.</li>
 <li>The jobs <code>searchbatch</code>, <code>closestpair</code> and <code>build</code> have no function of their own. The server accepts them with an explicit command line, which <code>submit_job(conn, kind; command=[...])</code> sends.</li>
 </ul>
 </section>
 <section id="tests" class="level2">
-<h2 class="anchored" data-anchor-id="tests">8. Tests</h2>
+<h2 class="anchored" data-anchor-id="tests">9. Tests</h2>
 <p>The package’s own tests need no server: they check the error mapping, the shape of the items sent, and the options checked before a request. The tests against a server are part of the full level of the server’s suite (<code>server/test/api/test_17_julia_client.jl</code>), which starts one.</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">--project</span><span class="op">=</span>server/julia <span class="at">-e</span> <span class="st">'using Pkg; Pkg.test()'</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">julia</span> <span class="at">--project</span><span class="op">=</span>server/julia <span class="at">-e</span> <span class="st">'using Pkg; Pkg.test()'</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 
 
 </section>

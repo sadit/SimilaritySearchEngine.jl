@@ -106,6 +106,48 @@ class SimilaritySearchClient:
     def calibrate(self, index, minrecall=None, numqueries=None, ksearch=None, queries=None, partition=None):
         return self._call(*p.calibrate(index, minrecall, numqueries, ksearch, queries, partition))
 
+    # --- followers (PLAN.md §5.12) ------------------------------------------------------
+
+    def create_follower(self, index, name, kind, source, disjoint=None, graph_min=None, distance=None, policy=None):
+        return self._call(*p.create_follower(index, name, kind, source, disjoint, graph_min, distance, policy))
+
+    def list_followers(self, index):
+        return self._call(*p.list_followers(index))
+
+    def get_follower(self, index, name):
+        return self._call(*p.get_follower(index, name))
+
+    def delete_follower(self, index, name):
+        return self._call(*p.delete_follower(index, name))
+
+    def sync_follower(self, index, name):
+        return self._call(*p.sync_follower(index, name))
+
+    def rebuild_follower(self, index, name):
+        return self._call(*p.rebuild_follower(index, name))
+
+    def follower_partitions(self, index, name):
+        return self._call(*p.follower_partitions(index, name))
+
+    def follower_search(self, index, follower, vector=None, keys=None, k=10, t=None, filter=None, minrecall=None,
+                        page_size=None):
+        return self._call(*p.follower_search(index, follower, vector, keys, k, t, filter, minrecall, page_size))
+
+    def follower_ftsearch(self, index, follower, text, k=10, filter=None):
+        return self._call(*p.follower_ftsearch(index, follower, text, k, filter))
+
+    def follower_calibrate(self, index, follower, minrecall=None, numqueries=None, ksearch=None):
+        return self._call(*p.follower_calibrate(index, follower, minrecall, numqueries, ksearch))
+
+    def posting_list(self, index, key, follower=None, limit=None):
+        return self._call(*p.posting_list(index, key, follower, limit))
+
+    def migrate_partitions(self, index, name, disjoint):
+        return self._call(*p.migrate_partitions(index, name, disjoint))
+
+    def get_group(self, index):
+        return self._call(*p.get_group(index))
+
     # --- jobs -------------------------------------------------------------------------
 
     def submit_job(self, kind, command=None, **params):

@@ -34,6 +34,10 @@ makedocs(;
         # docstrings of the project specs (issue #2) made it 500.5 KiB on 2026-11-21.
         size_threshold=700_000,
         size_threshold_warn=300_000,
+        # The search index holds every docstring of the three packages. The follower functions
+        # of the Julia client (issue #5) made it 503.4 KiB on 2026-11-23, over the default
+        # warning size of 500 KiB.
+        search_size_threshold_warn=600_000,
     ),
     pages=[
         "Home" => "index.md",

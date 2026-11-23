@@ -139,12 +139,55 @@ end
 
 The server computes all `k` results at once. Each page after the first is one request. The iterator can be read once, and the cursor expires 300 seconds after the search. A page requested after that, or a second pass, raises `StateConflict`. The engine has no counterpart, because it returns every result at once.
 
-## 7. What the Client Does Not Cover Yet
+## 7. Followers
+
+A follower of a dataset reads the items of the dataset and organizes them by keys. A partition follower restricts a search to the items of one key. A keyword follower indexes the keys of each item in an inverted file. The [architecture page](../architecture.qmd#leader-and-follower-datasets) describes both kinds. The client has the functions of the engine for them:
+
+```julia
+f = create_follower(h, "by_repo"; kind="partition", source="meta:repo", disjoint=false)
+kw = create_follower(t, "kw"; kind="keyword", source="keywords", policy="manual")
+
+v = open_follower(h, "by_repo=unicach")          # RemoteFollowerView
+search(v, q, 10)                                 # one partition of a dense dataset
+ftsearch(open_follower(t, "by_repo=unicach"), "redes neuronales", 10)  # a text dataset
+calibrate!(v; levels=0.9)                        # the graph of the partition
+partitions(f)                                    # (name, items, graph) per partition
+
+search(kw, ["Elizabeth", "Geneva"], 10; t=1)     # items ranked by their keys
+posting_list(kw, "Elizabeth"; limit=100)         # Vector{Int32}, in ascending order
+posting_list(t, "monster")                       # a token of a text dataset
+
+followers(h)                                     # Vector{FollowerStatus}
+follower_status(kw).lag                          # items not processed yet
+sync!(kw)                                        # processes them; returns their number
+rebuild_follower!(t, "kw")
+delete_follower!(t, "kw")
+migrate_partitions!(h, "repo"; disjoint=true)    # the partitions of partition_by, to a follower
+```
+
+`create_follower`, `rebuild_follower!`, `delete_follower!` and `migrate_partitions!` need the `admin` permission. `sync!` and `calibrate!` need the `write` permission.
+
+`posting_list` of a frequent key in a large dataset can return most of the items of the dataset in one response. Pass `limit` when only some of them are needed.
+
+The differences with the engine are these:
+
+| function | in the engine | in the client |
+| :--- | :--- | :--- |
+| `create_follower` | a spec, such as `PartitionFollower(MetaValue("repo"); disjoint=false)` | the names of the HTTP API: `kind="partition", source="meta:repo", disjoint=false` |
+| `open_follower(h, "name=value")` | raises `UnknownPartition` for a value that is not a partition | does not check the value; the first search with it raises `UnknownPartition` |
+| `search` of a view | a filter function, `minrecall`, `candidates`, `stats` | a filter object and `minrecall` |
+| `FollowerStatus` | 14 fields | the same 14 fields, and `error`: the last error of the server when it opened or processed the follower |
+| `close_follower!` | closes the database of the follower | does nothing |
+| `attach_follower!` | exists | not available; the commands `rebuild` and `load` of `similarity-search` use it |
+
+The client does not declare the spec types of the engine, `PartitionFollower` and `KeywordFollower`. A follower is created with the names of the HTTP API, as `create_project` creates a dataset.
+
+## 8. What the Client Does Not Cover Yet
 
 - The administration routes: tokens, unloading and reloading a dataset, and the operation log. The Python client in `server/python/` covers them.
 - The jobs `searchbatch`, `closestpair` and `build` have no function of their own. The server accepts them with an explicit command line, which `submit_job(conn, kind; command=[...])` sends.
 
-## 8. Tests
+## 9. Tests
 
 The package's own tests need no server: they check the error mapping, the shape of the items sent, and the options checked before a request. The tests against a server are part of the full level of the server's suite (`server/test/api/test_17_julia_client.jl`), which starts one.
 

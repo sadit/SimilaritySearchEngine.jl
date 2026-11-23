@@ -75,6 +75,20 @@ body(x) = Vector{UInt8}(JSON3.write(x))
         @test FFTResult === CenterSelectionResult
     end
 
+    @testset "a follower is addressed under its leader" begin
+        h = RemoteProject(Connection("http://127.0.0.1:1"), "repos")
+        f = RemoteFollower(h, "by_repo")
+        follower_path = SimilaritySearchClient.follower_path
+        @test follower_path(f) == "/api/v1/datasets/repos/followers/by_repo"
+        # `name=value` is one path segment, escaped.
+        @test follower_path(RemoteFollowerView(f, "unicach méx"), "/search") ==
+              "/api/v1/datasets/repos/followers/by_repo%3Dunicach%20m%C3%A9x/search"
+        # A canonical name of another leader fails before a request is sent.
+        @test_throws ArgumentError open_follower(h, "other/by_repo")
+        @test close_follower!(f) === nothing
+        @test sprint(show, RemoteFollowerView(f, "x")) == "RemoteFollowerView(\"http://127.0.0.1:1\", \"repos/by_repo=x\")"
+    end
+
     @testset "a connection holds the url and the token" begin
         c = Connection("http://host:8080/"; token="abc")
         @test c.url == "http://host:8080"

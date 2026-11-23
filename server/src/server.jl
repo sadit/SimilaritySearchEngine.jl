@@ -1315,6 +1315,18 @@ function _update_descriptor!(app::AppState, id::String, updates::Dict)
     write(dpath, JSON3.write(current))
 end
 
+# The `baseline` and the `calibration` of a calibration response, for a dataset, a partition and
+# a partition of a follower.
+function _calibration_response(cal)
+    algo = cal.beamsearch
+    baseline = Dict("bsize" => Int(algo.bsize), "delta" => Float64(algo.Δ), "maxvisits" => Int(algo.maxvisits))
+    calibration = Dict("minrecall" => Float64(cal.minrecall), "recall" => cal.recall,
+                       "recall_lo" => cal.recall_lo, "recall_hi" => cal.recall_hi,
+                       "confidence" => cal.confidence, "numqueries" => cal.numqueries,
+                       "distance_evaluations" => cal.distance_evaluations, "heldout" => cal.heldout)
+    return baseline, calibration
+end
+
 """
     handle_calibrate(req, app, index) -> HTTP.Response
 
@@ -1372,12 +1384,7 @@ function handle_calibrate(req::HTTP.Request, app::AppState, index::String)
         e isa SSE.EngineError || rethrow()
         return engine_error_response(e)
     end
-    algo = cal.beamsearch
-    baseline = Dict("bsize" => Int(algo.bsize), "delta" => Float64(algo.Δ), "maxvisits" => Int(algo.maxvisits))
-    calibration = Dict("minrecall" => Float64(cal.minrecall), "recall" => cal.recall,
-                       "recall_lo" => cal.recall_lo, "recall_hi" => cal.recall_hi,
-                       "confidence" => cal.confidence, "numqueries" => cal.numqueries,
-                       "distance_evaluations" => cal.distance_evaluations, "heldout" => cal.heldout)
+    baseline, calibration = _calibration_response(cal)
     if partition !== nothing
         return json_response(200, Dict("status" => "calibrated", "id" => index, "partition" => partition,
                                        "baseline" => baseline, "calibration" => calibration))

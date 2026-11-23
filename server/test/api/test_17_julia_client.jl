@@ -103,6 +103,72 @@ import SimilaritySearchClient as C
         @test issorted([r.score for r in fused]; rev=true)
     end
 
+    @testset "followers, with the engine's names" begin
+        text_item(i) = C.TextItem(rows[i]["text"]; doc_id=rows[i]["doc_id"], keywords=rows[i]["keywords"],
+                                  meta=Dict("repo" => repo_of(i)))
+        t = C.create_project(conn, "jc_fl"; index_type="bm25_invfile")
+        C.append_items!(t, [text_item(i) for i in 1:120])
+        f = C.create_follower(t, "repo"; kind="partition", source="meta:repo")
+        kw = C.create_follower(t, "kw"; kind=:keyword, source="keywords", policy=:manual)
+        @test f isa C.RemoteFollower && kw isa C.RemoteFollower
+        st = C.follower_status(f)
+        @test st isa C.FollowerStatus && st.name == "jc_fl/repo" && st.synchronized && st.error === nothing
+        @test st.kind == "PartitionFollower" && st.stats.partitions == 2
+        @test sort([s.name for s in C.followers(t)]) == ["jc_fl/kw", "jc_fl/repo"]
+        @test Dict(p.name => p.items for p in C.partitions(f)) == Dict("cuatro" => 30, "otro" => 90)
+
+        # A view searches one partition: the global search restricted to it.
+        v = C.open_follower(t, "jc_fl/repo=cuatro")
+        @test v isa C.RemoteFollowerView && C.follower_status(v).name == "jc_fl/repo"
+        q = rows[8]["text"]
+        want = [r._id for r in C.ftsearch(t, q, 120) if r._id % 4 == 0]
+        @test [r._id for r in C.ftsearch(v, q, 5)] == want[1:min(5, end)]
+        @test_throws C.UnknownPartition C.ftsearch(C.open_follower(t, "repo=cinco"), q, 3)
+        @test_throws C.UnknownFollower C.open_follower(t, "rep")
+        @test_throws ArgumentError C.open_follower(t, "otro/repo")
+
+        # A keyword follower: a search by keys and its posting lists.
+        key = "Elizabeth"
+        with_key = [i for i in 1:120 if key in rows[i]["keywords"]]
+        @test C.posting_list(kw, key) == with_key
+        @test C.posting_list(kw, key; limit=2) == with_key[1:2]
+        @test sort([r._id for r in C.search(kw, [key], 50)]) == with_key
+        @test_throws C.UnsupportedOperation C.search(f, [key], 5)
+        tokens = C.posting_list(t, "the"; limit=3)
+        @test tokens isa Vector{Int32} && length(tokens) <= 3 && issorted(tokens)
+
+        # `append_items!` processes the on_index follower; the manual one lags until `sync!`.
+        C.append_items!(t, [text_item(i) for i in 121:140])
+        @test C.follower_status(f).position == 140
+        @test C.follower_status(kw).lag == 20
+        @test C.sync!(kw) == 20 && C.follower_status(kw).synchronized
+        @test C.rebuild_follower!(t, "kw") isa C.RemoteFollower
+        @test C.follower_status(kw).position == 140
+
+        # A dataset with followers is not deleted.
+        @test_throws C.HasFollowers C.delete_project!(t)
+        @test C.delete_follower!(t, "kw") === nothing
+        @test C.delete_follower!(t, "repo") === nothing
+        @test isempty(C.followers(t))
+        @test C.delete_project!(t) === nothing
+
+        # The partitions of a dense dataset, moved to a follower; a partition with a graph is
+        # searched and calibrated through its view.
+        d = C.create_project(conn, "jc_fl_dense"; index_type="searchgraph", partition_by="repo", partition_graph_min=100)
+        C.append_items!(d, [C.DenseItem(vec(i); doc_id=rows[i]["doc_id"], meta=Dict("repo" => repo_of(i)))
+                            for i in eachindex(rows)])
+        g = C.migrate_partitions!(d, "repo"; disjoint=true)
+        @test Dict(p.name => p.graph for p in C.partitions(g)) == Dict("cuatro" => false, "otro" => true)
+        @test C.partition_field(d) === nothing
+        otro = C.open_follower(d, "repo=otro")
+        res = C.search(otro, vec(13), 5)
+        @test length(res) == 5 && res[1]._id == 13 && all(r -> r._id % 4 != 0, res)
+        cal = C.calibrate!(otro; levels=0.9, numqueries=16)
+        @test length(cal) == 1 && cal[1] isa C.CalibrationLevel && cal[1].minrecall ≈ 0.9
+        @test C.delete_follower!(d, "repo") === nothing
+        @test C.delete_project!(d) === nothing
+    end
+
     @testset "pages of a search, through a cursor" begin
         h = C.open_project(conn, "jc_dense")
         q = vec(21)

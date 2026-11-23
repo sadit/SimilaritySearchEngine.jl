@@ -170,14 +170,15 @@ function calibrate!(h::RemoteProject; levels::Union{Nothing,Real}=nothing, numqu
     end
     queries === nothing || (body["queries"] = [convert(Vector{Float32}, q) for q in queries])
     transition === nothing || (body["transition"] = collect(transition))
-    resp = request(h.conn, "POST", dataset_path(h.id, "/calibrate"); body)
+    return [_calibration_level(request(h.conn, "POST", dataset_path(h.id, "/calibrate"); body))]
+end
+
+# The `CalibrationLevel` of a calibration response, of a dataset or of a partition of a follower.
+function _calibration_level(resp)
     b, c = resp[:baseline], resp[:calibration]
-    level = CalibrationLevel(Float32(c[:minrecall]),
-                             (bsize=Int(b[:bsize]), delta=Float64(b[:delta]), maxvisits=Int(b[:maxvisits])),
-                             Float64(c[:recall]), Float64(c[:recall_lo]), Float64(c[:recall_hi]),
-                             Float64(c[:confidence]), Int(c[:numqueries]), Float64(c[:distance_evaluations]),
-                             Bool(c[:heldout]))
-    return [level]
+    CalibrationLevel(Float32(c[:minrecall]), (bsize=Int(b[:bsize]), delta=Float64(b[:delta]), maxvisits=Int(b[:maxvisits])),
+                     Float64(c[:recall]), Float64(c[:recall_lo]), Float64(c[:recall_hi]), Float64(c[:confidence]),
+                     Int(c[:numqueries]), Float64(c[:distance_evaluations]), Bool(c[:heldout]))
 end
 
 """
