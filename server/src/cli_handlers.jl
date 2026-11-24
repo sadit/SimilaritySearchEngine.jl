@@ -1211,6 +1211,25 @@ function needs_plugins(cmd_name::AbstractString, cmd_args::AbstractDict)
 end
 
 """
+    load_cli_plugins(config_path) -> Bool
+
+Loads the plugins of the `[plugins]` section of `config_path` for a command of
+`similarity-search`. Returns `false`, after it prints the error, when a plugin cannot be loaded
+or the file is not valid TOML.
+"""
+function load_cli_plugins(config_path::AbstractString)
+    try
+        Server.load_plugins!(TOML.parsefile(config_path); base_dir=dirname(abspath(config_path)))
+    catch e
+        e isa Union{Server.PluginLoadError,TOML.ParserError} || rethrow()
+        println("Error: ", sprint(showerror, e))
+        println("Correct or remove the plugin in ", config_path, ", or run the command with another --config.")
+        return false
+    end
+    return true
+end
+
+"""
     run_cli_command(config_path, cmd_name, cmd_args) -> Int
 
 Runs one command of `similarity-search`. A command that opens a follower ([`needs_plugins`](@ref))
@@ -1219,22 +1238,51 @@ does not exist is not an error: a follower that needs a plugin then raises `Plug
 and the message names the file. A plugin that cannot be loaded exits with code 1.
 
 The command runs with `Base.invokelatest`, because the code of a plugin is defined after this
-function was compiled.
+function was compiled. [`load_cli_plugins`](@ref) also runs with `Base.invokelatest`, which is a
+dynamic call: Julia compiles the TOML parser and the plugin loader only for a command that
+loads plugins. Measured on 2026-11-24, the two take 2.0 s to compile.
 """
 function run_cli_command(config_path::AbstractString, cmd_name::String, cmd_args::AbstractDict)
     CLI_CONFIG[] = String(config_path)
     if needs_plugins(cmd_name, cmd_args) && isfile(config_path)
-        try
-            Server.load_plugins!(TOML.parsefile(config_path); base_dir=dirname(abspath(config_path)))
-        catch e
-            e isa Union{Server.PluginLoadError,TOML.ParserError} || rethrow()
-            println("Error: ", sprint(showerror, e))
-            println("Correct or remove the plugin in ", config_path, ", or run the command with another --config.")
-            return 1
-        end
+        Base.invokelatest(load_cli_plugins, config_path) || return 1
     end
     return Base.invokelatest(dispatch_command, cmd_name, cmd_args)
 end
+
+"""
+    CLI_COMMANDS::Dict{String,Function}
+
+The function that runs each data-operation subcommand of `similarity-search`, by command name.
+[`dispatch_command`](@ref) finds the function in this table.
+
+The value type is `Function`, an abstract type, so the call to the function is a dynamic call.
+Julia then compiles only the function of the command that runs. With a chain of `if` branches,
+Julia compiles the functions of all 19 commands the first time the dispatcher runs. Measured on
+2026-11-24, a `build searchgraph` in a new process took 30.3 s with the chain of branches, and
+12.1 s of it was the compilation of `dispatch_command`.
+"""
+const CLI_COMMANDS = Dict{String,Function}(
+    "build" => execute_build,
+    "searchbatch" => execute_searchbatch,
+    "allknn" => execute_allknn,
+    "fft" => execute_fft,
+    "neardup" => execute_neardup,
+    "hsp" => execute_hsp,
+    "closestpair" => execute_closestpair,
+    "describe" => execute_describe,
+    "rebuild" => execute_rebuild,
+    "dump" => execute_dump,
+    "load" => execute_load,
+    "add-token" => execute_add_token,
+    "follower-create" => execute_follower_create,
+    "follower-list" => execute_follower_list,
+    "follower-sync" => execute_follower_sync,
+    "follower-rebuild" => execute_follower_rebuild,
+    "follower-delete" => execute_follower_delete,
+    "migrate-partitions" => execute_migrate_partitions,
+    "postings" => execute_postings,
+)
 
 """
     dispatch_command(cmd_name::String, cmd_args::AbstractDict) -> Int
@@ -1244,26 +1292,10 @@ already-assembled `cmd_args` (the same `Dict{String,Any}` shape `parse_commandli
 produces for that subcommand). Shared by `main`'s direct non-interactive dispatch and
 `run_interactive`'s confirm-then-run step (`interactive.jl`), so there is exactly one
 command-name → `execute_*` mapping regardless of how the arguments were collected.
+The mapping is [`CLI_COMMANDS`](@ref).
 """
 function dispatch_command(cmd_name::String, cmd_args::AbstractDict)
-    cmd_name == "build" && return execute_build(cmd_args)
-    cmd_name == "searchbatch" && return execute_searchbatch(cmd_args)
-    cmd_name == "allknn" && return execute_allknn(cmd_args)
-    cmd_name == "fft" && return execute_fft(cmd_args)
-    cmd_name == "neardup" && return execute_neardup(cmd_args)
-    cmd_name == "hsp" && return execute_hsp(cmd_args)
-    cmd_name == "closestpair" && return execute_closestpair(cmd_args)
-    cmd_name == "describe" && return execute_describe(cmd_args)
-    cmd_name == "rebuild" && return execute_rebuild(cmd_args)
-    cmd_name == "dump" && return execute_dump(cmd_args)
-    cmd_name == "load" && return execute_load(cmd_args)
-    cmd_name == "add-token" && return execute_add_token(cmd_args)
-    cmd_name == "follower-create" && return execute_follower_create(cmd_args)
-    cmd_name == "follower-list" && return execute_follower_list(cmd_args)
-    cmd_name == "follower-sync" && return execute_follower_sync(cmd_args)
-    cmd_name == "follower-rebuild" && return execute_follower_rebuild(cmd_args)
-    cmd_name == "follower-delete" && return execute_follower_delete(cmd_args)
-    cmd_name == "migrate-partitions" && return execute_migrate_partitions(cmd_args)
-    cmd_name == "postings" && return execute_postings(cmd_args)
-    error("dispatch_command: unknown command '$cmd_name'")
+    handler = get(CLI_COMMANDS, cmd_name, nothing)
+    handler === nothing && error("dispatch_command: unknown command '$cmd_name'")
+    return handler(cmd_args)
 end

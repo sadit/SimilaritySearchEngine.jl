@@ -46,7 +46,14 @@ function ensure_test_server()
             ReentrantLock()
         )
 
-        errormonitor(@async Executors.run_dispatcher!(job_mgr, executor))
+        # The dispatcher reads `jobs/` of `workdir` every 0.5 s. At the end of the process, Julia
+        # deletes `workdir`, and the next read raises an error. That error is not the failure of a
+        # test: the full run of 2026-11-24 printed it after all its tests passed.
+        errormonitor(@async try
+            Executors.run_dispatcher!(job_mgr, executor)
+        catch e
+            isdir(workdir) && rethrow()
+        end)
         # Periodic followers are checked often, so that their test does not wait for long.
         app.followers.check_seconds = 0.5
         start_follower_task!(app)
@@ -98,6 +105,31 @@ _run_ctl(args::Vector{String}) = _capture_main(SimilaritySearchServer.main_ctl, 
 """
 Runs `SimilaritySearchServer.main(args)`, the `similarity-search` command line, in this process.
 A subprocess starts Julia again for each command, which takes longer than the command for the
-small datasets of the tests. `cli/01` to `cli/06` run the real binary.
+small datasets of the tests. Measured on 2026-11-24, a `build` of 724 vectors took 18.9 s in a
+subprocess, and most of that time was compilation. Three tests run the real binary: a `build`
+in `cli/01`, and a `searchbatch` and an exit code in `cli/02`. `cli/05` runs the real binary for
+the errors of ArgParse, because ArgParse calls `exit()` for them.
 """
 _run_cli(args::Vector{String}) = _capture_main(SimilaritySearchServer.main, args)
+
+"""
+Runs a `similarity-search` command in this process with [`_run_cli`](@ref), and returns `true`
+when its exit code is 0. Each argument is converted to a `String`.
+"""
+_cli_ok(args...) = first(_run_cli(String[string(a) for a in args])) == 0
+
+"""
+Runs a `similarity-search` command in this process with [`_run_cli`](@ref), and returns `true`
+when the command fails. A command fails when its exit code is not 0, or when it raises an
+exception. The real binary ends with exit code 1 on an exception that the command does not
+convert to an exit code.
+"""
+function _cli_fails(args...)
+    code = try
+        first(_run_cli(String[string(a) for a in args]))
+    catch e
+        e isa InterruptException && rethrow()
+        return true
+    end
+    return code != 0
+end

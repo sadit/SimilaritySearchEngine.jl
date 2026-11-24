@@ -277,15 +277,21 @@ Where to read more: `manual/server/manual.qmd` and the server tutorial
 | engine, full | 1,166 | 8 min 26 s | 2026-11-23, before phase 9c |
 | server, light | 321 | 29 s | 2026-11-23 |
 | server, full | 1,385 | 38 min 11 s | 2026-11-23 |
+| server, full | 1,450 | 12 min 41 s | 2026-11-24, with the commands of `cli/` in the test process |
 | Julia client, without a server | 63 | | 2026-11-23 |
 | server, light | 351 | | 2026-11-24, after §5.17 |
 | Node.js client, without a server | 72 tests | | 2026-11-24, Node.js 22.23.5 and 24.22.3 |
 | server, `api/21` (Node.js client against a server) | 7, over 12 tests of Node.js | 3 min 40 s | 2026-11-24 |
 
-The times were measured with 8 threads. `Pkg.test(test_args=["jobs", "api/17"])` runs only the
-files with those names or tags (`TEST_FILES` in each `runtests.jl`). The full suite of the
-server runs before a release, and before a commit that changes the job model, the dispatcher or
-the shared test server.
+The times were measured with 8 threads. The test files of `cli/` run the commands of
+`similarity-search` in the test process since 2026-11-24. Before, each command started a new
+Julia process, and `cli/01` to `cli/06` took 21 min 54 s of the 38 min. On 2026-11-24 they took
+2 min 0 s. Three tests still run the real binary, in `cli/01` and `cli/02`. `cli/05` runs it for
+the errors of ArgParse, which call `exit()`.
+
+`Pkg.test(test_args=["jobs", "api/17"])` runs only the files with those names or tags
+(`TEST_FILES` in each `runtests.jl`). The full suite of the server runs before a release, and
+before a commit that changes the job model, the dispatcher or the shared test server.
 
 ### Documentation
 

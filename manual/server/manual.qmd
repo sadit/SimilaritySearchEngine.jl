@@ -1108,10 +1108,10 @@ The suite has two levels. A run can also select some of its files.
   items. It also verifies that the Julia client has every error type of the engine. No server
   is started and no subprocess is created. This level detects a change in the engine on the
   day it is made.
-- **full** (1,385 assertions, approximately 38 minutes, measured on 2026-11-23): the end-to-end
-  suites for the API, the jobs, the command lines and the Julia client. They start servers and
-  execute subprocesses. Near the end, the run produces no output for about ten minutes, while
-  the command-line suite waits for jobs to expire. The run has not stopped.
+- **full** (1,450 assertions, approximately 13 minutes with 8 threads, measured on 2026-11-24):
+  the end-to-end suites for the API, the jobs, the command lines and the clients. They start a
+  server and execute subprocesses. The tests of the command lines run most commands in the test
+  process.
 
 ```bash
 julia --project=server -e 'using Pkg; Pkg.develop(path="."); Pkg.test()'
@@ -1120,7 +1120,7 @@ julia --project=server -e 'using Pkg; Pkg.test(test_args=["full"])'
 
 Each test file has a name and a list of tags. The table `TEST_FILES` in
 `server/test/runtests.jl` lists them. The names are `config`, `boundary`, `dispatcher`, `e2e`, `api/01` to
-`api/20` and `cli/01` to `cli/08`. Examples of tags are `jobs`, `responses`, `client`,
+`api/21` and `cli/01` to `cli/08`. Examples of tags are `jobs`, `responses`, `client`,
 `partitions`, `followers`, `plugins`, `storage`, `auth` and `cli`. A run that receives names or tags includes only the files that
 match one of them. The word `light` adds the files of the light level.
 

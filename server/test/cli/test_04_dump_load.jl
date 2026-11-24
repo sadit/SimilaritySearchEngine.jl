@@ -6,17 +6,15 @@ using SimilaritySearchEngine
     workdir = mktempdir()
     data_path = joinpath(@__DIR__, "..", "..", "..", "test", "data", "frankenstein.jsonl")
 
-    cli_script = joinpath(@__DIR__, "..", "..", "src", "apps", "similarity-search.jl")
-    proj = joinpath(@__DIR__, "..", "..")
+    # Every command runs in this process (`_cli_ok`, `_cli_fails`, `_run_cli`).
 
     # --- Dense (searchgraph) round-trip ------------------------------------------
 
-    cmd_build = `julia --project=$proj $cli_script build --dataset dump_dense --input $data_path --index-kind searchgraph --distance L2 --workdir $workdir --max-k 250`
-    @test success(cmd_build)
+    @test _cli_ok("build", "--dataset", "dump_dense", "--input", data_path, "--index-kind", "searchgraph", "--distance", "L2",
+                  "--workdir", workdir, "--max-k", 250)
 
     bundle_dense = joinpath(workdir, "bundle_dense")
-    cmd_dump = `julia --project=$proj $cli_script dump --dataset dump_dense --workdir $workdir --output $bundle_dense`
-    @test success(cmd_dump)
+    @test _cli_ok("dump", "--dataset", "dump_dense", "--workdir", workdir, "--output", bundle_dense)
     @test isfile(joinpath(bundle_dense, "dataset.jsonl"))
     @test isdir(joinpath(bundle_dense, "project"))
     @test isfile(joinpath(bundle_dense, "manifest.json"))
@@ -27,15 +25,14 @@ using SimilaritySearchEngine
     # `max_k` (CHANGELOG.md §5.16) goes from `build` to the bundle, and from the bundle to the server.
     @test manifest.max_k == 250
 
-    cmd_load = `julia --project=$proj $cli_script load --bundle $bundle_dense --dataset dump_dense_restored --workdir $workdir`
-    @test success(cmd_load)
+    @test _cli_ok("load", "--bundle", bundle_dense, "--dataset", "dump_dense_restored", "--workdir", workdir)
     @test isdir(joinpath(workdir, "datasets", "dump_dense_restored"))
     @test JSON.parse(read(joinpath(workdir, "datasets", "dump_dense_restored", "descriptor.json"))).max_k == 250
 
     desc_orig = tempname()
     desc_restored = tempname()
-    @test success(`julia --project=$proj $cli_script describe --dataset dump_dense --workdir $workdir --output $desc_orig`)
-    @test success(`julia --project=$proj $cli_script describe --dataset dump_dense_restored --workdir $workdir --output $desc_restored`)
+    @test _cli_ok("describe", "--dataset", "dump_dense", "--workdir", workdir, "--output", desc_orig)
+    @test _cli_ok("describe", "--dataset", "dump_dense_restored", "--workdir", workdir, "--output", desc_restored)
     d1 = JSON.parse(read(desc_orig, String))
     d2 = JSON.parse(read(desc_restored, String))
     @test d1.doc_count == d2.doc_count == 724
@@ -105,23 +102,23 @@ using SimilaritySearchEngine
     @test isdir(joinpath(workdir, "datasets", "dump_empty_restored"))
 
     out_search = tempname()
-    @test success(`julia --project=$proj $cli_script searchbatch --dataset dump_dense_restored --queries $data_path --output $out_search --k 5 --workdir $workdir`)
+    @test _cli_ok("searchbatch", "--dataset", "dump_dense_restored", "--queries", data_path, "--output", out_search, "--k", 5,
+                  "--workdir", workdir)
     lines = readlines(out_search)
     @test length(lines) > 0
     @test length(JSON.parse(lines[1]).ids) > 0
 
     # --- Text (bm25_invfile) round-trip ------------------------------------------
 
-    cmd_build_lex = `julia --project=$proj $cli_script build --dataset dump_lex --input $data_path --index-kind bm25_invfile --workdir $workdir`
-    @test success(cmd_build_lex)
+    @test _cli_ok("build", "--dataset", "dump_lex", "--input", data_path, "--index-kind", "bm25_invfile", "--workdir", workdir)
 
     bundle_lex = joinpath(workdir, "bundle_lex")
-    @test success(`julia --project=$proj $cli_script dump --dataset dump_lex --workdir $workdir --output $bundle_lex`)
+    @test _cli_ok("dump", "--dataset", "dump_lex", "--workdir", workdir, "--output", bundle_lex)
     @test JSON.parse(read(joinpath(bundle_lex, "manifest.json"), String)).max_k == 100
-    @test success(`julia --project=$proj $cli_script load --bundle $bundle_lex --dataset dump_lex_restored --workdir $workdir`)
+    @test _cli_ok("load", "--bundle", bundle_lex, "--dataset", "dump_lex_restored", "--workdir", workdir)
 
     desc_lex_restored = tempname()
-    @test success(`julia --project=$proj $cli_script describe --dataset dump_lex_restored --workdir $workdir --output $desc_lex_restored`)
+    @test _cli_ok("describe", "--dataset", "dump_lex_restored", "--workdir", workdir, "--output", desc_lex_restored)
     dl = JSON.parse(read(desc_lex_restored, String))
     @test dl.kind == "bm25_invfile"
     @test dl.doc_count == 724
@@ -131,18 +128,18 @@ using SimilaritySearchEngine
 
     # --- Error paths ---------------------------------------------------------------
 
-    @test !success(`julia --project=$proj $cli_script dump --dataset does_not_exist --workdir $workdir --output $(joinpath(workdir, "bundle_missing"))`)
+    @test _cli_fails("dump", "--dataset", "does_not_exist", "--workdir", workdir, "--output", joinpath(workdir, "bundle_missing"))
 
     empty_bundle_target = joinpath(workdir, "bundle_already_exists")
     mkpath(empty_bundle_target)
-    @test !success(`julia --project=$proj $cli_script dump --dataset dump_dense --workdir $workdir --output $empty_bundle_target`) # output already exists
+    @test _cli_fails("dump", "--dataset", "dump_dense", "--workdir", workdir, "--output", empty_bundle_target) # output already exists
 
-    @test !success(`julia --project=$proj $cli_script load --bundle $bundle_dense --dataset dump_dense_restored --workdir $workdir`) # target already exists
+    @test _cli_fails("load", "--bundle", bundle_dense, "--dataset", "dump_dense_restored", "--workdir", workdir) # target already exists
 
     incomplete_bundle = joinpath(workdir, "incomplete_bundle")
     mkpath(incomplete_bundle)
     write(joinpath(incomplete_bundle, "manifest.json"), "{}") # missing project/
-    @test !success(`julia --project=$proj $cli_script load --bundle $incomplete_bundle --dataset from_incomplete --workdir $workdir`)
+    @test _cli_fails("load", "--bundle", incomplete_bundle, "--dataset", "from_incomplete", "--workdir", workdir)
 
     rm(workdir, force=true, recursive=true)
 end

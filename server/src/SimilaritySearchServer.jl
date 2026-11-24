@@ -181,8 +181,9 @@ binary" framing in full, not just for its own fields (chunk 21).
 function main(args::Vector{String})::Cint
     parsed_args = parse_commandline(args)
 
+    # `invokelatest` is a dynamic call: Julia compiles the interactive mode only when it runs.
     if parsed_args["%COMMAND%"] == "interactive"
-        return run_interactive(; config_path=parsed_args["config"])
+        return Base.invokelatest(run_interactive; config_path=parsed_args["config"])
     elseif parsed_args["%COMMAND%"] !== nothing
         cmd = parsed_args["%COMMAND%"]
         return run_cli_command(parsed_args["config"], cmd, parsed_args[cmd])
@@ -206,7 +207,8 @@ for `interactive` (chunk 16), which routes to `run_interactive_ctl` instead. No
 function main_ctl(args::Vector{String})::Cint
     parsed = parse_ctl_commandline(args)
     base_url = "http://$(parsed["host"]):$(parsed["port"])/api/v1"
-    parsed["%COMMAND%"] == "interactive" && return run_interactive_ctl(base_url)
+    # `invokelatest` is a dynamic call: Julia compiles the interactive mode only when it runs.
+    parsed["%COMMAND%"] == "interactive" && return Base.invokelatest(run_interactive_ctl, base_url)
     return dispatch_ctl_command(parsed, base_url)
 end
 
@@ -229,8 +231,9 @@ function main_serve(args::Vector{String})::Cint
     parsed_args = parse_serve_commandline(args)
     config_path = parsed_args["config"]
 
+    # `invokelatest` is a dynamic call: Julia compiles the interactive mode only when it runs.
     if parsed_args["%COMMAND%"] == "interactive"
-        return run_interactive_serve(config_path)
+        return Base.invokelatest(run_interactive_serve, config_path)
     end
 
     config = load_config(config_path)
