@@ -627,6 +627,13 @@ of it exist.
       the task of the server, which processes a follower opened with a lag of `items` or more
       (§5.15, decision 5).
 
+18. **Responses without cursors** — designed on 2026-11-23 in §5.16, with the decisions of the
+    user. A search answers its `k` results in one response, and the server has no cursors. A
+    dataset has `max_k`, the largest `k` that a request can ask for, set when it is created,
+    100 by default. A middleware of the server compresses large responses with gzip. A binary
+    format of results is postponed. The user reviewed Avro on 2026-11-23: phase 9c replaces
+    the Avro file of `dump` with JSON lines written with JSON3, and Avro leaves both packages.
+
 The stemmer registry of §5.3 and §9's phase 5 is not on this list: it was discarded. Stemming
 was the way this specification proposed to make a query match a word it does not equal. That
 is now the work of the query pipeline of `TextSearch.jl`, which the engine exposes through the
@@ -892,6 +899,10 @@ Data is isolated using distinct Column Families in RocksDB, one per index/datase
 
 ### 4.4. Persistence Layer (JLD2 for index snapshots, Avro for datasets & wire format)
 
+!!! warning "Replaced on 2026-11-23 by §5.16, phase 9c"
+    `dump` writes the metadata of the items as JSON lines, `dataset.jsonl`, and Avro is not a
+    dependency of either package. The JLD2 snapshots below were removed on 2026-09-13.
+
 !!! warning "Neither SimilaritySearch.jl nor TextSearch.jl ships index serialization — this entire layer is net-new application code"
     This is the single biggest scope item this spec was previously silent about. `dump`/`load`, crash recovery, and warm-starting the web server from a working directory all depend on being able to fully reconstruct `SearchGraph`, `InvertedFile`, and `BM25InvertedFile` instances from disk — and there is no `save`/`load` for any of them in either package (verified by source inspection). Design this explicitly rather than assuming it falls out of "storing the log in RocksDB."
 
@@ -1066,6 +1077,11 @@ Exposes the advanced/administrative capabilities of the underlying index — as 
 
 * **Pre-filter vs. post-filter tradeoff must be documented per endpoint:** post-filtering (search first, discard non-matching candidates afterward) is simple but can silently under-return `k` results when the filter is selective; pre-filtering (restrict the candidate set before/during graph traversal) preserves recall but is not natively supported by `SearchGraph`'s beam search and would require either an id-restricted variant of the search loop or an initial candidate-set narrowing pass. Start with post-filter + an explicit `"insufficient_results"` response flag when filtering drops below the requested `k`; revisit pre-filtering only if that proves too lossy in practice.
 * `offset`/`limit` (or an opaque `cursor`) apply to `/simsearch/{index}/search`'s result list and to all listing endpoints (`list`, `GET /api/v1/jobs`, `GET /api/v1/datasets`).
+
+  !!! warning "Replaced on 2026-11-23 by §5.16: the server has no result cursors"
+      A search answers its `k` results in one response, and `max_k` of the dataset limits
+      `k`. The listings keep `offset` and `limit`. The note below describes the design that
+      was built before that date.
 
   !!! note "Explicit: an opaque result `cursor` needs its own persistent state, with the same resolution/poll/gc protocol as Jobs"
       A `cursor` isn't a stateless encoding of `offset`/`limit` once the underlying result set is expensive to recompute (e.g. paging through a large `search`/`allknn`/`neardup` result, or through a filtered listing that had to over-fetch to satisfy `k` after post-filtering, §5.4 above) — the server needs somewhere to actually hold the materialized result page(s) between requests. This is stored with the identical state machine and spool-directory mechanism as the Job registry (`<workdir>/cursors/{open,exhausted,expired}/{index_uuid}/<cursor_id>.cursor.json`, per §4.6's naming convention — see §5.5 for why it's a spool directory rather than a RocksDB table, and for the accompanying scaling warnings, which apply here just as much): `cursor_id` created on first response, directory-as-state (`open|exhausted|expired`), `last_polled_at` updated on each `GET .../result?cursor=...` poll, a `result_ref` pointing at the materialized page data, and a TTL (`expires_at`) after which the cursor is eligible for garbage collection via `similarity-search-ctl jobs gc`.
@@ -2614,6 +2630,195 @@ have passed, or when its lag reaches `items`. With the events, an `append` alrea
 when the lag reaches `items`. The user decided on 2026-11-23 to keep the check of `items` in the
 task: it processes a follower that was opened with a lag of `items` or more, before the next
 event of its leader.
+
+### 5.16. Responses without Cursors (design, 2026-11-23)
+
+Status: designed on 2026-11-23, item 18 of §0, with the decisions of the user. It replaces the
+result cursors of §5.4. The listings of §5.4 keep their `offset` and `limit`.
+
+#### What exists
+
+- **Cursors.** A dense or sparse `search`, and the `search` of a follower, accept `page_size`.
+  With it, the server computes the `k` results, writes all of them to
+  `<workdir>/cursors/open/<id>.cursor.json`, and answers the first page and a `cursor_id`.
+  `GET /api/v1/cursors/{id}?limit=` answers the next page. A cursor expires 300 seconds after
+  it is created. A page asked for after that, or after the last page, answers `409`.
+  `POST /api/v1/admin/jobs/gc` removes the expired cursors, and `similarity-search-ctl jobs`
+  lists the open ones. The Julia client has `search_pages` and `SearchPages`. The Python
+  client has `page_size`, `poll_cursor` and `iter_cursor`. `ftsearch` and the hybrid search
+  have no `page_size`.
+- **What a cursor gives.** The server computes every result before it answers the first page,
+  so a cursor saves no computation. It divides one response into several. It costs a file on
+  disk per search, a time limit, a garbage collection, one more type in each client, and a
+  `409` for a client that reads a page late or twice.
+- **Listings.** `GET /api/v1/datasets`, `GET /api/v1/jobs` and `GET .../log` use `offset` and
+  `limit`, with no state in the server. A posting list takes `limit` only (§5.12).
+- **No limit on `k`.** A request can ask for any `k`, and the server builds the whole response
+  in memory.
+- **No compression.** The server answers every body as it is. Both clients already send
+  `Accept-Encoding: gzip`, and both decompress a gzip response: `HTTP.request` of HTTP.jl does
+  it by default, and so does `requests` of Python.
+- **Results of a job.** `GET /api/v1/jobs/{id}/result` reads the whole file of the result into
+  memory (`read(result_ref)`) and answers it in one body.
+
+Sizes of one response, estimated on 2026-11-23 with synthetic results in the format of the
+server (`_id`, a `doc_id` such as `ccnews_123456`, `distance`, `deleted`):
+
+| k | JSON | JSON with gzip | binary, `Int32` ids and `Float32` distances |
+| ---: | ---: | ---: | ---: |
+| 1,000 | 92 KiB | 17 KiB | 8 KiB |
+| 10,000 | 915 KiB | 163 KiB | 78 KiB |
+| 100,000 | 9.0 MiB | 1.5 MiB | 781 KiB |
+
+#### Decided (2026-11-23)
+
+1. **No cursors.** A search answers its `k` results in one response, as `posting_list` does.
+   There are no users of the server outside this repository and its clients. The cursors are
+   therefore removed with no period of compatibility. In the server: the module `Cursors`, the
+   route `GET /api/v1/cursors/{id}`, `page_size`, and the cursors of the garbage collection and
+   of `similarity-search-ctl jobs`. In the Julia client: `search_pages` and `SearchPages`. In
+   the Python client: `page_size`, `poll_cursor` and `iter_cursor`. A request with
+   `page_size` answers `400` with the kind `InvalidOption`. The message says that a search
+   answers its `k` results in one response, and that `max_k` of the dataset limits `k`.
+2. **Compression in a middleware.** A middleware of the server compresses a response with gzip
+   when the request accepts gzip and the body has at least `[server] gzip_min_bytes` bytes.
+   The handlers do not change. It sets `Content-Encoding: gzip` and `Vary: Accept-Encoding`.
+3. **No binary format for now.** A binary format of results, such as the `Int32` ids and
+   `Float32` distances of the table above, is postponed. The user reviewed Avro first, on
+   2026-11-23, and decided to replace it with JSON lines (see "JSON lines in place of Avro").
+4. **`max_k` of each dataset, 100 by default.** It is set when a dataset is created, and it is
+   documented as a setting, so that a user who needs more finds how to change it. A request
+   with a larger `k` answers `400` with the kind `InvalidOption`. The message names `max_k`,
+   its value, and how to change it.
+
+#### `max_k`
+
+- `POST /api/v1/datasets` takes `max_k`, a positive integer, 100 when it is absent. The
+  server saves it in `descriptor.json`. A dataset created before this change has no
+  `max_k`, and the server takes 100 for it.
+- `POST /api/v1/admin/datasets/{id}/reload` takes `{"max_k": n}`, as it takes
+  `edit_correction`, and saves it in `descriptor.json`. This is the way to change it.
+- `build --max-k n` of `similarity-search` sets it when the command line creates a dataset.
+  `GET /api/v1/datasets/{id}` and `describe` report it. `rebuild`, `dump` and `load` keep it.
+- It limits `k` of the requests that answer results in their body: `search`, `ftsearch`, the
+  search and `ftsearch` of a follower, which take `max_k` of the leader, and the hybrid
+  search, whose `k` must not exceed `max_k` of either dataset.
+- It does not limit the jobs, whose results go to a file, or the commands of
+  `similarity-search`, which run in the process of the caller. It does not limit
+  `posting_list` or `fetch`. The engine has no `max_k`: a caller of the engine receives the
+  results in its own process.
+- The Julia client's `create_project` and the Python client's `create_dataset` take
+  `max_k`. The Julia client raises `InvalidOption` for a `k` larger than `max_k`, because the
+  server answers that kind.
+
+#### The middleware of compression
+
+- `[server] gzip = true` and `[server] gzip_min_bytes = 1024`, the defaults. With
+  `gzip = false`, the server answers every body as it is. A body smaller than
+  `gzip_min_bytes` is answered as it is, because gzip adds about 20 bytes and the time of the
+  compression.
+- It compresses with `CodecZlib`, at its default level. `CodecZlib` is already in the
+  manifest of the server, because HTTP.jl and Avro depend on it. It becomes a direct dependency.
+- It is a function given to `serve(; middleware)` of Oxygen, which version 1.10 accepts. It
+  runs after `_guard`, so it compresses the error responses too.
+- `GET /api/v1/jobs/{id}/result` answers the file of the result in parts, compressed while it
+  is read, and does not read it into memory. If Oxygen 1.10 does not allow a handler to write
+  the body in parts, the route reads the file and the middleware compresses it, and this
+  section records the limit.
+
+#### JSON lines in place of Avro
+
+Decided on 2026-11-23, after a review of what Avro gives the project.
+
+- **What exists.** `dump` writes a bundle with `dataset.avro`, `project/`, `followers/` and
+  `manifest.json`. `dataset.avro` holds one row per item: `_id`, `schema_version`, `doc_id`,
+  `keywords`, `refs`, `meta_json` (the `meta` of the item as a JSON string) and `tombstoned`.
+  It holds no vectors and no texts. `load` copies `project/`, which already holds the same
+  metadata, and then writes the rows of `dataset.avro` over it, so that a bundle whose
+  `dataset.avro` was edited restores the edited metadata. `Persistence.DumpRecord`,
+  `write_dump_records` and `read_dump_records` of the engine write and read the file with
+  `Avro.writetable` and `Avro.readtable`.
+- **What Avro gives here.** A file of metadata that a program without Julia can read, with an
+  Avro library. Its typed schema and its compression are not used. Avro.jl infers the schema
+  from the rows and accepts no schema of the caller. The record is therefore named
+  `Record_4857802484944948575`, and the type of `doc_id` depends on the data of each dump.
+  `meta` is a JSON string inside the file, and the file is written without compression.
+- **What Avro costs.** A reader in Python needs `fastavro`, and it parses `meta` as JSON
+  again. The file cannot be edited with a text editor or `jq`. A dataset without items cannot
+  be dumped, because Avro.jl cannot infer a schema from zero rows. The engine depends on Avro
+  and on nine packages that only Avro uses: CodecBzip2, CodecXz, CodecZstd, SentinelArrays,
+  Tables, TableTraits, DataValueInterfaces, IteratorInterfaceExtensions and XZ_jll. Without
+  them the tree of the engine has 97 packages instead of 107. `using Avro` takes 0.27 s.
+- **Measured on 2026-11-23** on geoint0, with one thread, on synthetic rows in the format of
+  `dump` (`doc_id`, 3 keywords, 1 ref, and a `meta` of 4 fields). The JSON lines were written
+  with JSON3, with `meta` as an object; the writer parsed each `meta` to write it as one.
+
+  | rows | format | size | size with gzip | write | read |
+  | ---: | :--- | ---: | ---: | ---: | ---: |
+  | 100,000 | Avro | 26.7 MiB | 4.2 MiB | 1.1 s | 3.1 s |
+  | 100,000 | JSON lines | 26.3 MiB | 4.2 MiB | 2.1 s | 0.7 s |
+  | 1,000,000 | Avro | 266.4 MiB | 42.0 MiB | 12.3 s | 33.3 s |
+  | 1,000,000 | JSON lines | 264.9 MiB | 42.4 MiB | 17.9 s | 6.1 s |
+
+  The read of the JSON lines returns a JSON3 object per line, and the conversion to the
+  records of the engine is not included. The write of `dump` does not need to parse `meta`,
+  because RocksDB holds it as JSON text already.
+
+The design:
+
+- `dump` writes `dataset.jsonl` in place of `dataset.avro`, without compression: the bundle
+  also holds `project/`, which is larger. One line per item, in the order of `_id`:
+
+  ```json
+  {"_id":1,"schema_version":1,"doc_id":"d1","keywords":["gato"],"refs":[],"meta":{"year":2001},"deleted":false}
+  ```
+
+  `meta` is the object stored for the item, copied from RocksDB as it is, or `null` when the
+  item has none. `deleted` replaces `tombstoned`, with the name of the field of a search
+  result. A dataset without items writes an empty `dataset.jsonl`, and `dump` no longer refuses it.
+- `load` restores from `project/`. When the bundle has `dataset.jsonl`, it writes its lines
+  over the metadata of the copy, as it did with `dataset.avro`. A bundle without
+  `dataset.jsonl` is loaded from `project/` alone. A bundle written before this change, with
+  `dataset.avro`, is loaded from `project/`, and the server writes a warning that it ignores
+  `dataset.avro`.
+- The functions of the engine keep their role with JSON lines. `DumpRecord` has the field
+  `meta`, as JSON text, in place of `meta_json`, and `deleted` in place of `tombstoned`.
+  `write_dump_records` and `read_dump_records` use JSON3, which both packages already depend
+  on.
+- Avro leaves `[deps]` and `[compat]` of the engine and of the server.
+- Tests: a dump writes `dataset.jsonl` with one line per item. A line edited with a new `meta`
+  is restored by `load`. A dataset without items is dumped and loaded. A bundle without
+  `dataset.jsonl`, and a bundle with only `dataset.avro`, are loaded from `project/`.
+- Documentation: the architecture page, the manual of the server for `dump` and `load`, and
+  §4.4 marked as replaced for the Avro file.
+
+#### Phases
+
+9a. The server and the clients: the removal of the cursors, `max_k`, the middleware, the
+    results of a job, and the tests. `api/07` tests the absence of cursors, `max_k` and the
+    compression. The clients change in the same commit, because `api/17` tests the Julia client
+    against the server.
+9b. The manual of the server (the routes, the configuration, the Python client), its
+    tutorial, the page of the Julia client, and "As built". §5.4 is marked as replaced in this
+    design.
+9c. JSON lines in place of Avro: the engine, `dump` and `load`, the tests, the architecture
+    page and the manual of the server.
+
+#### Tests
+
+- A `search` with `page_size` answers `400 InvalidOption`. The route of the cursors answers
+  `404`.
+- A `search` with `k = max_k` answers `k` results. A `search` with `k = max_k + 1` answers
+  `400 InvalidOption`, and the message names `max_k`. The same holds for `ftsearch`, for the
+  searches of a follower and for the hybrid search.
+- A dataset created without `max_k` has 100. `reload` with `{"max_k": 1000}` changes it, and
+  the value survives a restart of the server. A dataset whose `descriptor.json` has no
+  `max_k` has 100.
+- A request with `Accept-Encoding: gzip` and a body of at least `gzip_min_bytes` bytes receives
+  `Content-Encoding: gzip`, and the decompressed body equals the body without compression. A
+  request without `Accept-Encoding` receives the body as it is. A small body is not
+  compressed.
+- The result of a `searchbatch` job is answered compressed, and it equals the file.
 
 ## 6. Hybrid Search Readiness (Suggestions & Specifications)
 
