@@ -1,6 +1,6 @@
 using Test
 using HTTP
-using JSON3
+using JSON
 using CodecZlib
 
 # Responses without cursors (CHANGELOG.md §5.16): a search answers its `k` results in one response,
@@ -8,9 +8,9 @@ using CodecZlib
 # the request accepts it, and the listings keep `offset` and `limit`.
 @testset "7. Responses: max_k, no cursors, gzip and listings" begin
     with_test_server() do base_url, workdir
-        post(path, body) = HTTP.post("$base_url/$path", [], JSON3.write(body); status_exception=false)
+        post(path, body) = HTTP.post("$base_url/$path", [], JSON.json(body); status_exception=false)
         # A copy: `String(v)` takes the bytes of `v` and leaves it empty, and a response is read twice.
-        parsed(resp) = JSON3.read(String(copy(resp.body)))
+        parsed(resp) = JSON.parse(String(copy(resp.body)))
         info(id) = parsed(HTTP.get("$base_url/datasets/$id"))
 
         vectors = [Float32[i, i % 7, i % 3, 1] for i in 1:150]
@@ -41,7 +41,7 @@ using CodecZlib
         # `reload` changes `max_k` and saves it in `descriptor.json`.
         @test post("admin/datasets/resp_ds/reload", Dict("max_k" => 150)).status == 200
         @test info("resp_ds").max_k == 150
-        @test JSON3.read(read(joinpath(workdir, "datasets", "resp_ds", "descriptor.json"))).max_k == 150
+        @test JSON.parse(read(joinpath(workdir, "datasets", "resp_ds", "descriptor.json"))).max_k == 150
         r = post("datasets/resp_ds/search", Dict("vector" => q, "k" => 150))
         @test r.status == 200 && length(parsed(r).results) == 150
         for bad in (0, "many", true)
@@ -74,16 +74,16 @@ using CodecZlib
 
         # A `descriptor.json` written before `max_k` existed gives 100.
         dpath = joinpath(workdir, "datasets", "resp_txt", "descriptor.json")
-        d = JSON3.read(read(dpath), Dict{String,Any})
+        d = JSON.parse(read(dpath); dicttype=Dict{String,Any})
         delete!(d, "max_k")
-        write(dpath, JSON3.write(d))
+        write(dpath, JSON.json(d))
         @test post("admin/datasets/resp_txt/reload", Dict()).status == 200
         @test info("resp_txt").max_k == 100
         @test post("datasets/resp_txt/ftsearch", Dict("text" => "gato", "k" => 10)).status == 200
 
         # Compression. A response of at least `gzip_min_bytes` bytes is compressed when the
         # request accepts gzip, and decompressed it equals the response without compression.
-        req_body = JSON3.write(Dict("vector" => q, "k" => 150))
+        req_body = JSON.json(Dict("vector" => q, "k" => 150))
         gz = HTTP.post("$base_url/datasets/resp_ds/search", ["Accept-Encoding" => "gzip"], req_body; decompress=false)
         plain = HTTP.post("$base_url/datasets/resp_ds/search", ["Accept-Encoding" => "identity"], req_body; decompress=false)
         @test HTTP.header(gz, "Content-Encoding") == "gzip" && HTTP.header(gz, "Vary") == "Accept-Encoding"

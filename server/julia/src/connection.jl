@@ -28,19 +28,19 @@ end
 Base.show(io::IO, c::Connection) = print(io, "Connection(", repr(c.url), ")")
 
 """
-    request(conn, method, path; body=nothing, query=nothing) -> Union{Nothing,JSON3.Object}
+    request(conn, method, path; body=nothing, query=nothing) -> Union{Nothing,JSON.Object}
 
 Sends one request to `conn.url * path`, with `body` encoded as JSON. Returns the parsed body of a
 2xx response, or `nothing` when the body is empty. Any other status raises the error that
 [`response_error`](@ref) selects.
 """
 function request(conn::Connection, method::String, path::String; body=nothing, query=nothing)
-    payload = body === nothing ? UInt8[] : JSON3.write(body)
+    payload = body === nothing ? UInt8[] : JSON.json(body)
     resp = HTTP.request(method, conn.url * path, conn.headers, payload; query,
                         status_exception=false, read_idle_timeout=conn.read_idle_timeout)
     200 <= resp.status < 300 || throw(response_error(resp.status, resp.body))
     isempty(resp.body) && return nothing
-    return JSON3.read(resp.body)
+    return JSON.parse(resp.body)
 end
 
 "The path of a route of dataset `id`, with the id escaped."

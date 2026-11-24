@@ -18,7 +18,7 @@ Three packages, one repository:
   `server/src/apps/`.
 - **`SimilaritySearchClient`** (`server/julia/`) -- the Julia client of the HTTP API. Its
   functions have the names and the result types of the engine's functions, and it depends on
-  HTTP.jl and JSON3 only: it must never depend on the engine or the server. It declares its
+  HTTP.jl and JSON.jl only: it must never depend on the engine or the server. It declares its
   own copy of the engine's error types, and the server's light suite checks that the two lists
   are equal. Its tests against a running server are in the server's full suite.
 

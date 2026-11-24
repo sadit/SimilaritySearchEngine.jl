@@ -1,5 +1,5 @@
 using Test
-using JSON3
+using JSON
 
 @testset "CLI Build Tests" begin
     workdir = mktempdir()

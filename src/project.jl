@@ -1,7 +1,7 @@
 module Project
 
 using RocksDB
-using JSON3
+using JSON
 using ..Schema
 
 export ProjectManager, open_project, close_project, compact_all!, put_metadata!, get_metadata,
@@ -168,7 +168,7 @@ function backfill_docid_index!(manager::ProjectManager)
     n = 0
     b = RocksDB.WriteBatch()
     for (_, v) in RocksDB.DBIterator(manager.db; cf=manager.cf_records)
-        record = JSON3.read(v, MetadataRecord)
+        record = JSON.parse(v, MetadataRecord)
         something(record.doc_id, "") == "" && continue
         RocksDB.put!(b, docid_key(record.doc_id, record._id), UInt8[], cf=manager.cf_idx_docid)
         n += 1
@@ -256,7 +256,7 @@ a follower dataset of the project.
 """
 function put_metadata!(manager::ProjectManager, record::MetadataRecord, meta)
     key_bytes = _id_key(record._id)
-    record_bytes = JSON3.write(record)
+    record_bytes = JSON.json(record)
 
     b = RocksDB.WriteBatch()
     RocksDB.put!(b, key_bytes, record_bytes, cf=manager.cf_records)
@@ -282,7 +282,7 @@ Retrieves a [`Schema.MetadataRecord`](@ref) from the project by its internal `_i
 function get_metadata(manager::ProjectManager, id::Integer)
     val_bytes = get(manager.db, _id_key(Int32(id)), cf=manager.cf_records)
     val_bytes === nothing && return nothing
-    return JSON3.read(val_bytes, MetadataRecord)
+    return JSON.parse(val_bytes, MetadataRecord)
 end
 
 """
@@ -320,7 +320,7 @@ lookup. Only decodes the (small, fixed-shape) record for each row -- never touch
 """
 function find_by_doc_id(manager::ProjectManager, doc_id::String)
     for (_, v) in RocksDB.DBIterator(manager.db; cf=manager.cf_records)
-        record = JSON3.read(v, MetadataRecord)
+        record = JSON.parse(v, MetadataRecord)
         record.doc_id == doc_id && return record
     end
     return nothing

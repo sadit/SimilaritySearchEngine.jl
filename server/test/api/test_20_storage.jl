@@ -1,6 +1,6 @@
 using Test
 using HTTP
-using JSON3
+using JSON
 import SimilaritySearchClient as C
 
 # The storage of a dense dataset over HTTP (CHANGELOG.md §5.14, phase 7b): `storage` of
@@ -8,14 +8,14 @@ import SimilaritySearchClient as C
 # `storage` keyword of the Julia client.
 @testset "20. Storage of dense datasets" begin
     with_test_server() do base_url, workdir
-        post(path, body) = HTTP.post("$base_url/$path", [], JSON3.write(body))
-        get_(path) = JSON3.read(String(HTTP.get("$base_url/$path").body))
+        post(path, body) = HTTP.post("$base_url/$path", [], JSON.json(body))
+        get_(path) = JSON.parse(String(HTTP.get("$base_url/$path").body))
         failed(f) = try f(); nothing catch e; e.response end
         # `String(body)` empties the vector, and a response is read twice here.
-        kind_of(resp) = JSON3.read(String(copy(resp.body))).kind
-        search(id, i, k) = JSON3.read(String(post("datasets/$id/search", Dict("vector" => rows[i]["vector"], "k" => k)).body)).results
+        kind_of(resp) = JSON.parse(String(copy(resp.body))).kind
+        search(id, i, k) = JSON.parse(String(post("datasets/$id/search", Dict("vector" => rows[i]["vector"], "k" => k)).body)).results
         data_path = joinpath(@__DIR__, "..", "..", "..", "test", "data", "frankenstein.jsonl")
-        rows = [JSON3.read(l, Dict{String,Any}) for l in readlines(data_path)[1:300]]
+        rows = [JSON.parse(l; dicttype=Dict{String,Any}) for l in readlines(data_path)[1:300]]
         items(r) = [Dict("doc_id" => rows[i]["doc_id"], "vector" => rows[i]["vector"]) for i in r]
 
         # A quantized dataset: the encoder is fitted at the first append, which indexes.

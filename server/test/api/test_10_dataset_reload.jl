@@ -1,29 +1,29 @@
 using Test
 using HTTP
-using JSON3
+using JSON
 
 @testset "10. Server-restart dataset reload (Server.reload_datasets!)" begin
     with_test_server() do base_url, workdir
         # --- Dataset 1: dense, schema-declared indexed field, some appended items, one soft-delete ---
 
-        resp = HTTP.post("$base_url/datasets", [], JSON3.write(Dict(
+        resp = HTTP.post("$base_url/datasets", [], JSON.json(Dict(
             "id" => "reload_ds1", "index_type" => "searchgraph", "distance" => "L2",
             "meta_schema" => [Dict("name" => "category", "type" => "string", "indexed" => true)],
         )))
         @test resp.status == 201
 
         data_path = joinpath(@__DIR__, "..", "..", "..", "test", "data", "frankenstein.jsonl")
-        docs = [JSON3.read(line) for line in readlines(data_path)[1:10]]
-        resp = HTTP.post("$base_url/datasets/reload_ds1/append", [], JSON3.write(Dict("items" => docs)))
+        docs = [JSON.parse(line) for line in readlines(data_path)[1:10]]
+        resp = HTTP.post("$base_url/datasets/reload_ds1/append", [], JSON.json(Dict("items" => docs)))
         @test resp.status == 200
-        @test JSON3.read(String(resp.body)).inserted == 10
+        @test JSON.parse(String(resp.body)).inserted == 10
 
-        resp = HTTP.post("$base_url/datasets/reload_ds1/delete", [], JSON3.write(Dict("_id" => 3)))
+        resp = HTTP.post("$base_url/datasets/reload_ds1/delete", [], JSON.json(Dict("_id" => 3)))
         @test resp.status == 200
 
         # --- Dataset 2: text (bm25_invfile), created but never appended to -- no snapshot exists yet ---
 
-        resp = HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "reload_ds2", "index_type" => "bm25_invfile")))
+        resp = HTTP.post("$base_url/datasets", [], JSON.json(Dict("id" => "reload_ds2", "index_type" => "bm25_invfile")))
         @test resp.status == 201
 
         # --- Simulate "server just restarted": unload both from the live in-memory app ---
@@ -64,23 +64,23 @@ using JSON3
         # k=10 covers every one of the 10 originally-appended items -- if the tombstone
         # hadn't survived the reload, doc_id 3 would show up here too.
         query_vec = docs[1].vector
-        resp = HTTP.post("$base_url/datasets/reload_ds1/search", [], JSON3.write(Dict("vector" => query_vec, "k" => 10)))
+        resp = HTTP.post("$base_url/datasets/reload_ds1/search", [], JSON.json(Dict("vector" => query_vec, "k" => 10)))
         @test resp.status == 200
-        results = JSON3.read(String(resp.body)).results
+        results = JSON.parse(String(resp.body)).results
         @test length(results) == 9
         @test !any(r -> r._id == 3, results)
 
-        resp = HTTP.post("$base_url/datasets/reload_ds2/append", [], JSON3.write(Dict("items" => docs[1:3])))
+        resp = HTTP.post("$base_url/datasets/reload_ds2/append", [], JSON.json(Dict("items" => docs[1:3])))
         @test resp.status == 200
-        @test JSON3.read(String(resp.body)).inserted == 3
+        @test JSON.parse(String(resp.body)).inserted == 3
 
-        resp = HTTP.post("$base_url/datasets/reload_ds2/ftsearch", [], JSON3.write(Dict("text" => "letter", "k" => 3)))
+        resp = HTTP.post("$base_url/datasets/reload_ds2/ftsearch", [], JSON.json(Dict("text" => "letter", "k" => 3)))
         @test resp.status == 200
 
         # Descriptor-level view is consistent post-reload too (doc_count/tombstone now come
         # from the freshly reloaded live engine, not a stale pre-restart snapshot of stats).
         resp = HTTP.get("$base_url/datasets/reload_ds1")
-        detail = JSON3.read(String(resp.body))
+        detail = JSON.parse(String(resp.body))
         @test detail.doc_count == 10
         @test detail.tombstone_count == 1
         @test detail.loaded == true

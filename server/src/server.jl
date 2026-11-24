@@ -3,7 +3,7 @@ module Server
 using HTTP
 using SHA: sha256
 using Oxygen
-using JSON3
+using JSON
 using Dates
 using RocksDB
 # The two base libraries, module-only: every name this file takes from them is written
@@ -38,7 +38,7 @@ export load_plugins!, PluginLoadError
 
 const JSON_HEADERS = ["Content-Type" => "application/json"]
 
-json_response(status::Int, body; extra_headers=[]) = HTTP.Response(status, vcat(JSON_HEADERS, extra_headers), JSON3.write(body))
+json_response(status::Int, body; extra_headers=[]) = HTTP.Response(status, vcat(JSON_HEADERS, extra_headers), JSON.json(body))
 
 """
 `id` values are interpolated directly into filesystem paths (dataset directories,
@@ -364,7 +364,7 @@ permission over every dataset rather than accidentally requiring none.
 """
 function _body_dataset(req::HTTP.Request, keys::String...)
     data = try
-        JSON3.read(codeunits(String(req.body)), Dict{String, Any})
+        JSON.parse(codeunits(String(req.body)); dicttype=Dict{String,Any})
     catch
         return "*"
     end
@@ -535,7 +535,7 @@ const REMOVED_DATASET_FIELDS = ("join_group", "holds_metadata", "key")
 
 function handle_create_dataset(req::HTTP.Request, app::AppState)
     body = String(req.body)
-    data = isempty(body) ? Dict{String, Any}() : JSON3.read(codeunits(body), Dict{String, Any})
+    data = isempty(body) ? Dict{String, Any}() : JSON.parse(codeunits(body); dicttype=Dict{String,Any})
 
     id = get(data, "id", Project.generate_id())
     valid_project_id(id) || return json_response(400, Dict("error" => "invalid dataset id"))
@@ -605,7 +605,7 @@ function handle_create_dataset(req::HTTP.Request, app::AppState)
         "id" => id, "index_kind" => index_type, "distance" => distance, "created_at" => string(now(UTC)),
         "edit_correction" => edit_correction, "max_k" => max_k
     )
-    write(descriptor_path(app, id), JSON3.write(descriptor))
+    write(descriptor_path(app, id), JSON.json(descriptor))
 
     return json_response(201, Dict("status" => "created", "id" => id))
 end
@@ -623,7 +623,7 @@ function _reload_one_dataset!(app::AppState, id::String)
     path = joinpath(app.workdir, "datasets", id)
     dpath = descriptor_path(app, id)
     isfile(dpath) || return false
-    descriptor = JSON3.read(read(dpath), Dict{String, Any})
+    descriptor = JSON.parse(read(dpath); dicttype=Dict{String,Any})
 
     index_type = get(descriptor, "index_kind", "searchgraph")
     distance = get(descriptor, "distance", "L2")
@@ -759,7 +759,7 @@ function handle_reload_dataset(req::HTTP.Request, app::AppState, id::String)
     valid_project_id(id) || return json_response(400, Dict("error" => "invalid dataset id"))
 
     body = String(req.body)
-    data = isempty(body) ? Dict{String, Any}() : JSON3.read(codeunits(body), Dict{String, Any})
+    data = isempty(body) ? Dict{String, Any}() : JSON.parse(codeunits(body); dicttype=Dict{String,Any})
     if haskey(data, "max_k")
         max_k = _parse_max_k(data["max_k"])
         max_k === nothing && return json_response(400, Dict("error" => "'max_k' must be a positive integer"))
@@ -772,7 +772,7 @@ function handle_reload_dataset(req::HTTP.Request, app::AppState, id::String)
             return json_response(400, Dict("error" => "'edit_correction' must be true or false"))
         dpath = descriptor_path(app, id)
         isfile(dpath) || return json_response(404, Dict("error" => "dataset_not_found"))
-        descriptor = JSON3.read(read(dpath), Dict{String, Any})
+        descriptor = JSON.parse(read(dpath); dicttype=Dict{String,Any})
         # Checked here, before the loaded handle is closed: the engine would refuse it too, but
         # only on the reopen, which would leave the dataset unloaded.
         kind = try
@@ -786,7 +786,7 @@ function handle_reload_dataset(req::HTTP.Request, app::AppState, id::String)
                                                       "'$id' is $(descriptor["index_kind"])"))
         end
         descriptor["edit_correction"] = edit_correction
-        write(dpath, JSON3.write(descriptor))
+        write(dpath, JSON.json(descriptor))
     end
 
     if haskey(app.handles, id)
@@ -819,7 +819,7 @@ function dataset_descriptor(app::AppState, id::String)
     isdir(path) || return nothing
 
     dpath = descriptor_path(app, id)
-    base = isfile(dpath) ? JSON3.read(read(dpath), Dict{String, Any}) :
+    base = isfile(dpath) ? JSON.parse(read(dpath); dicttype=Dict{String,Any}) :
         Dict{String, Any}("id" => id, "index_kind" => "unknown", "distance" => "unknown", "created_at" => nothing)
 
     foreach(f -> delete!(base, f), REMOVED_DATASET_FIELDS)
@@ -981,7 +981,7 @@ function handle_get_op_log(req::HTTP.Request, app::AppState, id::String)
     haskey(app.handles, id) || return json_response(404, Dict("error" => "dataset_not_found"))
     dataset = app.handles[id].project
 
-    entries = Any[JSON3.read(v, Dict{String, Any}) for (_, v) in RocksDB.DBIterator(dataset.db; cf=dataset.cf_op_log)]
+    entries = Any[JSON.parse(v; dicttype=Dict{String,Any}) for (_, v) in RocksDB.DBIterator(dataset.db; cf=dataset.cf_op_log)]
     reverse!(entries) # newest first -- op_log keys are time_ns()-ordered ascending
 
     params = queryparams(HTTP.URI(req.target))
@@ -1079,7 +1079,7 @@ function handle_append(req::HTTP.Request, app::AppState, index::String)
     engine = handle.engine
     dataset = handle.project
 
-    data = JSON3.read(codeunits(String(req.body)), Dict{String, Any})
+    data = JSON.parse(codeunits(String(req.body)); dicttype=Dict{String,Any})
     items = get(data, "items", [])
 
     snapshot = Telemetry.snapshot_costs(engine.backend.ctx)
@@ -1314,7 +1314,7 @@ function handle_search(req::HTTP.Request, app::AppState, index::String)
     engine = app.handles[index].engine
     dataset = app.handles[index].project
 
-    data = JSON3.read(codeunits(String(req.body)), Dict{String, Any})
+    data = JSON.parse(codeunits(String(req.body)); dicttype=Dict{String,Any})
     haskey(data, "vector") || return json_response(400, Dict("error" => "search requires a 'vector' field"))
     bad_k = check_search_k(app, (index,), data)
     bad_k === nothing || return bad_k
@@ -1368,9 +1368,9 @@ post-creation update (currently only `handle_calibrate`'s `beamsearch_baseline`)
 """
 function _update_descriptor!(app::AppState, id::String, updates::Dict)
     dpath = descriptor_path(app, id)
-    current = isfile(dpath) ? JSON3.read(read(dpath), Dict{String, Any}) : Dict{String, Any}("id" => id)
+    current = isfile(dpath) ? JSON.parse(read(dpath); dicttype=Dict{String,Any}) : Dict{String, Any}("id" => id)
     merge!(current, updates)
-    write(dpath, JSON3.write(current))
+    write(dpath, JSON.json(current))
 end
 
 # The `baseline` and the `calibration` of a calibration response, for a dataset, a partition and
@@ -1420,7 +1420,7 @@ function handle_calibrate(req::HTTP.Request, app::AppState, index::String)
     length(engine.backend.index) == 0 && return json_response(400, Dict("error" => "index has no data to calibrate against"))
 
     body = String(req.body)
-    data = isempty(body) ? Dict{String, Any}() : JSON3.read(codeunits(body), Dict{String, Any})
+    data = isempty(body) ? Dict{String, Any}() : JSON.parse(codeunits(body); dicttype=Dict{String,Any})
     minrecall = Float64(get(data, "minrecall", 0.9))
     numqueries = Int(get(data, "numqueries", 64))
     ksearch = Int(get(data, "ksearch", 10))
@@ -1458,7 +1458,7 @@ function handle_ftsearch(req::HTTP.Request, app::AppState, index::String)
     engine = app.handles[index].engine
     dataset = app.handles[index].project
 
-    data = JSON3.read(codeunits(String(req.body)), Dict{String, Any})
+    data = JSON.parse(codeunits(String(req.body)); dicttype=Dict{String,Any})
     haskey(data, "text") || return json_response(400, Dict("error" => "ftsearch requires a 'text' field"))
     data["text"] isa AbstractString || return json_response(400, Dict("error" => "'text' must be a string"))
     bad_k = check_search_k(app, (index,), data)
@@ -1496,7 +1496,7 @@ as a separate subprocess that reads only what is on disk.
 """
 function handle_delete_item(req::HTTP.Request, app::AppState, index::String)
     haskey(app.handles, index) || return json_response(404, Dict("error" => "dataset_not_found"))
-    data = JSON3.read(codeunits(String(req.body)), Dict{String, Any})
+    data = JSON.parse(codeunits(String(req.body)); dicttype=Dict{String,Any})
     haskey(data, "_id") || return json_response(400, Dict(
         "error" => "delete requires an '_id' field: the internal identifier of the item, as reported by search and fetch"))
 
@@ -1532,7 +1532,7 @@ function handle_fetch(req::HTTP.Request, app::AppState, index::String)
     haskey(app.handles, index) || return json_response(404, Dict("error" => "dataset_not_found"))
     dataset = app.handles[index].project
 
-    data = JSON3.read(codeunits(String(req.body)), Dict{String, Any})
+    data = JSON.parse(codeunits(String(req.body)); dicttype=Dict{String,Any})
     ids = get(data, "ids", [])
 
     results = Any[]
@@ -1585,7 +1585,7 @@ Fuses a dense (`dense_index`) and lexical (`lexical_index`) search over the same
 the two datasets actually has it for a given id.
 """
 function handle_hybrid_search(req::HTTP.Request, app::AppState)
-    data = JSON3.read(codeunits(String(req.body)), Dict{String, Any})
+    data = JSON.parse(codeunits(String(req.body)); dicttype=Dict{String,Any})
     dense_id = get(data, "dense_index", nothing)
     lexical_id = get(data, "lexical_index", nothing)
     (dense_id === nothing || lexical_id === nothing) &&
@@ -1702,7 +1702,7 @@ once `status == completed` with no further plumbing. Anything else is a `400`.
 """
 function handle_submit_job(req::HTTP.Request, app::AppState, kind::String)
     body = String(req.body)
-    data = isempty(body) ? Dict{String, Any}() : JSON3.read(codeunits(body), Dict{String, Any})
+    data = isempty(body) ? Dict{String, Any}() : JSON.parse(codeunits(body); dicttype=Dict{String,Any})
 
     if haskey(data, "command")
         command = String.(data["command"])
@@ -1810,7 +1810,7 @@ function handle_get_job_result(req::HTTP.Request, app::AppState, job_id::String)
 
     if isdir(result_ref)
         manifest_path = joinpath(result_ref, "manifest.json")
-        manifest = isfile(manifest_path) ? JSON3.read(read(manifest_path), Dict{String, Any}) : nothing
+        manifest = isfile(manifest_path) ? JSON.parse(read(manifest_path); dicttype=Dict{String,Any}) : nothing
         return json_response(200, Dict("bundle_dir" => result_ref, "manifest" => manifest))
     end
 
@@ -1912,7 +1912,7 @@ in a hardened test without actually waiting a day).
 """
 function handle_jobs_gc(req::HTTP.Request, app::AppState)
     body = String(req.body)
-    data = isempty(body) ? Dict{String, Any}() : JSON3.read(codeunits(body), Dict{String, Any})
+    data = isempty(body) ? Dict{String, Any}() : JSON.parse(codeunits(body); dicttype=Dict{String,Any})
     retention_seconds = get(data, "retention_seconds", 86400)
 
     jobs_purged = Jobs.purge_finished!(app.job_mgr; retention_seconds=retention_seconds)
@@ -1924,7 +1924,7 @@ end
 # ==========================================
 
 function handle_create_token(req::HTTP.Request, app::AppState)
-    data = JSON3.read(codeunits(String(req.body)), Dict{String, Any})
+    data = JSON.parse(codeunits(String(req.body)); dicttype=Dict{String,Any})
     user = get(data, "user", "anonymous")
     # `String.(...)` over an empty `Vector{Any}` (no permissions at all) stays a `Vector{Any}`,
     # which `create_token!` does not accept -- collect into the element type instead.

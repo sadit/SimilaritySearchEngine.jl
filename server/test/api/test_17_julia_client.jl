@@ -1,6 +1,6 @@
 using Test
 using HTTP
-using JSON3
+using JSON
 import SimilaritySearchClient as C
 
 # The Julia client (server/julia/) against the suite's server. The routes themselves are tested
@@ -10,7 +10,7 @@ import SimilaritySearchClient as C
     srv = ensure_test_server()
     conn = C.Connection(srv.root_url)
     data_path = joinpath(@__DIR__, "..", "..", "..", "test", "data", "frankenstein.jsonl")
-    rows = [JSON3.read(l, Dict{String,Any}) for l in readlines(data_path)[1:240]]
+    rows = [JSON.parse(l; dicttype=Dict{String,Any}) for l in readlines(data_path)[1:240]]
     repo_of(i) = i % 4 == 0 ? "cuatro" : "otro"
     vec(i) = Float32.(rows[i]["vector"])
 
@@ -251,8 +251,8 @@ import SimilaritySearchClient as C
     end
 
     @testset "a token is sent with every request" begin
-        new_token(user, perm, headers) = JSON3.read(String(HTTP.post("$(srv.base_url)/admin/tokens", headers,
-            JSON3.write(Dict("user" => user, "permissions" => [perm]))).body)).token
+        new_token(user, perm, headers) = JSON.parse(String(HTTP.post("$(srv.base_url)/admin/tokens", headers,
+            JSON.json(Dict("user" => user, "permissions" => [perm]))).body)).token
         admin = new_token("jc", "admin:*", [])
         # The shared server runs with authentication disabled; test_14 explains the switch.
         srv.app.auth_enabled[] = true

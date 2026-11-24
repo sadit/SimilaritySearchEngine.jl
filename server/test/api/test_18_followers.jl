@@ -1,6 +1,6 @@
 using Test
 using HTTP
-using JSON3
+using JSON
 
 # Followers over HTTP (CHANGELOG.md §5.12, issue #5, phases 5a and 5b). The engine's own tests check
 # what a follower computes; this file checks that the server creates, opens, processes, searches
@@ -10,17 +10,17 @@ using JSON3
         data_path = joinpath(@__DIR__, "..", "..", "..", "test", "data", "frankenstein.jsonl")
         repo_of(i) = i % 5 == 0 ? ["norte", "sur"] : i % 2 == 0 ? "norte" : "sur"
         docs = map(enumerate(readlines(data_path)[1:120])) do (i, line)
-            d = JSON3.read(line, Dict{String,Any})
+            d = JSON.parse(line; dicttype=Dict{String,Any})
             Dict{String,Any}("doc_id" => d["doc_id"], "text" => d["text"], "keywords" => d["keywords"],
                              "repo" => repo_of(i), "n" => i)
         end
         in_part(i, p) = (v = repo_of(i); v isa AbstractString ? v == p : p in v)
-        post(path, body) = JSON3.read(String(HTTP.post("$base_url/$path", [], JSON3.write(body)).body))
-        get_(path) = JSON3.read(String(HTTP.get("$base_url/$path").body))
+        post(path, body) = JSON.parse(String(HTTP.post("$base_url/$path", [], JSON.json(body)).body))
+        get_(path) = JSON.parse(String(HTTP.get("$base_url/$path").body))
         failed(f) = try f(); nothing catch e; e.response end
 
-        @test HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "fl_txt", "index_type" => "bm25_invfile", "max_k" => 120))).status == 201
-        @test HTTP.post("$base_url/datasets/fl_txt/append", [], JSON3.write(Dict("items" => docs[1:80]))).status == 200
+        @test HTTP.post("$base_url/datasets", [], JSON.json(Dict("id" => "fl_txt", "index_type" => "bm25_invfile", "max_k" => 120))).status == 201
+        @test HTTP.post("$base_url/datasets/fl_txt/append", [], JSON.json(Dict("items" => docs[1:80]))).status == 200
 
         # A non-disjoint partition follower and a keyword follower.
         created = post("datasets/fl_txt/followers",
@@ -35,13 +35,13 @@ using JSON3
                         Dict("name" => "p", "kind" => "keyword", "source" => "meta:repo",
                              "policy" => Dict("periodic" => Dict("seconds" => 1))))
         @test failed(() -> HTTP.post("$base_url/datasets/fl_txt/followers", [],
-                                     JSON3.write(Dict("name" => "x", "kind" => "tree", "source" => "keywords")))).status == 400
+                                     JSON.json(Dict("name" => "x", "kind" => "tree", "source" => "keywords")))).status == 400
         resp = failed(() -> HTTP.post("$base_url/datasets/fl_txt/followers", [],
-                                      JSON3.write(Dict("name" => "repo", "kind" => "partition", "source" => "meta:repo"))))
-        @test resp.status == 400 && JSON3.read(String(resp.body)).kind == "InvalidOption"
+                                      JSON.json(Dict("name" => "repo", "kind" => "partition", "source" => "meta:repo"))))
+        @test resp.status == 400 && JSON.parse(String(resp.body)).kind == "InvalidOption"
 
         # `append` processes an on_index follower in the same request; a manual one lags.
-        @test HTTP.post("$base_url/datasets/fl_txt/append", [], JSON3.write(Dict("items" => docs[81:120]))).status == 200
+        @test HTTP.post("$base_url/datasets/fl_txt/append", [], JSON.json(Dict("items" => docs[81:120]))).status == 200
         @test get_("datasets/fl_txt/followers/repo").position == 120
         @test get_("datasets/fl_txt/followers/m").lag == 40
         synced = post("datasets/fl_txt/followers/m/sync", Dict())
@@ -65,8 +65,8 @@ using JSON3
         parts = get_("datasets/fl_txt/followers/repo/partitions").partitions
         @test Dict(p.name => p.items for p in parts) == Dict(p => count(i -> in_part(i, p), 1:120) for p in ("norte", "sur"))
         resp = failed(() -> HTTP.post("$base_url/datasets/fl_txt/followers/repo=nortee/ftsearch", [],
-                                      JSON3.write(Dict("text" => query))))
-        @test resp.status == 404 && JSON3.read(String(resp.body)).kind == "UnknownPartition"
+                                      JSON.json(Dict("text" => query))))
+        @test resp.status == 404 && JSON.parse(String(resp.body)).kind == "UnknownPartition"
 
         # Keyword search and posting lists.
         name = first(k for d in docs for k in d["keywords"] if count(x -> k in x["keywords"], docs) >= 3)
@@ -75,7 +75,7 @@ using JSON3
         @test get_("datasets/fl_txt/followers/kw/postings?key=$(HTTP.URIs.escapeuri(name))&limit=2").ids == want[1:2]
         hits = post("datasets/fl_txt/followers/kw/search", Dict("keys" => [name], "k" => 50)).results
         @test sort([r._id for r in hits]) == want
-        @test failed(() -> HTTP.post("$base_url/datasets/fl_txt/followers/kw/search", [], JSON3.write(Dict("k" => 3)))).status == 400
+        @test failed(() -> HTTP.post("$base_url/datasets/fl_txt/followers/kw/search", [], JSON.json(Dict("k" => 3)))).status == 400
         token_ids = get_("datasets/fl_txt/postings?key=the&limit=3").ids
         @test length(token_ids) <= 3 && issorted(token_ids)
 
@@ -85,12 +85,12 @@ using JSON3
         group = get_("datasets/fl_txt/group")
         @test length(group.followers) == 4 && group.leader.id == "fl_txt"
         resp = failed(() -> HTTP.get("$base_url/datasets/fl_txt/followers/kv"))
-        @test resp.status == 404 && JSON3.read(String(resp.body)).kind == "UnknownFollower"
+        @test resp.status == 404 && JSON.parse(String(resp.body)).kind == "UnknownFollower"
 
         # A leader with followers is not deleted.
         resp = failed(() -> HTTP.delete("$base_url/datasets/fl_txt"))
         @test resp.status == 409
-        body = JSON3.read(String(resp.body))
+        body = JSON.parse(String(resp.body))
         @test body.kind == "HasFollowers" && occursin("followers/{name}", body.error)
 
         # The followers are opened again after unload and reload.
@@ -111,19 +111,19 @@ using JSON3
 
         # A dense dataset: migrate its partitions to a follower, and search one partition.
         vecs = [Float32[sin(i * j) for j in 1:8] for i in 1:60]
-        @test HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "fl_dense", "index_type" => "exhaustive_search",
+        @test HTTP.post("$base_url/datasets", [], JSON.json(Dict("id" => "fl_dense", "index_type" => "exhaustive_search",
                                                                    "partition_by" => "group"))).status == 201
         items = [Dict{String,Any}("doc_id" => "v$i", "vector" => vecs[i], "group" => isodd(i) ? "odd" : "even") for i in 1:60]
-        @test HTTP.post("$base_url/datasets/fl_dense/append", [], JSON3.write(Dict("items" => items))).status == 200
+        @test HTTP.post("$base_url/datasets/fl_dense/append", [], JSON.json(Dict("items" => items))).status == 200
         @test failed(() -> HTTP.post("$base_url/datasets/fl_dense/migrate-partitions", [],
-                                     JSON3.write(Dict("name" => "group")))).status == 400
+                                     JSON.json(Dict("name" => "group")))).status == 400
         migrated = post("datasets/fl_dense/migrate-partitions", Dict("name" => "group", "disjoint" => true))
         @test migrated.status == "migrated" && migrated.stats.partitions == 2
         got = post("datasets/fl_dense/followers/group=odd/search", Dict("vector" => vecs[3], "k" => 5)).results
         @test all(r -> isodd(parse(Int, r.doc_id[2:end])), got) && got[1].doc_id == "v3"
         resp = failed(() -> HTTP.post("$base_url/datasets/fl_dense/search", [],
-                                      JSON3.write(Dict("vector" => vecs[3], "partition" => "odd"))))
-        @test resp.status == 400 && occursin("group", JSON3.read(String(resp.body)).error)
+                                      JSON.json(Dict("vector" => vecs[3], "partition" => "odd"))))
+        @test resp.status == 400 && occursin("group", JSON.parse(String(resp.body)).error)
         @test failed(() -> HTTP.get("$base_url/datasets/fl_dense/postings?key=1")).status == 400
         @test HTTP.delete("$base_url/datasets/fl_dense/followers/group").status == 200
         @test HTTP.delete("$base_url/datasets/fl_dense").status == 200
@@ -131,44 +131,44 @@ using JSON3
         # The follower commands of similarity-search-ctl (phase 5b) call the routes above.
         port = string(HTTP.URI(base_url).port)
         ctl(args...) = _run_ctl(String["--port", port, (string(a) for a in args)...])
-        @test HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "fl_ctl", "index_type" => "bm25_invfile"))).status == 201
-        @test HTTP.post("$base_url/datasets/fl_ctl/append", [], JSON3.write(Dict("items" => docs[1:60]))).status == 200
+        @test HTTP.post("$base_url/datasets", [], JSON.json(Dict("id" => "fl_ctl", "index_type" => "bm25_invfile"))).status == 201
+        @test HTTP.post("$base_url/datasets/fl_ctl/append", [], JSON.json(Dict("items" => docs[1:60]))).status == 200
         code, out = ctl("follower-create", "--dataset", "fl_ctl", "--name", "kw", "--kind", "keyword", "--source", "keywords",
                         "--policy", "manual")
-        @test code == 0 && JSON3.read(out).position == 60
+        @test code == 0 && JSON.parse(out).position == 60
         code, out = ctl("follower-create", "--dataset", "fl_ctl", "--name", "x", "--kind", "partition", "--source", "keywords",
                         "--distance", "dice")
         @test code == 2 && occursin("--distance applies to a keyword follower", out)
         code, out = ctl("follower-create", "--dataset", "fl_ctl", "--name", "kw", "--kind", "keyword", "--source", "keywords")
         @test code == 1 && occursin("400", out)
-        @test HTTP.post("$base_url/datasets/fl_ctl/append", [], JSON3.write(Dict("items" => docs[61:80]))).status == 200
+        @test HTTP.post("$base_url/datasets/fl_ctl/append", [], JSON.json(Dict("items" => docs[61:80]))).status == 200
         code, out = ctl("followers", "--dataset", "fl_ctl")
-        @test code == 0 && only(JSON3.read(out).followers).lag == 20
+        @test code == 0 && only(JSON.parse(out).followers).lag == 20
         code, out = ctl("follower-sync", "--dataset", "fl_ctl", "--name", "kw")
-        @test code == 0 && JSON3.read(out).processed == 20
+        @test code == 0 && JSON.parse(out).processed == 20
         code, out = ctl("follower-rebuild", "--dataset", "fl_ctl", "--name", "kw")
-        @test code == 0 && JSON3.read(out).position == 80
+        @test code == 0 && JSON.parse(out).position == 80
         @test first(ctl("follower-delete", "--dataset", "fl_ctl", "--name", "kw")) == 0
         code, out = ctl("follower-delete", "--dataset", "fl_ctl", "--name", "kw")
         @test code == 1 && occursin("404", out)
         @test HTTP.delete("$base_url/datasets/fl_ctl").status == 200
-        @test HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "fl_ctl_dense", "index_type" => "exhaustive_search",
+        @test HTTP.post("$base_url/datasets", [], JSON.json(Dict("id" => "fl_ctl_dense", "index_type" => "exhaustive_search",
                                                                    "partition_by" => "group"))).status == 201
-        @test HTTP.post("$base_url/datasets/fl_ctl_dense/append", [], JSON3.write(Dict("items" => items))).status == 200
+        @test HTTP.post("$base_url/datasets/fl_ctl_dense/append", [], JSON.json(Dict("items" => items))).status == 200
         code, out = ctl("migrate-partitions", "--dataset", "fl_ctl_dense", "--name", "group", "--disjoint", "false")
-        @test code == 0 && JSON3.read(out).status == "migrated"
+        @test code == 0 && JSON.parse(out).status == "migrated"
         @test first(ctl("follower-delete", "--dataset", "fl_ctl_dense", "--name", "group")) == 0
         @test HTTP.delete("$base_url/datasets/fl_ctl_dense").status == 200
 
         # A follower that cannot process an item stops at it, and its status has the error. The
         # leader keeps the item, and the append answers 200 for it (CHANGELOG.md §5.15): an error of a
         # follower does not fail the call of the leader.
-        @test HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "fl_bad", "index_type" => "bm25_invfile"))).status == 201
-        @test HTTP.post("$base_url/datasets/fl_bad/append", [], JSON3.write(Dict("items" => docs[1:10]))).status == 200
+        @test HTTP.post("$base_url/datasets", [], JSON.json(Dict("id" => "fl_bad", "index_type" => "bm25_invfile"))).status == 201
+        @test HTTP.post("$base_url/datasets/fl_bad/append", [], JSON.json(Dict("items" => docs[1:10]))).status == 200
         post("datasets/fl_bad/followers", Dict("name" => "repo", "kind" => "partition", "source" => "meta:repo", "disjoint" => false))
         bad = merge(docs[11], Dict{String,Any}("repo" => 5))
-        resp = HTTP.post("$base_url/datasets/fl_bad/append", [], JSON3.write(Dict("items" => [bad])))
-        @test resp.status == 200 && JSON3.read(String(resp.body)).inserted == 1
+        resp = HTTP.post("$base_url/datasets/fl_bad/append", [], JSON.json(Dict("items" => [bad])))
+        @test resp.status == 200 && JSON.parse(String(resp.body)).inserted == 1
         st = get_("datasets/fl_bad/followers/repo")
         @test st.position == 10 && st.lag == 1 && occursin("item 11", st.error)
         @test get_("datasets/fl_bad").doc_count == 11

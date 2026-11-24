@@ -202,7 +202,7 @@ function _engine_call(f::Function)
     end
 end
 
-_body(req::HTTP.Request) = (b = String(req.body); isempty(b) ? Dict{String,Any}() : JSON3.read(codeunits(b), Dict{String,Any}))
+_body(req::HTTP.Request) = (b = String(req.body); isempty(b) ? Dict{String,Any}() : JSON.parse(codeunits(b); dicttype=Dict{String,Any}))
 
 "`POST /api/v1/datasets/{id}/followers`: creates a follower (CHANGELOG.md §5.12)."
 function handle_create_follower(req::HTTP.Request, app, id::String)

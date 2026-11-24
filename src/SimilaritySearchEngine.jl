@@ -1,6 +1,6 @@
 module SimilaritySearchEngine
 
-using JSON3
+using JSON
 using SimilaritySearch
 # Not exported by SimilaritySearch, and re-exported by this package below. Until 2026-11-20 it
 # was exported without this import, so `using SimilaritySearchEngine` did not define it.

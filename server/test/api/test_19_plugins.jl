@@ -1,17 +1,17 @@
 using Test
 using HTTP
-using JSON3
+using JSON
 
 # Plugins in the server (CHANGELOG.md §5.13, issue #5, phases 6a and 6b). `ensure_test_server` loads the test
 # plugin of `server/test/plugins/`, as `serve` loads `[plugins]` before it opens any dataset.
 @testset "19. Plugins" begin
     with_test_server() do base_url, workdir
-        post(path, body) = JSON3.read(String(HTTP.post("$base_url/$path", [], JSON3.write(body)).body))
-        get_(path) = JSON3.read(String(HTTP.get("$base_url/$path").body))
+        post(path, body) = JSON.parse(String(HTTP.post("$base_url/$path", [], JSON.json(body)).body))
+        get_(path) = JSON.parse(String(HTTP.get("$base_url/$path").body))
         failed(f) = try f(); nothing catch e; e.response end
         # `String(body)` empties the vector, and a response is read twice here.
-        kind_of(resp) = JSON3.read(String(copy(resp.body))).kind
-        message(resp) = JSON3.read(String(copy(resp.body))).error
+        kind_of(resp) = JSON.parse(String(copy(resp.body))).kind
+        message(resp) = JSON.parse(String(copy(resp.body))).error
 
         listed = only(filter(p -> p.name == "SSETestPlugin", get_("plugins").plugins))
         @test listed.key_sources == ["SSETestPlugin.decade"] && listed.follower_kinds == ["SSETestPlugin.key_counts"]
@@ -21,11 +21,11 @@ using JSON3
         data_path = joinpath(@__DIR__, "..", "..", "..", "test", "data", "frankenstein.jsonl")
         year(i) = 1960 + i
         docs = map(enumerate(readlines(data_path)[1:70])) do (i, line)
-            d = JSON3.read(line, Dict{String,Any})
+            d = JSON.parse(line; dicttype=Dict{String,Any})
             Dict{String,Any}("doc_id" => d["doc_id"], "text" => d["text"], "keywords" => d["keywords"], "year" => year(i))
         end
-        @test HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "pl_txt", "index_type" => "bm25_invfile"))).status == 201
-        @test HTTP.post("$base_url/datasets/pl_txt/append", [], JSON3.write(Dict("items" => docs[1:60]))).status == 200
+        @test HTTP.post("$base_url/datasets", [], JSON.json(Dict("id" => "pl_txt", "index_type" => "bm25_invfile"))).status == 201
+        @test HTTP.post("$base_url/datasets/pl_txt/append", [], JSON.json(Dict("items" => docs[1:60]))).status == 200
 
         # A partition follower over the key source of the plugin.
         f = post("datasets/pl_txt/followers", Dict("name" => "decade", "kind" => "partition",
@@ -44,17 +44,17 @@ using JSON3
         c = post("datasets/pl_txt/followers", Dict("name" => "counts", "source" => "keywords",
                  "kind" => Dict("name" => "SSETestPlugin.key_counts", "min_count" => 2)))
         @test c.kind == "KeyCounts" && c.plugin == "SSETestPlugin" && c.stats.items == 60
-        @test HTTP.post("$base_url/datasets/pl_txt/append", [], JSON3.write(Dict("items" => docs[61:70]))).status == 200
+        @test HTTP.post("$base_url/datasets/pl_txt/append", [], JSON.json(Dict("items" => docs[61:70]))).status == 200
         st = get_("datasets/pl_txt/followers/counts")
         @test st.position == 70 && st.synchronized && st.stats.items == 70
         @test get_("datasets/pl_txt/followers/decade").position == 70
         # The search routes call the functions of the engine, which do not know the kind.
         resp = failed(() -> HTTP.post("$base_url/datasets/pl_txt/followers/counts/search", [],
-                                      JSON3.write(Dict("keys" => ["Elizabeth"]))))
+                                      JSON.json(Dict("keys" => ["Elizabeth"]))))
         @test resp.status == 400 && kind_of(resp) == "UnsupportedOperation"
 
         # The errors of a wire name.
-        create(body) = failed(() -> HTTP.post("$base_url/datasets/pl_txt/followers", [], JSON3.write(body)))
+        create(body) = failed(() -> HTTP.post("$base_url/datasets/pl_txt/followers", [], JSON.json(body)))
         resp = create(Dict("name" => "x", "kind" => "partition", "source" => "Nope.decade"))
         @test resp.status == 404 && kind_of(resp) == "PluginNotLoaded" && occursin("[plugins.Nope]", message(resp))
         resp = create(Dict("name" => "x", "kind" => "partition", "source" => "SSETestPlugin.century"))
@@ -80,7 +80,7 @@ using JSON3
             @test !st.open && occursin("SSETestPlugin", st.error)
             @test !isempty(post("datasets/pl_txt/ftsearch", Dict("text" => query, "k" => 3)).results)
             resp = failed(() -> HTTP.post("$base_url/datasets/pl_txt/followers/decade=1990s/ftsearch", [],
-                                          JSON3.write(Dict("text" => query))))
+                                          JSON.json(Dict("text" => query))))
             @test resp.status == 404 && kind_of(resp) == "PluginNotLoaded"
         finally
             SimilaritySearchEngine.register_plugin!(mod)
@@ -93,10 +93,10 @@ using JSON3
         port = string(HTTP.URI(base_url).port)
         ctl(args...) = _run_ctl(String["--port", port, (string(a) for a in args)...])
         code, out = ctl("plugins")
-        @test code == 0 && "SSETestPlugin.key_counts" in only(filter(p -> p.name == "SSETestPlugin", JSON3.read(out).plugins)).follower_kinds
+        @test code == 0 && "SSETestPlugin.key_counts" in only(filter(p -> p.name == "SSETestPlugin", JSON.parse(out).plugins)).follower_kinds
         code, out = ctl("follower-create", "--dataset", "pl_txt", "--name", "counts2", "--kind", "SSETestPlugin.key_counts",
                         "--kind-options", "{\"min_count\": 3}", "--source", "keywords")
-        @test code == 0 && JSON3.read(out).kind == "KeyCounts"
+        @test code == 0 && JSON.parse(out).kind == "KeyCounts"
         code, out = ctl("follower-create", "--dataset", "pl_txt", "--name", "x", "--kind", "partition", "--source", "Nope.decade")
         @test code == 1 && occursin("404", out) && occursin("PluginNotLoaded", out)
 

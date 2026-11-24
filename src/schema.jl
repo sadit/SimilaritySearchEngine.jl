@@ -1,6 +1,6 @@
 module Schema
 
-using JSON3
+using JSON
 using Dates: DateTime
 using SparseArrays: SparseVector, sparsevec, nonzeros, nonzeroinds
 using ..Errors
@@ -243,43 +243,34 @@ StoredItem(record::MetadataRecord, payload, meta::Dict{String,Any}) =
 """
     encode_meta(meta) -> String
 
-JSON3-encodes `meta` (a `Dict`, a `Vector`, or any other JSON3-writable value),
-for storage in `Project`'s dedicated meta column family. Returns the `String`
-`JSON3.write` itself produces rather than converting it to a `Vector{UInt8}` --
-that conversion isn't a free reinterpretation, it's a real copy (confirmed
-empirically: `pointer` differs before/after, with allocation to match), so it'd
-just be paying twice to get back to bytes `JSON3.write` already builds internally
-before wrapping them as a `String`. No need to pay it at all here: `RocksDB.jl`'s
-own `put!` already accepts a plain `String` and converts it to bytes via
-`codeunits` (zero-copy) right before handing it to the C API.
+Encodes `meta` as JSON text (a `Dict`, a `Vector`, or any other value `JSON.json` writes),
+for storage in the meta column family of `Project`. Returns the `String` that `JSON.json`
+produces. It is not converted to a `Vector{UInt8}`: that conversion copies the bytes, and
+`put!` of `RocksDB.jl` accepts a `String` and reads its bytes with `codeunits`, without a copy.
 """
-encode_meta(meta) = JSON3.write(meta)
+encode_meta(meta) = JSON.json(meta)
 
 """
     decode_meta(bytes::Union{Vector{UInt8},Nothing}; lazy::Bool) -> Any
 
 Inverse of [`encode_meta`](@ref). `nothing`/empty input decodes to `nothing`.
 
-With `lazy=true` (the default), returns `JSON3`'s own lazy `Object`/`Array` view
-straight over `bytes` -- cheap to produce (confirmed empirically: allocates roughly
-as much as a full `Dict` parse just to index top-level keys, but nothing nested is
-materialized until actually accessed) and useful for a caller that only reads a
-field or two out of `meta`. This is *not* a free round-trip on write, though: writing
-a parsed `JSON3.Object` back out with `JSON3.write` still walks and reserializes
-every value -- empirically no cheaper than writing a plain `Dict` (slightly more
-allocation, in fact). A caller that only needs to pass `meta` through unmodified
-(e.g. straight into an HTTP response body) should skip decoding entirely and reuse
-the raw `bytes` from storage directly -- that's the only actually-zero-cost path.
+With `lazy=true` (the default), returns what `JSON.parse` returns: a `JSON.Object{String,Any}`
+for a JSON object, a `Vector{Any}` for an array. A `JSON.Object` is an `AbstractDict` with
+`String` keys. It also accepts a `Symbol` key and property access, so `meta["year"]`,
+`meta[:year]` and `meta.year` are the same value. It keeps the order of the keys, and a lookup
+by key reads the keys in order, so it is intended for a `meta` with tens of keys, not thousands.
+The name `lazy` is from the JSON3 implementation, whose value read the nested values on access;
+this value is complete when it is returned, and it holds no reference to `bytes`.
 
-Pass `lazy=false` for a fully materialized `Dict{String,Any}`/`Vector{Any}` instead,
-when the caller needs to mutate or merge `meta` rather than just read from it.
+A caller that passes `meta` on without reading it (for example into the body of an HTTP
+response) should not decode it: [`raw_meta`](@ref) returns the stored text.
+
+Pass `lazy=false` for a `Dict{String,Any}`, when the caller changes or merges `meta`.
 """
 function decode_meta(bytes::Vector{UInt8}; lazy::Bool)
     isempty(bytes) && return nothing
-    # Bytes, never a `String`: given a `String` shorter than 255 bytes, `JSON3.read` first asks
-    # `isfile` of it and reads the file when one exists. The lazy view keeps a reference to the
-    # buffer it parsed, so it gets a copy; a `Dict` holds its own strings and needs none.
-    lazy ? JSON3.read(copy(bytes)) : JSON3.read(bytes, Dict{String,Any})
+    lazy ? JSON.parse(bytes) : JSON.parse(bytes; dicttype=Dict{String,Any})
 end
 decode_meta(::Nothing; lazy::Bool) = nothing
 
@@ -289,7 +280,7 @@ decode_meta(::Nothing; lazy::Bool) = nothing
 The actually-zero-cost path for a caller that only forwards `meta` unmodified (a
 fetch/HTTP handler splicing it into a hand-built response, or writing it straight
 out as a response body) and never inspects its fields -- unlike either
-[`decode_meta`](@ref) mode, this never touches JSON3 at all: no lazy `Object`, no
+[`decode_meta`](@ref) mode, this never parses the JSON: no `Object`, no
 `Dict`, nothing parsed or walked, just the stored bytes handed back as a `String`.
 
 `String(::Vector{UInt8})` takes ownership of `bytes` and empties it as a side

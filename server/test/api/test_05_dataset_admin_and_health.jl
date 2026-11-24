@@ -1,6 +1,6 @@
 using Test
 using HTTP
-using JSON3
+using JSON
 
 @testset "5. Dataset Administration and Health Tests" begin
     with_test_server() do base_url, workdir
@@ -17,15 +17,15 @@ using JSON3
         @test occursin("simsearch_threads", metrics_body)
 
         # 2. Create + populate a dataset to exercise the admin endpoints against.
-        resp = HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "admin_test_ds", "index_type" => "searchgraph", "distance" => "L2")))
+        resp = HTTP.post("$base_url/datasets", [], JSON.json(Dict("id" => "admin_test_ds", "index_type" => "searchgraph", "distance" => "L2")))
         @test resp.status == 201
 
         data_path = joinpath(@__DIR__, "..", "..", "..", "test", "data", "frankenstein.jsonl")
-        docs = [JSON3.read(line) for line in readlines(data_path)[1:5]]
-        resp = HTTP.post("$base_url/datasets/admin_test_ds/append", [], JSON3.write(Dict("items" => docs)))
+        docs = [JSON.parse(line) for line in readlines(data_path)[1:5]]
+        resp = HTTP.post("$base_url/datasets/admin_test_ds/append", [], JSON.json(Dict("items" => docs)))
         @test resp.status == 200
 
-        resp = HTTP.post("$base_url/datasets/admin_test_ds/delete", [], JSON3.write(Dict("_id" => 1)))
+        resp = HTTP.post("$base_url/datasets/admin_test_ds/delete", [], JSON.json(Dict("_id" => 1)))
         @test resp.status == 200
 
         # 2b. /metrics now carries the counters the operation log feeds (CHANGELOG.md §5.8): the
@@ -39,7 +39,7 @@ using JSON3
         # 3. GET /api/v1/datasets lists it with live stats merged in.
         resp = HTTP.get("$base_url/datasets")
         @test resp.status == 200
-        listed = JSON3.read(String(resp.body)).datasets
+        listed = JSON.parse(String(resp.body)).datasets
         entry = only(filter(d -> d.id == "admin_test_ds", listed))
         @test entry.index_kind == "searchgraph"
         @test entry.distance == "L2"
@@ -51,7 +51,7 @@ using JSON3
         # 4. GET /api/v1/datasets/{id} single-dataset detail matches the list entry.
         resp = HTTP.get("$base_url/datasets/admin_test_ds")
         @test resp.status == 200
-        detail = JSON3.read(String(resp.body))
+        detail = JSON.parse(String(resp.body))
         @test detail.doc_count == 5
         @test detail.tombstone_ratio ≈ 0.2
         @test !haskey(detail, :join_group)
@@ -65,7 +65,7 @@ using JSON3
         @test resp.status == 404
 
         resp = try
-            HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "../escape")))
+            HTTP.post("$base_url/datasets", [], JSON.json(Dict("id" => "../escape")))
         catch e
             e.response
         end
@@ -74,7 +74,7 @@ using JSON3
         # 6. /exists reports existence + tombstone status without a full metadata fetch.
         resp = HTTP.get("$base_url/datasets/admin_test_ds/exists?ids=1,2,999,frankenstein_2")
         @test resp.status == 200
-        results = JSON3.read(String(resp.body)).results
+        results = JSON.parse(String(resp.body)).results
         by_id = Dict(r.id => r for r in results)
         @test by_id["1"].exists == true && by_id["1"].deleted == true
         @test by_id["2"].exists == true && by_id["2"].deleted == false
@@ -85,12 +85,12 @@ using JSON3
         # log`): Telemetry.log_operation is now wired into search/append/ftsearch/delete,
         # so this dataset's append+delete above (plus a search here) already left real
         # op_log entries -- newest first, real distance-evaluation/timing/token fields.
-        resp = HTTP.post("$base_url/datasets/admin_test_ds/search", ["Authorization" => "Bearer admin-log-test-token"], JSON3.write(Dict("vector" => docs[1].vector, "k" => 3)))
+        resp = HTTP.post("$base_url/datasets/admin_test_ds/search", ["Authorization" => "Bearer admin-log-test-token"], JSON.json(Dict("vector" => docs[1].vector, "k" => 3)))
         @test resp.status == 200
 
         resp = HTTP.get("$base_url/datasets/admin_test_ds/log")
         @test resp.status == 200
-        log_body = JSON3.read(String(resp.body))
+        log_body = JSON.parse(String(resp.body))
         @test log_body.total == 3
         @test [e.operation for e in log_body.entries] == ["search", "delete", "append"] # newest first
 
@@ -122,7 +122,7 @@ using JSON3
 
         resp = HTTP.get("$base_url/datasets/admin_test_ds/log?offset=1&limit=1")
         @test resp.status == 200
-        page = JSON3.read(String(resp.body))
+        page = JSON.parse(String(resp.body))
         @test length(page.entries) == 1
         @test page.entries[1].operation == "delete"
 

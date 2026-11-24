@@ -1,5 +1,5 @@
 using Test
-using JSON3
+using JSON
 
 # The storage of a dense dataset in `similarity-search` (CHANGELOG.md §5.14, phase 7b), run in this
 # process: `build --storage`, `describe`, `searchbatch`, `rebuild`, `dump` and `load`.
@@ -7,25 +7,25 @@ using JSON3
     workdir = mktempdir()
     w = ("--workdir", workdir)
     data_path = joinpath(@__DIR__, "..", "..", "..", "test", "data", "frankenstein.jsonl")
-    rows = [JSON3.read(l, Dict{String,Any}) for l in readlines(data_path)[1:300]]
+    rows = [JSON.parse(l; dicttype=Dict{String,Any}) for l in readlines(data_path)[1:300]]
     input = tempname() * ".jsonl"
-    write(input, join([JSON3.write(Dict("doc_id" => r["doc_id"], "vector" => r["vector"])) for r in rows], "\n"))
+    write(input, join([JSON.json(Dict("doc_id" => r["doc_id"], "vector" => r["vector"])) for r in rows], "\n"))
     queries = tempname() * ".jsonl"
     picked = (3, 40, 200)
-    write(queries, join([JSON3.write(Dict("vector" => rows[i]["vector"])) for i in picked], "\n"))
+    write(queries, join([JSON.json(Dict("vector" => rows[i]["vector"])) for i in picked], "\n"))
 
     cli(args...) = _run_cli(String[string(a) for a in args])
     function search_ids(dataset, k)
         out = tempname()
         code, printed = cli("searchbatch", "--dataset", dataset, "--queries", queries, "--output", out, "--k", k, w...)
         code == 0 || return (code, printed)
-        return [collect(JSON3.read(l).ids) for l in readlines(out)]
+        return [collect(JSON.parse(l).ids) for l in readlines(out)]
     end
     function describe(dataset)
         out = tempname()
         code, printed = cli("describe", "--dataset", dataset, "--output", out, w...)
         code == 0 || return (code, printed)
-        return JSON3.read(read(out, String))
+        return JSON.parse(read(out, String))
     end
     build(name, storage) = cli("build", "--dataset", name, "--input", input, "--index-kind", "exhaustive_search",
                                "--storage", storage, w...)

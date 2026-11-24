@@ -17,7 +17,7 @@ import SimilaritySearchServer.Telemetry as Telemetry
 import SimilaritySearchServer.Server as Server
 using SimilaritySearchServer: resolve_batch_threads_pct
 using HTTP
-using JSON3
+using JSON
 
 @testset "the wire's index kinds map onto project specs" begin
     @test parse_index_kind("searchgraph") === :dense
@@ -67,7 +67,7 @@ end
     for st in (Float32Vectors(), Quantized(SQ(2; range=GlobalRange(minmax=(-2, 2))); rotation=HadamardRotation()),
                Quantized(SQ(4; range=PerVectorRange())), spec(sk).storage)
         d = S.storage_dict(st)
-        @test S.parse_storage(JSON3.read(JSON3.write(d), Dict{String,Any})) == st
+        @test S.parse_storage(JSON.parse(JSON.json(d); dicttype=Dict{String,Any})) == st
     end
     @test S.storage_dict(Sketched())["hsel"] == 16 * 256
     # Refused with InvalidOption, which the handler answers with a 400.
@@ -102,7 +102,7 @@ end
     for (err, status) in cases
         resp = engine_error_response(err)
         @test resp.status == status
-        body = JSON3.read(String(resp.body), Dict{String, Any})
+        body = JSON.parse(String(resp.body); dicttype=Dict{String,Any})
         # The concrete type travels too, for a client that wants to branch without parsing prose
         @test body["kind"] == string(nameof(typeof(err)))
         @test !isempty(body["error"])
@@ -193,15 +193,16 @@ end
 end
 
 @testset "a request body is parsed as JSON, never opened as a path" begin
-    # Given a `String` shorter than 255 bytes, `JSON3.read` asks `isfile` of it first and parses
-    # the file when one exists. A body that names a JSON file in the working directory would then
+    # JSON3, which the server used before, asked `isfile` of a `String` shorter than 255 bytes
+    # and parsed the file when one existed. `JSON.parse` never reads a file, and this test keeps
+    # that property verified. A body that names a JSON file in the working directory would then
     # be answered with that file's contents: here, a permission decided by a file instead of by
     # the request, and a dataset created from a file.
     workdir = mktempdir()
     app = AppState(workdir, nothing, nothing, Tokens.open_token_manager(workdir),
                    Dict{String, SSE.EmbeddedEngine}(), ReentrantLock(), false)
     cd(mktempdir()) do
-        write("req.json", JSON3.write(Dict("dataset" => "corpus_es", "id" => "from_file",
+        write("req.json", JSON.json(Dict("dataset" => "corpus_es", "id" => "from_file",
                                            "index_type" => "searchgraph")))
         req = HTTP.Request("POST", "/api/v1/datasets", [], "req.json")
         # Not JSON, so no dataset is named, and the permission required is the one over all.
@@ -234,7 +235,7 @@ end
     # because its holder is a legitimate caller.
     resp = _guard(ok, request(reader), app, :write, "corpus_es")
     @test resp.status == 403
-    @test JSON3.read(String(resp.body)).required == "write:corpus_es"
+    @test JSON.parse(String(resp.body)).required == "write:corpus_es"
 
     @test _guard(ok, request(reader), app, :read, "corpus_es").status == 200
     @test _guard(ok, request(writer), app, :write, "corpus_es").status == 200

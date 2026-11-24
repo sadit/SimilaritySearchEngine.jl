@@ -683,7 +683,7 @@
     "href": "server/julia-client.html",
     "title": "Julia Client",
     "section": "",
-    "text": "SimilaritySearchClient is a Julia package in server/julia/ of this repository. It sends requests to the HTTP API of a running similarity-search-serve process. It depends on HTTP.jl and JSON3 only. It does not load the engine, SimilaritySearch, TextSearch or RocksDB, so it installs on a computer that has none of them.\nThe functions have the names, the arguments and the result types of the engine’s functions. A script written for the engine runs against a remote server when it opens its project with a Connection instead of a directory. Section 3 lists the differences."
+    "text": "SimilaritySearchClient is a Julia package in server/julia/ of this repository. It sends requests to the HTTP API of a running similarity-search-serve process. It depends on HTTP.jl and JSON.jl only. It does not load the engine, SimilaritySearch, TextSearch or RocksDB, so it installs on a computer that has none of them.\nThe functions have the names, the arguments and the result types of the engine’s functions. A script written for the engine runs against a remote server when it opens its project with a Connection instead of a directory. Section 3 lists the differences."
   },
   {
     "objectID": "server/julia-client.html#installation",

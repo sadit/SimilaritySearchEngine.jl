@@ -1,5 +1,5 @@
 using Test
-using JSON3
+using JSON
 using SimilaritySearchEngine
 
 @testset "CLI Dump/Load Tests" begin
@@ -20,7 +20,7 @@ using SimilaritySearchEngine
     @test isfile(joinpath(bundle_dense, "dataset.jsonl"))
     @test isdir(joinpath(bundle_dense, "project"))
     @test isfile(joinpath(bundle_dense, "manifest.json"))
-    manifest = JSON3.read(read(joinpath(bundle_dense, "manifest.json"), String))
+    manifest = JSON.parse(read(joinpath(bundle_dense, "manifest.json"), String))
     @test manifest.project_id == "dump_dense"
     @test manifest.index_kind == "searchgraph"
     @test manifest.record_count == 724
@@ -30,14 +30,14 @@ using SimilaritySearchEngine
     cmd_load = `julia --project=$proj $cli_script load --bundle $bundle_dense --dataset dump_dense_restored --workdir $workdir`
     @test success(cmd_load)
     @test isdir(joinpath(workdir, "datasets", "dump_dense_restored"))
-    @test JSON3.read(read(joinpath(workdir, "datasets", "dump_dense_restored", "descriptor.json"))).max_k == 250
+    @test JSON.parse(read(joinpath(workdir, "datasets", "dump_dense_restored", "descriptor.json"))).max_k == 250
 
     desc_orig = tempname()
     desc_restored = tempname()
     @test success(`julia --project=$proj $cli_script describe --dataset dump_dense --workdir $workdir --output $desc_orig`)
     @test success(`julia --project=$proj $cli_script describe --dataset dump_dense_restored --workdir $workdir --output $desc_restored`)
-    d1 = JSON3.read(read(desc_orig, String))
-    d2 = JSON3.read(read(desc_restored, String))
+    d1 = JSON.parse(read(desc_orig, String))
+    d2 = JSON.parse(read(desc_restored, String))
     @test d1.doc_count == d2.doc_count == 724
     @test d1.max_k == d2.max_k == 250
     @test d1.tombstone_count == d2.tombstone_count == 0
@@ -51,7 +51,7 @@ using SimilaritySearchEngine
 
     lines = readlines(joinpath(bundle_dense, "dataset.jsonl"))
     @test length(lines) == 724 && !isfile(joinpath(bundle_dense, "dataset.avro"))
-    first_item = JSON3.read(lines[1])
+    first_item = JSON.parse(lines[1])
     @test first_item._id == 1 && haskey(first_item, :meta) && first_item.deleted == false
     first_restored_item(id) = begin
         h = SimilaritySearchEngine.open_project(joinpath(workdir, "datasets"), id; read_only=true)
@@ -63,9 +63,9 @@ using SimilaritySearchEngine
     # A line edited with a new `meta` is restored by `load`.
     edited_bundle = joinpath(workdir, "bundle_edited")
     cp(bundle_dense, edited_bundle)
-    edited = JSON3.read(lines[1], Dict{String,Any})
+    edited = JSON.parse(lines[1]; dicttype=Dict{String,Any})
     edited["meta"] = Dict("note" => "edited")
-    write(joinpath(edited_bundle, "dataset.jsonl"), join(vcat(JSON3.write(edited), lines[2:end]), "\n") * "\n")
+    write(joinpath(edited_bundle, "dataset.jsonl"), join(vcat(JSON.json(edited), lines[2:end]), "\n") * "\n")
     code, out = _run_cli(["load", "--bundle", edited_bundle, "--dataset", "dump_edited", "--workdir", workdir])
     @test code == 0 && occursin("724 line(s)", out)
     @test first_restored_item("dump_edited").meta == Dict("note" => "edited")
@@ -100,7 +100,7 @@ using SimilaritySearchEngine
     bundle_empty = joinpath(workdir, "bundle_empty")
     @test first(_run_cli(["dump", "--dataset", "dump_empty", "--workdir", workdir, "--output", bundle_empty])) == 0
     @test filesize(joinpath(bundle_empty, "dataset.jsonl")) == 0
-    @test JSON3.read(read(joinpath(bundle_empty, "manifest.json"), String)).record_count == 0
+    @test JSON.parse(read(joinpath(bundle_empty, "manifest.json"), String)).record_count == 0
     @test first(_run_cli(["load", "--bundle", bundle_empty, "--dataset", "dump_empty_restored", "--workdir", workdir])) == 0
     @test isdir(joinpath(workdir, "datasets", "dump_empty_restored"))
 
@@ -108,7 +108,7 @@ using SimilaritySearchEngine
     @test success(`julia --project=$proj $cli_script searchbatch --dataset dump_dense_restored --queries $data_path --output $out_search --k 5 --workdir $workdir`)
     lines = readlines(out_search)
     @test length(lines) > 0
-    @test length(JSON3.read(lines[1]).ids) > 0
+    @test length(JSON.parse(lines[1]).ids) > 0
 
     # --- Text (bm25_invfile) round-trip ------------------------------------------
 
@@ -117,12 +117,12 @@ using SimilaritySearchEngine
 
     bundle_lex = joinpath(workdir, "bundle_lex")
     @test success(`julia --project=$proj $cli_script dump --dataset dump_lex --workdir $workdir --output $bundle_lex`)
-    @test JSON3.read(read(joinpath(bundle_lex, "manifest.json"), String)).max_k == 100
+    @test JSON.parse(read(joinpath(bundle_lex, "manifest.json"), String)).max_k == 100
     @test success(`julia --project=$proj $cli_script load --bundle $bundle_lex --dataset dump_lex_restored --workdir $workdir`)
 
     desc_lex_restored = tempname()
     @test success(`julia --project=$proj $cli_script describe --dataset dump_lex_restored --workdir $workdir --output $desc_lex_restored`)
-    dl = JSON3.read(read(desc_lex_restored, String))
+    dl = JSON.parse(read(desc_lex_restored, String))
     @test dl.kind == "bm25_invfile"
     @test dl.doc_count == 724
     @test dl.vocab.vocsize > 0

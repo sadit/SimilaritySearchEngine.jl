@@ -350,26 +350,26 @@ end
     P = SimilaritySearchEngine.Persistence
     mktempdir() do dir
         path = joinpath(dir, "dataset.jsonl")
-        meta = JSON3.write(Dict("year" => 2001, "tags" => ["a", "b"], "title" => "línea \"uno\"\nsegunda"))
+        meta = JSON.json(Dict("year" => 2001, "tags" => ["a", "b"], "title" => "línea \"uno\"\nsegunda"))
         records = [P.DumpRecord(Int32(1), 1, "d1", ["gato"], String[], meta, false),
                    P.DumpRecord(Int32(2), 1, nothing, String[], ["r1", "r2"], nothing, true)]
         P.write_dump_records(path, records)
         lines = readlines(path)
         @test length(lines) == 2
         # `meta` is an object in the file, not a string, and each line is a JSON object.
-        first_line = JSON3.read(lines[1])
+        first_line = JSON.parse(lines[1])
         @test first_line.meta.year == 2001 && first_line.meta.title == "línea \"uno\"\nsegunda"
-        @test JSON3.read(lines[2]).doc_id === nothing && JSON3.read(lines[2]).deleted === true
+        @test JSON.parse(lines[2]).doc_id === nothing && JSON.parse(lines[2]).deleted === true
 
         back = P.read_dump_records(path)
         @test [r._id for r in back] == Int32[1, 2] && back[2].doc_id === nothing && back[2].meta === nothing
         @test back[1].keywords == ["gato"] && back[2].refs == ["r1", "r2"] && back[2].deleted && !back[1].deleted
-        @test JSON3.read(back[1].meta, Dict{String,Any}) == JSON3.read(meta, Dict{String,Any})
+        @test JSON.parse(back[1].meta; dicttype=Dict{String,Any}) == JSON.parse(meta; dicttype=Dict{String,Any})
 
         # A line edited by hand, a blank line, and a line without `schema_version`.
         write(path, """{"_id":1,"doc_id":"d1","keywords":[],"refs":[],"meta":{"year":1999}}\n\n""")
         edited = only(P.read_dump_records(path))
-        @test edited.schema_version == 1 && JSON3.read(edited.meta).year == 1999
+        @test edited.schema_version == 1 && JSON.parse(edited.meta).year == 1999
 
         # An empty project writes an empty file, which reads as no records.
         P.write_dump_records(path, P.DumpRecord[])

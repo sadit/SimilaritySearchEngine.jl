@@ -1,23 +1,23 @@
 using Test
 using HTTP
-using JSON3
+using JSON
 
 @testset "9. CLI describe/rebuild against an HTTP-created dataset with real soft-deletes" begin
     with_test_server() do base_url, workdir
-        resp = HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "rebuild_http_ds", "index_type" => "searchgraph", "distance" => "L2")))
+        resp = HTTP.post("$base_url/datasets", [], JSON.json(Dict("id" => "rebuild_http_ds", "index_type" => "searchgraph", "distance" => "L2")))
         @test resp.status == 201
 
         data_path = joinpath(@__DIR__, "..", "..", "..", "test", "data", "frankenstein.jsonl")
-        docs = [JSON3.read(line) for line in readlines(data_path)[1:20]]
-        resp = HTTP.post("$base_url/datasets/rebuild_http_ds/append", [], JSON3.write(Dict("items" => docs)))
+        docs = [JSON.parse(line) for line in readlines(data_path)[1:20]]
+        resp = HTTP.post("$base_url/datasets/rebuild_http_ds/append", [], JSON.json(Dict("items" => docs)))
         @test resp.status == 200
-        @test JSON3.read(String(resp.body)).inserted == 20
+        @test JSON.parse(String(resp.body)).inserted == 20
 
         # Soft-delete 3 of the 20 items over HTTP -- this is the only way to create a
         # tombstone at all (there's no CLI delete command). handle_delete_item now resaves
         # the snapshot precisely so a separate CLI process (describe/rebuild below) can see it.
         for doc_id in (2, 5, 11)
-            resp = HTTP.post("$base_url/datasets/rebuild_http_ds/delete", [], JSON3.write(Dict("_id" => doc_id)))
+            resp = HTTP.post("$base_url/datasets/rebuild_http_ds/delete", [], JSON.json(Dict("_id" => doc_id)))
             @test resp.status == 200
         end
 
@@ -32,7 +32,7 @@ using JSON3
         desc_out = tempname()
         cmd_describe = `julia --project=$proj $cli_script describe --dataset rebuild_http_ds --workdir $workdir --output $desc_out`
         @test success(cmd_describe)
-        desc = JSON3.read(read(desc_out, String))
+        desc = JSON.parse(read(desc_out, String))
         @test desc.doc_count == 20
         @test desc.tombstone_count == 3
         @test desc.tombstone_ratio ≈ 0.15
@@ -54,7 +54,7 @@ using JSON3
         desc_out2 = tempname()
         cmd_describe2 = `julia --project=$proj $cli_script describe --dataset rebuild_http_ds --workdir $workdir --output $desc_out2`
         @test success(cmd_describe2)
-        desc2 = JSON3.read(read(desc_out2, String))
+        desc2 = JSON.parse(read(desc_out2, String))
         @test desc2.doc_count == 17
         @test desc2.tombstone_count == 0
 
@@ -65,7 +65,7 @@ using JSON3
         @test success(cmd_search)
         lines = readlines(out_file)
         @test length(lines) > 0
-        parsed = JSON3.read(lines[1])
+        parsed = JSON.parse(lines[1])
         @test 0 < length(parsed.ids) <= 5
     end
 end

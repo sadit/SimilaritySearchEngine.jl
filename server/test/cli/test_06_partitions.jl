@@ -1,5 +1,5 @@
 using Test
-using JSON3
+using JSON
 
 # `build --partition-by`, `searchbatch --partition`, and a `rebuild` that keeps the partition
 # field (CHANGELOG.md §5.9).
@@ -12,20 +12,20 @@ using JSON3
     input = tempname() * ".jsonl"
     open(input, "w") do io
         for (i, line) in enumerate(readlines(data_path)[1:200])
-            d = JSON3.read(line, Dict{String,Any})
-            println(io, JSON3.write(Dict("doc_id" => d["doc_id"], "text" => d["text"],
+            d = JSON.parse(line; dicttype=Dict{String,Any})
+            println(io, JSON.json(Dict("doc_id" => d["doc_id"], "text" => d["text"],
                                          "repo" => i % 3 == 0 ? "tres" : "otro")))
         end
     end
     queries = tempname() * ".jsonl"
-    write(queries, join([JSON3.write(Dict("text" => JSON3.read(l)["text"])) for l in readlines(data_path)[1:5]], "\n"))
+    write(queries, join([JSON.json(Dict("text" => JSON.parse(l)["text"])) for l in readlines(data_path)[1:5]], "\n"))
 
     @test success(`julia --project=$proj $cli_script build --dataset part_cli --input $input --index-kind bm25_invfile --partition-by repo --workdir $workdir`)
 
     function partition_ids()
         out = tempname()
         @test success(`julia --project=$proj $cli_script searchbatch --dataset part_cli --queries $queries --output $out --k 5 --partition tres --workdir $workdir`)
-        [collect(JSON3.read(l).ids) for l in readlines(out)]
+        [collect(JSON.parse(l).ids) for l in readlines(out)]
     end
     before = partition_ids()
     @test all(ids -> !isempty(ids) && all(id -> id % 3 == 0, ids), before)
@@ -47,24 +47,24 @@ end
     data_path = joinpath(@__DIR__, "..", "..", "..", "test", "data", "frankenstein.jsonl")
     cli_script = joinpath(@__DIR__, "..", "..", "src", "apps", "similarity-search.jl")
     proj = joinpath(@__DIR__, "..", "..")
-    rows = [JSON3.read(l, Dict{String,Any}) for l in readlines(data_path)[1:300]]
+    rows = [JSON.parse(l; dicttype=Dict{String,Any}) for l in readlines(data_path)[1:300]]
 
     input = tempname() * ".jsonl"
     open(input, "w") do io
         for (i, d) in enumerate(rows)
-            println(io, JSON3.write(Dict("doc_id" => d["doc_id"], "vector" => d["vector"],
+            println(io, JSON.json(Dict("doc_id" => d["doc_id"], "vector" => d["vector"],
                                          "repo" => i % 3 == 0 ? "tres" : "otro")))
         end
     end
     queries = tempname() * ".jsonl"
-    write(queries, join([JSON3.write(Dict("vector" => d["vector"])) for d in rows[1:5]], "\n"))
+    write(queries, join([JSON.json(Dict("vector" => d["vector"])) for d in rows[1:5]], "\n"))
 
     # "otro" (200 items) reaches the threshold and has a graph; "tres" (100) is scanned.
     @test success(`julia --project=$proj $cli_script build --dataset dense_cli --input $input --index-kind searchgraph --partition-by repo --partition-graph-min 150 --workdir $workdir`)
     function partition_ids(p)
         out = tempname()
         @test success(`julia --project=$proj $cli_script searchbatch --dataset dense_cli --queries $queries --output $out --k 5 --partition $p --workdir $workdir`)
-        [collect(JSON3.read(l).ids) for l in readlines(out)]
+        [collect(JSON.parse(l).ids) for l in readlines(out)]
     end
     for (p, inp) in (("tres", id -> id % 3 == 0), ("otro", id -> id % 3 != 0))
         ids = partition_ids(p)

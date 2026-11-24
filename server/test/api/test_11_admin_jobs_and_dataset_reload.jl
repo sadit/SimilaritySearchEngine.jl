@@ -1,7 +1,7 @@
 using SimilaritySearchEngine
 using Test
 using HTTP
-using JSON3
+using JSON
 using Dates
 
 @testset "11. Admin job lifecycle (block/resume/kill/gc) + single-dataset unload/reload" begin
@@ -82,9 +82,9 @@ using Dates
     @test first(Jobs.get_job(job_mgr, failed_job)) == Jobs.Failed
 
     # A large retention should leave both finished jobs (too recent to purge) untouched.
-    resp = Server.handle_jobs_gc(HTTP.Request("POST", "/dummy", [], JSON3.write(Dict("retention_seconds" => 999_999))), app2)
+    resp = Server.handle_jobs_gc(HTTP.Request("POST", "/dummy", [], JSON.json(Dict("retention_seconds" => 999_999))), app2)
     @test resp.status == 200
-    body = JSON3.read(String(resp.body))
+    body = JSON.parse(String(resp.body))
     @test isempty(body.jobs_purged)
     # The server has no result cursors since 2026-11-23 (CHANGELOG.md §5.16), so gc reports none.
     @test !haskey(body, :cursors_expired) && !haskey(body, :cursors_purged)
@@ -92,9 +92,9 @@ using Dates
     @test first(Jobs.get_job(job_mgr, failed_job)) == Jobs.Failed
 
     # retention_seconds=0 makes every already-finished job immediately eligible.
-    resp = Server.handle_jobs_gc(HTTP.Request("POST", "/dummy", [], JSON3.write(Dict("retention_seconds" => 0))), app2)
+    resp = Server.handle_jobs_gc(HTTP.Request("POST", "/dummy", [], JSON.json(Dict("retention_seconds" => 0))), app2)
     @test resp.status == 200
-    body = JSON3.read(String(resp.body))
+    body = JSON.parse(String(resp.body))
     @test ok_job in body.jobs_purged
     @test failed_job in body.jobs_purged
     @test first(Jobs.get_job(job_mgr, ok_job)) === nothing
@@ -103,22 +103,22 @@ using Dates
     # --- single-dataset unload / reload (CHANGELOG.md §5.7's flagged open issue) ------
 
     with_test_server() do base_url, workdir
-        resp = HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "admin_reload_ds", "index_type" => "searchgraph", "distance" => "L2")))
+        resp = HTTP.post("$base_url/datasets", [], JSON.json(Dict("id" => "admin_reload_ds", "index_type" => "searchgraph", "distance" => "L2")))
         @test resp.status == 201
 
         data_path = joinpath(@__DIR__, "..", "..", "..", "test", "data", "frankenstein.jsonl")
-        docs = [JSON3.read(line) for line in readlines(data_path)[1:10]]
-        resp = HTTP.post("$base_url/datasets/admin_reload_ds/append", [], JSON3.write(Dict("items" => docs)))
+        docs = [JSON.parse(line) for line in readlines(data_path)[1:10]]
+        resp = HTTP.post("$base_url/datasets/admin_reload_ds/append", [], JSON.json(Dict("items" => docs)))
         @test resp.status == 200
 
-        resp = HTTP.post("$base_url/datasets/admin_reload_ds/delete", [], JSON3.write(Dict("_id" => 4)))
+        resp = HTTP.post("$base_url/datasets/admin_reload_ds/delete", [], JSON.json(Dict("_id" => 4)))
         @test resp.status == 200
 
         # Unload releases the RocksDB write lock (and drops the live engine)...
         resp = HTTP.post("$base_url/admin/datasets/admin_reload_ds/unload", [], "")
         @test resp.status == 200
         resp = HTTP.get("$base_url/datasets/admin_reload_ds")
-        @test JSON3.read(String(resp.body)).loaded == false
+        @test JSON.parse(String(resp.body)).loaded == false
 
         resp = try
             HTTP.post("$base_url/admin/datasets/admin_reload_ds/unload", [], "") # already unloaded
@@ -139,7 +139,7 @@ using Dates
         resp = HTTP.post("$base_url/admin/datasets/admin_reload_ds/reload", [], "")
         @test resp.status == 200
         resp = HTTP.get("$base_url/datasets/admin_reload_ds")
-        detail = JSON3.read(String(resp.body))
+        detail = JSON.parse(String(resp.body))
         @test detail.loaded == true
         @test detail.doc_count == 9
         @test detail.tombstone_count == 0

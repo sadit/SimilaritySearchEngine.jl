@@ -229,7 +229,7 @@ function allknn(h::RemoteProject; k::Integer=10, poll_interval::Real=1.0)
     rows = KnnRow[]
     for line in eachline(IOBuffer(text))
         isempty(strip(line)) && continue
-        r = JSON3.read(line)
+        r = JSON.parse(line)
         push!(rows, KnnRow(Int32(r[:id]), Int32.(r[:neighbors]), Float32.(r[:dists])))
     end
     return rows
@@ -242,7 +242,7 @@ end
 as [`allknn`](@ref) does.
 """
 function fft(h::RemoteProject, k::Integer; poll_interval::Real=1.0)
-    r = JSON3.read(_run_job(h.conn, "fft", poll_interval; dataset=h.id, k=Int(k)))
+    r = JSON.parse(_run_job(h.conn, "fft", poll_interval; dataset=h.id, k=Int(k)))
     return CenterSelectionResult(Int32.(r[:centers]), Int32.(r[:assign]), Float32.(r[:dists]),
                                  Float32(r[:covering]), Float32(r[:separation]),
                                  Int(r[:costdists]), Int(r[:costblocks]))
@@ -256,7 +256,7 @@ items kept, and `assign` gives the center of each item. It runs as a `neardup` j
 [`allknn`](@ref) does.
 """
 function neardup(h::RemoteProject, epsilon::Real; poll_interval::Real=1.0)
-    r = JSON3.read(_run_job(h.conn, "neardup", poll_interval; dataset=h.id, epsilon=Float64(epsilon)))
+    r = JSON.parse(_run_job(h.conn, "neardup", poll_interval; dataset=h.id, epsilon=Float64(epsilon)))
     return NearDupResult(Int32.(r[:centers]), Int32.(r[:assign]), Float32.(r[:dists]),
                          Float32(r[:covering]), Float32(r[:epsilon]), Int(r[:costdists]), Int(r[:costblocks]))
 end
@@ -269,7 +269,7 @@ the path of that directory and its manifest. The path is on the server's file sy
 does not travel over HTTP. [`load_project`](@ref) creates a dataset from it.
 """
 function dump_project(h::RemoteProject; poll_interval::Real=1.0)
-    r = JSON3.read(_run_job(h.conn, "dump", poll_interval; dataset=h.id))
+    r = JSON.parse(_run_job(h.conn, "dump", poll_interval; dataset=h.id))
     manifest = get(r, :manifest, nothing)
     return (bundle_dir=string(r[:bundle_dir]),
             manifest=manifest === nothing ? Dict{String,Any}() : _plain(manifest))

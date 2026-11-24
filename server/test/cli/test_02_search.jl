@@ -1,5 +1,5 @@
 using Test
-using JSON3
+using JSON
 
 @testset "CLI Search Tests" begin
     workdir = mktempdir()
@@ -18,7 +18,7 @@ using JSON3
 
     lines = readlines(out_file)
     @test length(lines) > 0
-    parsed = JSON3.read(lines[1])
+    parsed = JSON.parse(lines[1])
     @test haskey(parsed, :ids)
     @test haskey(parsed, :dists)
     @test length(parsed.ids) > 0
@@ -30,11 +30,11 @@ using JSON3
     cmd_build_lex = `julia --project=$proj $cli_script build --dataset lex_ds --input $data_path --index-kind bm25_invfile --workdir $workdir`
     @test success(cmd_build_lex)
     typo_queries = tempname()
-    write(typo_queries, JSON3.write(Dict("text" => "Frankenstien")) * "\n")
+    write(typo_queries, JSON.json(Dict("text" => "Frankenstien")) * "\n")
     searched(flags...) = begin
         out = tempname()
         ok = success(`julia --project=$proj $cli_script searchbatch --dataset lex_ds --queries $typo_queries --output $out --k 5 --workdir $workdir $flags`)
-        ok ? JSON3.read(only(readlines(out))).ids : nothing
+        ok ? JSON.parse(only(readlines(out))).ids : nothing
     end
     @test isempty(searched())
     @test !isempty(searched("--edit-correction"))

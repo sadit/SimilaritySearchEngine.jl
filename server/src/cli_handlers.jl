@@ -1,5 +1,5 @@
 # CLI operations
-using JSON3
+using JSON
 using TOML
 using HTTP
 using Dates
@@ -8,7 +8,7 @@ using Dates
 function _storage_arg(arg)
     arg === nothing && return nothing
     try
-        return JSON3.read(codeunits(arg), Dict{String,Any})
+        return JSON.parse(codeunits(arg); dicttype=Dict{String,Any})
     catch e
         e isa Union{ArgumentError,MethodError} || rethrow()
         throw(SSE.InvalidOption(:storage, "--storage is a JSON object, such as '{\"kind\": \"quantized\", \"bits\": 4}'; " *
@@ -90,7 +90,7 @@ function execute_build(cmd_args::Dict)
     items = SSE.AbstractItem[]
     for line in eachline(input_file)
         isempty(strip(line)) && continue
-        it = Server._typed_item(kind, JSON3.read(codeunits(line), Dict{String, Any}))
+        it = Server._typed_item(kind, JSON.parse(codeunits(line); dicttype=Dict{String,Any}))
         it === nothing || push!(items, it)
     end
 
@@ -100,7 +100,7 @@ function execute_build(cmd_args::Dict)
     # reopen it instead of reading a separate file. The sidecar of the server holds what the
     # project does not: `max_k` (CHANGELOG.md §5.16), which `dump` and `load` carry to a server.
     SSE.close_project!(handle)
-    write(joinpath(workdir, project_id, "descriptor.json"), JSON3.write(Dict(
+    write(joinpath(workdir, project_id, "descriptor.json"), JSON.json(Dict(
         "id" => project_id, "index_kind" => index_kind, "distance" => distance,
         "created_at" => string(now(UTC)), "edit_correction" => false, "max_k" => max_k)))
 
@@ -163,7 +163,7 @@ function execute_allknn(cmd_args::Dict)
 
     open(out_file, "w") do io
         for row in rows
-            println(io, JSON3.write(Dict("id" => Int(row._id),
+            println(io, JSON.json(Dict("id" => Int(row._id),
                                          "neighbors" => Int.(row.neighbors),
                                          "dists" => Float64.(row.dists))))
         end
@@ -199,7 +199,7 @@ function execute_fft(cmd_args::Dict)
     )
     SSE.close_project!(handle)
     open(out_file, "w") do io
-        println(io, JSON3.write(out_obj))
+        println(io, JSON.json(out_obj))
     end
 
     println("fft completed with $(length(R.centers)) centers. Saved to $out_file")
@@ -232,7 +232,7 @@ function execute_neardup(cmd_args::Dict)
     )
     SSE.close_project!(handle)
     open(out_file, "w") do io
-        println(io, JSON3.write(out_obj))
+        println(io, JSON.json(out_obj))
     end
 
     println("neardup completed: $(out_obj["duplicate_count"]) duplicate(s) found among $(length(R.assign)) item(s). Saved to $out_file")
@@ -255,7 +255,7 @@ function execute_hsp(cmd_args::Dict)
     query_vecs = Vector{Float32}[]
     for line in eachline(queries_file)
         isempty(strip(line)) && continue
-        item = JSON3.read(codeunits(line), Dict{String, Any})
+        item = JSON.parse(codeunits(line); dicttype=Dict{String,Any})
         haskey(item, "vector") || continue
         push!(query_vecs, convert(Vector{Float32}, item["vector"]))
     end
@@ -288,7 +288,7 @@ function execute_hsp(cmd_args::Dict)
                 push!(neighbor_ids, Int(hsp_ids[j, i]))
                 push!(neighbor_dists, Float64(hsp_dists[j, i]))
             end
-            println(io, JSON3.write(Dict("query" => i, "neighbors" => neighbor_ids, "dists" => neighbor_dists)))
+            println(io, JSON.json(Dict("query" => i, "neighbors" => neighbor_ids, "dists" => neighbor_dists)))
         end
     end
 
@@ -341,7 +341,7 @@ function execute_searchbatch(cmd_args::Dict)
     status = open(out_file, "w") do out_io
         for line in eachline(queries_file)
             isempty(strip(line)) && continue
-            item = JSON3.read(codeunits(line), Dict{String, Any})
+            item = JSON.parse(codeunits(line); dicttype=Dict{String,Any})
 
             hits = if target isa SSE.Follower
                 haskey(item, "keys") || continue
@@ -359,7 +359,7 @@ function execute_searchbatch(cmd_args::Dict)
             hits isa Cint && return hits
 
             out_obj = Dict("ids" => Int32[h._id for h in hits], "dists" => Float32[h.distance for h in hits])
-            println(out_io, JSON3.write(out_obj))
+            println(out_io, JSON.json(out_obj))
         end
         return Cint(0)
     end
@@ -389,7 +389,7 @@ function execute_closestpair(cmd_args::Dict)
 
     out_obj = Dict("i" => Int(i), "j" => Int(j), "dist" => Float64(dist))
     open(out_file, "w") do io
-        println(io, JSON3.write(out_obj))
+        println(io, JSON.json(out_obj))
     end
 
     println("closestpair completed: items $(Int(i)) and $(Int(j)) at distance $(Float64(dist)). Saved to $out_file")
@@ -475,7 +475,7 @@ function execute_describe(cmd_args::Dict)
     # sidecar of the server; a dataset without one has the default.
     descriptor_file = joinpath(handle.dir, "descriptor.json")
     desc["max_k"] = isfile(descriptor_file) ?
-        Server._descriptor_max_k(JSON3.read(read(descriptor_file), Dict{String, Any})) : Server.DEFAULT_MAX_K
+        Server._descriptor_max_k(JSON.parse(read(descriptor_file); dicttype=Dict{String,Any})) : Server.DEFAULT_MAX_K
 
     if is_text
         # The vocabulary and its out-of-vocabulary rates belong to the engine, which fitted
@@ -502,7 +502,7 @@ function execute_describe(cmd_args::Dict)
 
     SSE.close_project!(handle; compact=false)
 
-    out_json = JSON3.write(desc)
+    out_json = JSON.json(desc)
     if out_file === nothing
         println(out_json)
     else
@@ -551,7 +551,7 @@ function _live_items(handle)
     all_ids = Int[]
     live = Tuple{Int, Dict{String, Any}}[]
     for (_, v) in RocksDB.DBIterator(ds.db; cf=ds.cf_records)
-        record = JSON3.read(v, Schema.MetadataRecord)
+        record = JSON.parse(v, Schema.MetadataRecord)
         push!(all_ids, record._id)
         record._id in engine.deleted_ids && continue
         
@@ -742,13 +742,13 @@ function execute_dump(cmd_args::Dict)
     records = Persistence.DumpRecord[]
     # The keys of `cf_records` are big-endian `_id`s, so the lines come in the order of `_id`.
     for (_, v) in RocksDB.DBIterator(ds.db; cf=ds.cf_records)
-        record = JSON3.read(v, Schema.MetadataRecord)
+        record = JSON.parse(v, Schema.MetadataRecord)
         push!(records, Persistence.DumpRecord(record, Project.get_raw_meta(ds, record._id),
                                               record._id in engine.deleted_ids))
     end
 
     descriptor_file = joinpath(dir, "descriptor.json")
-    descriptor = isfile(descriptor_file) ? JSON3.read(read(descriptor_file), Dict{String, Any}) : nothing
+    descriptor = isfile(descriptor_file) ? JSON.parse(read(descriptor_file); dicttype=Dict{String,Any}) : nothing
     follower_names = [_follower_short_name(st.name) for st in SSE.followers(handle) if !st.missing]
 
     is_text = SSE.payload_kind(engine) === :text
@@ -794,7 +794,7 @@ function execute_dump(cmd_args::Dict)
         "followers" => follower_names,
         "dumped_at" => string(now(UTC)),
     )
-    write(joinpath(output_dir, "manifest.json"), JSON3.write(manifest))
+    write(joinpath(output_dir, "manifest.json"), JSON.json(manifest))
 
     println("Dump completed: $(length(records)) record(s) and $(length(follower_names)) follower(s) from '$project_id'. Saved to $output_dir")
     return 0
@@ -878,7 +878,7 @@ function execute_load(cmd_args::Dict)
     lines_src = joinpath(bundle_dir, "dataset.jsonl")
     isfile(manifest_path) || (println("Error: bundle '$bundle_dir' is missing manifest.json"); return 1)
     isdir(project_src) || (println("Error: bundle '$bundle_dir' is missing project/"); return 1)
-    manifest = JSON3.read(read(manifest_path), Dict{String, Any})
+    manifest = JSON.parse(read(manifest_path); dicttype=Dict{String,Any})
     records = isfile(lines_src) ? (@cli_engine_call Persistence.read_dump_records(lines_src)) : Persistence.DumpRecord[]
     records isa Cint && return records
     if !isfile(lines_src) && isfile(joinpath(bundle_dir, "dataset.avro"))
@@ -910,7 +910,7 @@ function execute_load(cmd_args::Dict)
     restored = 0
     for rec in records
         meta_record = Schema.MetadataRecord(rec._id, rec.schema_version, rec.doc_id, rec.keywords, rec.refs)
-        meta = rec.meta === nothing ? nothing : JSON3.read(codeunits(rec.meta), Dict{String, Any})
+        meta = rec.meta === nothing ? nothing : JSON.parse(codeunits(rec.meta); dicttype=Dict{String,Any})
         Project.put_metadata!(handle.project, meta_record, meta)
         restored += 1
     end
@@ -935,7 +935,7 @@ function execute_load(cmd_args::Dict)
         "edit_correction" => get(manifest, "edit_correction", false),
         "max_k" => Server._descriptor_max_k(manifest),
     )
-    write(joinpath(target_path, "descriptor.json"), JSON3.write(descriptor))
+    write(joinpath(target_path, "descriptor.json"), JSON.json(descriptor))
 
     println("Load completed: '$target_id' restored from bundle '$bundle_dir', with $restored line(s) of dataset.jsonl ",
             "written over its metadata. Saved to $target_path")
@@ -963,7 +963,7 @@ function follower_request(cmd_args::AbstractDict)
         Server.is_plugin_name(d[field]) || return "--$flag applies to a $(field == "kind" ? "kind" : "key source") of a plugin, " *
             "--$field Plugin.name; got --$field $(d[field])"
         options = try
-            JSON3.read(codeunits(text), Dict{String,Any})
+            JSON.parse(codeunits(text); dicttype=Dict{String,Any})
         catch
             return "--$flag must be a JSON object, such as '{\"field\": \"year\"}'; got $(repr(text))"
         end
@@ -1043,7 +1043,7 @@ function _with_dataset(f::Function, cmd_args::AbstractDict; read_only::Bool)
     end
 end
 
-_print_follower_status(s::SSE.FollowerStatus) = println(JSON3.write(Server.follower_status_dict(s)))
+_print_follower_status(s::SSE.FollowerStatus) = println(JSON.json(Server.follower_status_dict(s)))
 
 # A command on one follower takes its name, not `name=value`.
 function _plain_follower_name(cmd_args::AbstractDict)
@@ -1083,7 +1083,7 @@ object. It opens the dataset read-only, so it runs while a server holds the data
 """
 function execute_follower_list(cmd_args::AbstractDict)
     _with_dataset(cmd_args; read_only=true) do handle
-        println(JSON3.write(Dict("id" => cmd_args["dataset"],
+        println(JSON.json(Dict("id" => cmd_args["dataset"],
                                  "followers" => [Server.follower_status_dict(s) for s in SSE.followers(handle)])))
         nothing
     end
@@ -1184,9 +1184,9 @@ function execute_postings(cmd_args::AbstractDict)
         body = Dict{String,Any}("id" => cmd_args["dataset"], "key" => key, "ids" => ids)
         fname === nothing || (body["follower"] = fname)
         if out_file === nothing
-            println(JSON3.write(body))
+            println(JSON.json(body))
         else
-            open(io -> println(io, JSON3.write(body)), out_file, "w")
+            open(io -> println(io, JSON.json(body)), out_file, "w")
             println("$(length(ids)) id(s) saved to $out_file")
         end
         nothing

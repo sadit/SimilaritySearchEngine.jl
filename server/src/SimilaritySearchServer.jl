@@ -3,7 +3,7 @@ module SimilaritySearchServer
 using ArgParse
 using TOML
 using HTTP
-using JSON3
+using JSON
 import SimilaritySearch
 import TextSearch
 using RocksDB

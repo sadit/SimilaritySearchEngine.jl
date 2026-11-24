@@ -9,7 +9,7 @@ using TextSearch: BM25InvertedFile, InvertedFile, TextInvertedFile, Normalizatio
                   AppliedArtifacts, vocsize, gettrainsize, gettextconfig,
                   lineage_summary, token2id, query_tokens, QueryPipeline
 using JSON
-using JSON3
+using JSON
 using RocksDB
 using Random: Xoshiro
 using SparseArrays: sparsevec, SparseVector, nonzeros, nonzeroinds

@@ -1,7 +1,7 @@
 module Tokens
 
 using RocksDB
-using JSON3
+using JSON
 using Random
 using Dates
 
@@ -101,7 +101,7 @@ function create_token!(manager::TokenManager, user::String, permissions::Vector{
     )
     
     key_bytes = Vector{UInt8}(token_str)
-    val_bytes = Vector{UInt8}(JSON3.write(record))
+    val_bytes = Vector{UInt8}(JSON.json(record))
 
     RocksDB.put!(manager.db, key_bytes, val_bytes)
     return token_str
@@ -127,7 +127,7 @@ function get_token(manager::TokenManager, token_str::String)
         return nothing
     end
     
-    data = JSON3.read(val_bytes, Dict{String, Any})
+    data = JSON.parse(val_bytes; dicttype=Dict{String,Any})
     return TokenRecord(
         data["token_str"],
         data["user"],
@@ -162,7 +162,7 @@ log-tokens` (an audit listing) and `prune_expired!`'s own scan below.
 function list_tokens(manager::TokenManager)
     records = TokenRecord[]
     for (_, v) in RocksDB.DBIterator(manager.db)
-        data = JSON3.read(v, Dict{String, Any})
+        data = JSON.parse(v; dicttype=Dict{String,Any})
         push!(records, TokenRecord(
             data["token_str"],
             data["user"],

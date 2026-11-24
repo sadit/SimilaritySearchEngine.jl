@@ -56,7 +56,7 @@ Pkg.activate(joinpath(pwd(), "..", "..", "tutorials"); io=devnull)
 import SimilaritySearchEngine as SSE
 import TextSearch
 import SimilaritySearch
-using JSON3
+using JSON
 using Printf
 
 const TUT = normpath(joinpath(pwd(), "..", "..", "tutorials"))
@@ -72,7 +72,7 @@ const SUFFIX = isfile(joinpath(DATA, "manifest.json")) ? "" :
         julia --project=tutorials tutorials/prepare.jl
     (or use `--smoke` for a lightweight build)""")
 
-const MANIFEST = JSON3.read(read(joinpath(DATA, "manifest$SUFFIX.json"), String))
+const MANIFEST = JSON.parse(read(joinpath(DATA, "manifest$SUFFIX.json"), String))
 const NAMES = ["gutenberg-en", "gutenberg-es", "wikipedia-en"]
 
 corpus_file(name) = joinpath(DATA, name * SUFFIX * ".jsonl")
@@ -81,7 +81,7 @@ project_root() = SUFFIX == "" ? PROJECTS : joinpath(PROJECTS, "smoke")
 
 function first_record(name)
     open(corpus_file(name)) do io
-        JSON3.read(readline(io))
+        JSON.parse(readline(io))
     end
 end
 
@@ -297,7 +297,7 @@ The following example performs the complete sequence over a subset of one corpus
 ```julia
 # 1. Ingest slice of paragraph records
 slice = map(Iterators.take(eachline(corpus_file("gutenberg-en")), 2000)) do line
-    o = JSON3.read(line)
+    o = JSON.parse(line)
     meta = Dict{String,Any}(String(k) => v for (k, v) in pairs(o) if k !== :text && k !== :doc_id)
     SSE.TextItem(String(o.text); doc_id=String(o.doc_id), meta)
 end

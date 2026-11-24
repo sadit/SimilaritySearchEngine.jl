@@ -1,6 +1,6 @@
 using Test
 using HTTP
-using JSON3
+using JSON
 
 # `_run_ctl` is in `test_server_helpers.jl`.
 
@@ -9,25 +9,25 @@ using JSON3
         port = string(HTTP.URI(base_url).port)
         srv = ensure_test_server()
 
-        resp = HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "ctl_ds", "index_type" => "searchgraph", "distance" => "L2")))
+        resp = HTTP.post("$base_url/datasets", [], JSON.json(Dict("id" => "ctl_ds", "index_type" => "searchgraph", "distance" => "L2")))
         @test resp.status == 201
 
         data_path = joinpath(@__DIR__, "..", "..", "..", "test", "data", "frankenstein.jsonl")
-        docs = [JSON3.read(line) for line in readlines(data_path)[1:5]]
-        resp = HTTP.post("$base_url/datasets/ctl_ds/append", [], JSON3.write(Dict("items" => docs)))
+        docs = [JSON.parse(line) for line in readlines(data_path)[1:5]]
+        resp = HTTP.post("$base_url/datasets/ctl_ds/append", [], JSON.json(Dict("items" => docs)))
         @test resp.status == 200
 
         # --- list / stats -------------------------------------------------------------
 
         code, out = _run_ctl(["--port", port, "list"])
         @test code == 0
-        listed = JSON3.read(out).datasets
+        listed = JSON.parse(out).datasets
         entry = only(filter(d -> d.id == "ctl_ds", listed))
         @test entry.doc_count == 5
 
         code, out = _run_ctl(["--port", port, "stats", "--dataset", "ctl_ds"])
         @test code == 0
-        @test JSON3.read(out).doc_count == 5
+        @test JSON.parse(out).doc_count == 5
 
         code, out = _run_ctl(["--port", port, "stats", "--dataset", "does_not_exist"])
         @test code == 1
@@ -38,7 +38,7 @@ using JSON3
 
         code, out = _run_ctl(["--port", port, "log", "--dataset", "ctl_ds"])
         @test code == 0
-        log_body = JSON3.read(out)
+        log_body = JSON.parse(out)
         @test log_body.total == 1
         @test log_body.entries[1].operation == "append"
         @test log_body.entries[1].details.items_inserted == 5
@@ -51,36 +51,36 @@ using JSON3
 
         code, out = _run_ctl(["--port", port, "add-token", "--user", "alice", "--permissions", "read,write"])
         @test code == 0
-        token = JSON3.read(out).token
+        token = JSON.parse(out).token
         @test !isempty(token)
 
         code, out = _run_ctl(["--port", port, "del-token", "--token", token])
         @test code == 0
-        @test JSON3.read(out).status == "revoked"
+        @test JSON.parse(out).status == "revoked"
 
         # --- log-tokens / prune-tokens --------------------------------------------------
 
         code, out = _run_ctl(["--port", port, "add-token", "--user", "carol", "--permissions", ""])
         @test code == 0
-        alive_token = JSON3.read(out).token
+        alive_token = JSON.parse(out).token
 
         code, out = _run_ctl(["--port", port, "add-token", "--user", "dave", "--permissions", "", "--expires-at", "2000-01-01T00:00:00"])
         @test code == 0
-        expired_token = JSON3.read(out).token
+        expired_token = JSON.parse(out).token
 
         code, out = _run_ctl(["--port", port, "log-tokens"])
         @test code == 0
-        logged = JSON3.read(out).tokens
+        logged = JSON.parse(out).tokens
         @test any(t -> t.token == alive_token, logged)
         @test any(t -> t.token == expired_token, logged)
 
         code, out = _run_ctl(["--port", port, "prune-tokens"])
         @test code == 0
-        @test JSON3.read(out).pruned == 1
+        @test JSON.parse(out).pruned == 1
 
         code, out = _run_ctl(["--port", port, "log-tokens"])
         @test code == 0
-        logged_after = JSON3.read(out).tokens
+        logged_after = JSON.parse(out).tokens
         @test any(t -> t.token == alive_token, logged_after)
         @test !any(t -> t.token == expired_token, logged_after)
 
@@ -88,19 +88,19 @@ using JSON3
 
         code, out = _run_ctl(["--port", port, "dump", "--dataset", "ctl_ds"])
         @test code == 0
-        dump_out = JSON3.read(out)
+        dump_out = JSON.parse(out)
         @test isdir(dump_out.bundle_dir)
         @test dump_out.manifest.index_kind == "searchgraph"
 
         code, out = _run_ctl(["--port", port, "load", "--bundle", dump_out.bundle_dir, "--dataset", "ctl_ds_loaded"])
         @test code == 0
-        load_out = JSON3.read(out)
+        load_out = JSON.parse(out)
         @test load_out.id == "ctl_ds_loaded"
 
         resp = HTTP.post("$base_url/admin/datasets/ctl_ds_loaded/reload", [], "")
         @test resp.status == 200
         resp = HTTP.get("$base_url/datasets/ctl_ds_loaded")
-        @test JSON3.read(String(resp.body)).doc_count == 5
+        @test JSON.parse(String(resp.body)).doc_count == 5
 
         code, out = _run_ctl(["--port", port, "dump", "--dataset", "does_not_exist"])
         @test code == 1
@@ -116,11 +116,11 @@ using JSON3
 
         code, out = _run_ctl(["--port", port, "jobs", "queue", "--status", "blocked"])
         @test code == 0
-        @test any(j -> j.id == blocked_id, JSON3.read(out).jobs)
+        @test any(j -> j.id == blocked_id, JSON.parse(out).jobs)
 
         code, out = _run_ctl(["--port", port, "jobs", "resume", "--job-id", blocked_id])
         @test code == 0
-        @test JSON3.read(out).status == "queued"
+        @test JSON.parse(out).status == "queued"
         # The job is back in `queued/`, which the live dispatcher reads: by the time this line
         # runs it may already be running or finished. On 2026-11-19 a full run found it
         # `Running`. What `resume` guarantees is that the job left `blocked/`.
@@ -137,7 +137,7 @@ using JSON3
 
         code, out = _run_ctl(["--port", port, "jobs", "kill", "--job-id", running_id])
         @test code == 0
-        @test JSON3.read(out).status == "killed"
+        @test JSON.parse(out).status == "killed"
         @test first(Jobs.get_job(srv.app.job_mgr, running_id)) == Jobs.Failed
 
         code, out = _run_ctl(["--port", port, "jobs", "result", "--job-id", "does-not-exist"])
@@ -160,7 +160,7 @@ using JSON3
 
         code, out = _run_ctl(["--port", port, "jobs", "gc", "--retention-seconds", "0"])
         @test code == 0
-        gc_body = JSON3.read(out)
+        gc_body = JSON.parse(out)
         @test result_job_id in gc_body.jobs_purged
         @test first(Jobs.get_job(srv.app.job_mgr, result_job_id)) === nothing
 

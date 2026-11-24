@@ -125,11 +125,11 @@ the type. Without a known `kind`, the status selects the generic type of its cat
 function response_error(status::Integer, body::AbstractVector{UInt8})
     msg, kind = String(copy(body)), nothing
     parsed = try
-        JSON3.read(body)
+        JSON.parse(body)
     catch
         nothing
     end
-    if parsed isa JSON3.Object
+    if parsed isa JSON.Object
         haskey(parsed, :error) && (msg = string(parsed[:error]))
         kind = get(parsed, :kind, nothing)
     end

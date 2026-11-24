@@ -1,6 +1,6 @@
 module Persistence
 
-using JSON3
+using JSON
 using RocksDB
 using SimilaritySearch
 using TextSearch
@@ -524,11 +524,11 @@ function write_dump_records(filepath::String, records)
     open(filepath, "w") do io
         for r in records
             print(io, "{\"_id\":", r._id, ",\"schema_version\":", r.schema_version, ",\"doc_id\":")
-            JSON3.write(io, r.doc_id)
+            JSON.json(io, r.doc_id)
             print(io, ",\"keywords\":")
-            JSON3.write(io, r.keywords)
+            JSON.json(io, r.keywords)
             print(io, ",\"refs\":")
-            JSON3.write(io, r.refs)
+            JSON.json(io, r.refs)
             print(io, ",\"meta\":", r.meta === nothing ? "null" : r.meta, ",\"deleted\":", r.deleted, "}\n")
         end
     end
@@ -550,14 +550,14 @@ function read_dump_records(filepath::String)
     for (n, line) in enumerate(eachline(filepath))
         isempty(strip(line)) && continue
         o = try
-            JSON3.read(line)
+            JSON.parse(line)
         catch e
             e isa ArgumentError || rethrow()
             invalid_option(:records, "line $n of $filepath is not JSON: ", sprint(showerror, e))
         end
-        o isa JSON3.Object && haskey(o, :_id) || invalid_option(:records, "line $n of $filepath is not a JSON object with `_id`")
+        o isa JSON.Object && haskey(o, :_id) || invalid_option(:records, "line $n of $filepath is not a JSON object with `_id`")
         meta = get(o, :meta, nothing)
-        meta === nothing || meta isa JSON3.Object ||
+        meta === nothing || meta isa JSON.Object ||
             invalid_option(:records, "line $n of $filepath: `meta` must be a JSON object or null")
         push!(records, DumpRecord(
             Int32(o._id),
@@ -565,7 +565,7 @@ function read_dump_records(filepath::String)
             _dump_string(get(o, :doc_id, nothing)),
             String[String(k) for k in get(o, :keywords, String[])],
             String[String(k) for k in get(o, :refs, String[])],
-            meta === nothing ? nothing : JSON3.write(meta),
+            meta === nothing ? nothing : JSON.json(meta),
             get(o, :deleted, false) === true,
         ))
     end

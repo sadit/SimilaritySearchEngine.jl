@@ -2,13 +2,13 @@ using Test
 using SimilaritySearchClient
 using SimilaritySearchClient: response_error, wire_item, wire_meta_schema, ERROR_KINDS
 using SparseArrays
-using JSON3
+using JSON
 
 # These tests need no server. The tests against a running server are in the server's suite
 # (server/test/api/test_17_julia_client.jl), which can start one; this package cannot depend on
 # the server, not even for its tests, because its users install it without the server.
 
-body(x) = Vector{UInt8}(JSON3.write(x))
+body(x) = Vector{UInt8}(JSON.json(x))
 
 @testset "SimilaritySearchClient.jl" begin
     @testset "an error response becomes the type its kind names" begin

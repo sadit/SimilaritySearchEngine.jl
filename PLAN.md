@@ -34,7 +34,7 @@ The rules that follow from this:
   `julia --project=server -e 'using Pkg; Pkg.develop(path=".")'`.
 - Each package is released on its own. The server declares a `[compat]` range on the engine,
   as it does for any other dependency.
-- The client depends on HTTP.jl and JSON3 only. It never depends on the engine or on the
+- The client depends on HTTP.jl and JSON.jl only. It never depends on the engine or on the
   server. It declares its own copy of the error types of the engine, and the light suite of
   the server checks that the two lists are equal.
 - No `Manifest.toml` is committed. The three packages require Julia 1.12 or later, because the

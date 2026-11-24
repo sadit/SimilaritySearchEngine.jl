@@ -1,5 +1,5 @@
 using Test
-using JSON3
+using JSON
 
 # The follower commands of `similarity-search` (CHANGELOG.md §5.12, issue #5, phase 5b), run in this
 # process: `follower-create`, `follower-list`, `follower-sync`, `follower-rebuild`,
@@ -10,23 +10,23 @@ using JSON3
     workdir = mktempdir()
     w = ("--workdir", workdir)
     data_path = joinpath(@__DIR__, "..", "..", "..", "test", "data", "frankenstein.jsonl")
-    rows = [JSON3.read(l, Dict{String,Any}) for l in readlines(data_path)[1:150]]
+    rows = [JSON.parse(l; dicttype=Dict{String,Any}) for l in readlines(data_path)[1:150]]
     repo_of(i) = i % 5 == 0 ? ["norte", "sur"] : i % 2 == 0 ? "norte" : "sur"
     in_part(i, p) = (v = repo_of(i); v isa AbstractString ? v == p : p in v)
     item(i) = Dict{String,Any}("doc_id" => rows[i]["doc_id"], "text" => rows[i]["text"],
                                "keywords" => rows[i]["keywords"], "repo" => repo_of(i))
     input = tempname() * ".jsonl"
-    write(input, join([JSON3.write(item(i)) for i in 1:120], "\n"))
+    write(input, join([JSON.json(item(i)) for i in 1:120], "\n"))
     queries = tempname() * ".jsonl"
-    write(queries, join([JSON3.write(Dict("text" => rows[i]["text"])) for i in (3, 12, 40)], "\n"))
+    write(queries, join([JSON.json(Dict("text" => rows[i]["text"])) for i in (3, 12, 40)], "\n"))
 
     cli(args...) = _run_cli(String[string(a) for a in args])
-    json_line(out) = JSON3.read(last(filter(!isempty, split(out, '\n'))))
+    json_line(out) = JSON.parse(last(filter(!isempty, split(out, '\n'))))
     function search_ids(dataset, k, extra...)
         out = tempname()
         code, printed = cli("searchbatch", "--dataset", dataset, "--queries", queries, "--output", out, "--k", k, w..., extra...)
         code == 0 || return (code, printed)
-        return [collect(JSON3.read(l).ids) for l in readlines(out)]
+        return [collect(JSON.parse(l).ids) for l in readlines(out)]
     end
     # The global search restricted to a partition, with `old` mapping a current id to the
     # number of its item in `rows`.
@@ -64,11 +64,11 @@ using JSON3
     key = "Elizabeth"
     want = [i for i in 1:120 if key in rows[i]["keywords"]]
     keyq = tempname() * ".jsonl"
-    write(keyq, JSON3.write(Dict("keys" => [key])))
+    write(keyq, JSON.json(Dict("keys" => [key])))
     out = tempname()
     @test first(cli("searchbatch", "--dataset", "fl", "--queries", keyq, "--output", out, "--k", 50,
                     "--follower", "kw", w...)) == 0
-    @test sort(collect(JSON3.read(only(readlines(out))).ids)) == want
+    @test sort(collect(JSON.parse(only(readlines(out))).ids)) == want
     code, out = search_ids("fl", 5, "--follower", "repo")
     @test code == 2 && occursin("--follower repo=<value>", out)
     @test first(search_ids("fl", 5, "--follower", "repo=oeste")) == 4
@@ -124,7 +124,7 @@ using JSON3
     bundle = joinpath(workdir, "bundle")
     @test first(cli("dump", "--dataset", "fl", "--output", bundle, w...)) == 0
     @test isdir(joinpath(bundle, "followers", "kw"))
-    @test sort(collect(JSON3.read(read(joinpath(bundle, "manifest.json"), String)).followers)) == ["kw", "m", "repo"]
+    @test sort(collect(JSON.parse(read(joinpath(bundle, "manifest.json"), String)).followers)) == ["kw", "m", "repo"]
     code, out = cli("load", "--bundle", bundle, "--dataset", "fl2", w...)
     @test code == 0 && count("synchronized", out) == 3
     @test isdir(joinpath(workdir, "datasets", "fl2.followers", "kw"))
@@ -143,18 +143,18 @@ using JSON3
 
     # --- migrate-partitions --------------------------------------------------------------
     dense_input = tempname() * ".jsonl"
-    write(dense_input, join([JSON3.write(Dict("doc_id" => rows[i]["doc_id"], "vector" => rows[i]["vector"],
+    write(dense_input, join([JSON.json(Dict("doc_id" => rows[i]["doc_id"], "vector" => rows[i]["vector"],
                                               "grp" => isodd(i) ? "odd" : "even")) for i in 1:100], "\n"))
     @test first(cli("build", "--dataset", "dn", "--input", dense_input, "--index-kind", "exhaustive_search",
                     "--partition-by", "grp", w...)) == 0
     code, out = cli("migrate-partitions", "--dataset", "dn", "--name", "grp", "--disjoint", "true", w...)
     @test code == 0 && json_line(out).stats.partitions == 2
     vq = tempname() * ".jsonl"
-    write(vq, join([JSON3.write(Dict("vector" => rows[i]["vector"])) for i in (3, 8)], "\n"))
+    write(vq, join([JSON.json(Dict("vector" => rows[i]["vector"])) for i in (3, 8)], "\n"))
     out = tempname()
     @test first(cli("searchbatch", "--dataset", "dn", "--queries", vq, "--output", out, "--k", 5,
                     "--follower", "grp=odd", w...)) == 0
-    res = [collect(JSON3.read(l).ids) for l in readlines(out)]
+    res = [collect(JSON.parse(l).ids) for l in readlines(out)]
     @test all(r -> length(r) == 5 && all(isodd, r), res) && res[1][1] == 3
     # The partitions are no longer in the dataset.
     @test first(cli("searchbatch", "--dataset", "dn", "--queries", vq, "--output", tempname(), "--partition", "odd", w...)) != 0
@@ -168,7 +168,7 @@ using JSON3
     pc(args...) = cli("--config", cfg, args...)
     year(i) = 1960 + i
     plugin_input = tempname() * ".jsonl"
-    write(plugin_input, join([JSON3.write(Dict("doc_id" => rows[i]["doc_id"], "text" => rows[i]["text"],
+    write(plugin_input, join([JSON.json(Dict("doc_id" => rows[i]["doc_id"], "text" => rows[i]["text"],
                                                 "keywords" => rows[i]["keywords"], "year" => year(i))) for i in 1:60], "\n"))
     @test first(cli("build", "--dataset", "pl", "--input", plugin_input, "--index-kind", "bm25_invfile", w...)) == 0
     code, out = pc("follower-create", "--dataset", "pl", "--name", "decade", "--kind", "partition",
@@ -191,11 +191,11 @@ using JSON3
 
     # A partition of the key source of the plugin, searched from the command line.
     pq = tempname() * ".jsonl"
-    write(pq, join([JSON3.write(Dict("text" => rows[i]["text"])) for i in (33, 35)], "\n"))
+    write(pq, join([JSON.json(Dict("text" => rows[i]["text"])) for i in (33, 35)], "\n"))
     out = tempname()
     @test first(pc("searchbatch", "--dataset", "pl", "--queries", pq, "--output", out, "--k", 5,
                    "--follower", "decade=1990s", w...)) == 0
-    @test all(l -> all(id -> 1990 <= year(id) <= 1999, JSON3.read(l).ids), readlines(out))
+    @test all(l -> all(id -> 1990 <= year(id) <= 1999, JSON.parse(l).ids), readlines(out))
 
     # A process that has not registered the plugin cannot open its followers, and the message
     # names the file of --config.

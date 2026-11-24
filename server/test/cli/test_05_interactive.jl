@@ -1,7 +1,7 @@
 using Test
 using ArgParse
 using HTTP
-using JSON3
+using JSON
 
 @testset "CLI Interactive Mode Tests" begin
 
@@ -152,7 +152,7 @@ using JSON3
     # (list/stats/jobs queue), never a state-mutating job kind, to avoid racing the live
     # dispatcher the way a resume/kill assertion immediately after submission would.
     with_test_server() do base_url, workdir
-        resp = HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "ictl_ds", "index_type" => "searchgraph")))
+        resp = HTTP.post("$base_url/datasets", [], JSON.json(Dict("id" => "ictl_ds", "index_type" => "searchgraph")))
         @test resp.status == 201
 
         @test SimilaritySearchServer.dispatch_ctl_command(Dict("%COMMAND%" => "list", "list" => Dict{String, Any}()), base_url) == 0

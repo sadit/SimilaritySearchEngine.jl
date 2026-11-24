@@ -115,7 +115,7 @@ function fetch_items(h::RemoteProject, ids)
     return StoredItem[_stored_item(r) for r in resp[:results]]
 end
 
-const RECORD_FIELDS = (:_id, :doc_id, :keywords, :refs, :schema_version)
+const RECORD_FIELDS = ("_id", "doc_id", "keywords", "refs", "schema_version")
 
 function _stored_item(r)
     meta = Dict{String,Any}(string(k) => _plain(v) for (k, v) in r if k ∉ RECORD_FIELDS)

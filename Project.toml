@@ -6,7 +6,6 @@ authors = ["Eric S. Tellez <donsadit@gmail.com>"]
 [deps]
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
-JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
 PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 RocksDB = "ed16a602-456b-4bce-8851-d9cfcf778d34"
@@ -17,7 +16,6 @@ TextSearch = "7f6f6c8a-3b03-11e9-223d-e7d88259bd6c"
 [compat]
 Dates = "1"
 JSON = "1.7"
-JSON3 = "1.14.3"
 PrecompileTools = "1.2"
 Random = "1"
 RocksDB = "1"

@@ -1,7 +1,7 @@
 module Telemetry
 
 using RocksDB
-using JSON3
+using JSON
 using Dates
 import SimilaritySearch   # only `SimilaritySearch.distance_evaluations`, qualified below
 using ..Project
@@ -33,7 +33,7 @@ function log_operation(manager::ProjectManager, op_type::String, details::Dict{S
     
     # Generate a time-sortable key using nanoseconds
     key_bytes = Vector{UInt8}(string(time_ns()))
-    val_bytes = Vector{UInt8}(JSON3.write(record))
+    val_bytes = Vector{UInt8}(JSON.json(record))
     
     RocksDB.put!(manager.db, key_bytes, val_bytes; cf=manager.cf_op_log)
 end

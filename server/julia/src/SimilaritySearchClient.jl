@@ -10,13 +10,13 @@ The handle is a [`RemoteProject`](@ref) instead of an `EmbeddedEngine`, and it i
 remote server when it opens its project differently, within the limits that each docstring
 states.
 
-The package depends on HTTP.jl and JSON3 only. It does not load the engine, SimilaritySearch,
+The package depends on HTTP.jl and JSON.jl only. It does not load the engine, SimilaritySearch,
 TextSearch or RocksDB.
 """
 module SimilaritySearchClient
 
 using HTTP
-using JSON3
+using JSON
 using SparseArrays
 using SparseArrays: SparseVector
 

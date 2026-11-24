@@ -183,6 +183,6 @@ function vocabulary_report(h::RemoteProject; scan::Bool=false, sample::Union{Not
 end
 
 "A parsed JSON value as plain `Dict{String,Any}` and `Vector{Any}` values."
-_plain(x::JSON3.Object) = Dict{String,Any}(string(k) => _plain(v) for (k, v) in x)
-_plain(x::JSON3.Array) = Any[_plain(v) for v in x]
+_plain(x::JSON.Object) = Dict{String,Any}(string(k) => _plain(v) for (k, v) in x)
+_plain(x::AbstractVector) = Any[_plain(v) for v in x]
 _plain(x) = x

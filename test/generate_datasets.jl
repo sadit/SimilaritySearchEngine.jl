@@ -1,6 +1,6 @@
 using Pkg
 Pkg.activate(@__DIR__)
-Pkg.add("JSON3")
+Pkg.add("JSON")
 Pkg.add("Downloads")
 # TextSearch's registered release (v1.0.0) predates the LatentSemanticIndexing feature --
 # `Pkg.develop` the same local dev checkout the main SimilaritySearchServer project already
@@ -8,7 +8,7 @@ Pkg.add("Downloads")
 Pkg.develop(path=joinpath(@__DIR__, "..", "..", "TextSearch.jl"))
 
 using Downloads
-using JSON3
+using JSON
 using TextSearch
 
 const LSI_DIM = 128
@@ -160,7 +160,7 @@ function process_book(name::String, url::String, outdir::String)
                 "verb_count" => meta["verb_count"],
             )
 
-            println(io, JSON3.write(record))
+            println(io, JSON.json(record))
         end
         println("  Saved $(length(cleaned)) paragraphs to $out_jsonl")
     end
