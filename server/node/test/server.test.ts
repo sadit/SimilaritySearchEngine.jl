@@ -15,13 +15,13 @@ import {
   JobFailed,
   NotFound,
   PluginNotLoaded,
-  RemoteError,
   ResourceNotFound,
   SimilaritySearchClient,
   StateConflict,
   UnknownFollower,
   UnknownPartition,
   UnsupportedOperation,
+  WrongDimension,
 } from "../src/index.js";
 import type { SearchHit } from "../src/index.js";
 
@@ -77,7 +77,7 @@ describe("the client against a server", { skip }, () => {
     assert.match(await client.metrics(), /simsearch_/);
   });
 
-  test("a dense dataset", async (t) => {
+  test("a dense dataset", async () => {
     const created = await client.createDataset({
       id: "nc_dense", index_kind: "exhaustive_search", meta_schema: [{ name: "n", type: "int64" }], partition_by: "repo",
     });
@@ -117,13 +117,14 @@ describe("the client against a server", { skip }, () => {
     assert.ok((await thrown(() => client.getDataset("nc_missing"))) instanceof ResourceNotFound);
     assert.ok((await thrown(() => client.search("nc_missing", q))) instanceof ResourceNotFound);
     assert.ok((await thrown(() => client.search("nc_dense", q, { beamsearch_overrides: { bsize: 8 } }))) instanceof InvalidRequest);
-    // The engine checks the dimension of a query of a quantized, a sketched or a sparse dataset,
-    // and raises WrongDimension. For a dense dataset of Float32 vectors it does not check it on
-    // 2026-11-24: Julia raises DimensionMismatch, which is not an engine error. This line records
-    // the answer of the server, and it becomes a check of WrongDimension when the engine is fixed.
+    // A query and an item of another dimension. Before 2026-11-24 the engine did not check the
+    // dimension of a dense dataset of Float32 vectors, and the server answered 500.
     const dim = await thrown(() => client.search("nc_dense", [1, 2, 3]));
-    assert.ok(dim instanceof RemoteError);
-    t.diagnostic(`a query of dimension 3: ${dim.name}, status ${(dim as RemoteError).status}, kind ${(dim as RemoteError).kind}`);
+    assert.ok(dim instanceof WrongDimension && dim instanceof InvalidRequest);
+    assert.equal(dim.status, 400);
+    assert.equal(dim.kind, "WrongDimension");
+    const item = await thrown(() => client.append("nc_dense", [{ doc_id: "nc_short", vector: [1, 2, 3] }]));
+    assert.ok(item instanceof WrongDimension);
 
     // fetch and exists take a `_id` or a `doc_id`.
     const fetched = await client.fetch("nc_dense", [5, row(6).doc_id, "no-such-id"]);

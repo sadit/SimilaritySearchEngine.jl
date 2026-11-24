@@ -1209,6 +1209,58 @@ sketches. See [`SketchInfo`](@ref) for the fields.
 sketch_info(handle::EmbeddedEngine) = (_check_open(handle);
     IndexEngine.issketched(handle.engine) ? IndexEngine.sketch_info(handle.engine.quant) : nothing)
 
+# A project indexes one kind of thing, and the item type says which. Checked per item rather
+# than once per batch so a heterogeneous `Vector{AbstractItem}` is caught on the offending
+# element instead of on whatever happened to be first.
+# Which item a project takes is `payload_kind` spelled the other way round, so it is derived
+# rather than restated: a fourth engine kind would otherwise need remembering here too.
+const _ITEM_KIND = Dict(Schema.DenseItem => :dense, Schema.SparseItem => :sparse,
+                        Schema.TextItem => :text)
+const _KIND_ITEM = Dict(v => k for (k, v) in _ITEM_KIND)
+
+_check_item(engine, item::Schema.AbstractItem) =
+    _ITEM_KIND[typeof(item)] === IndexEngine.payload_kind(engine) || payload_mismatch(
+        "this project indexes $(IndexEngine.payload_kind(engine)), so it takes " *
+        "$(nameof(_KIND_ITEM[IndexEngine.payload_kind(engine)]))s; got a $(typeof(item))" *
+        (item.doc_id === nothing ? "" : " (doc_id $(item.doc_id))"))
+
+"""
+    _dense_dimension(handle::EmbeddedEngine) -> Union{Nothing,Int}
+
+The dimension of the dense project of `handle`, or `nothing` before its first vector. The file
+of vectors gives it first. A graph project and a quantized project stage their vectors in that
+file before `index!`, so the file can hold vectors while the index is empty. Without the file,
+the engine gives it (`IndexEngine.dense_dimension`).
+"""
+function _dense_dimension(handle::EmbeddedEngine)
+    raw = handle.dense_vectors[]
+    raw === nothing || return _file_dimension(raw)
+    return IndexEngine.dense_dimension(handle.engine)
+end
+
+_file_dimension(::MMapMatrixDatabase{Dim}) where {Dim} = Int(Dim)
+
+"""
+    _check_dense_dimensions(handle::EmbeddedEngine, items)
+
+Raises `WrongDimension` when a `DenseItem` of `items` has a length other than the dimension of
+the project. A project without vectors takes the length of the first item. `append_items!` calls
+it before it writes anything. Without this check, an exact project indexed a vector of another
+length in memory, and stored its metadata. Then the file of vectors refused the vector with
+`DimensionMismatch`, and the project was left with an item that the file did not hold.
+"""
+function _check_dense_dimensions(handle::EmbeddedEngine, items)
+    dim = _dense_dimension(handle)
+    for item in items
+        item isa Schema.DenseItem || continue
+        n = length(Schema.payload(item))
+        dim === nothing && (dim = n)
+        n == dim || wrong_dimension(dim, n, "item dimension $n does not match the project's $dim" *
+                                    (item.doc_id === nothing ? "" : " (doc_id $(item.doc_id))"))
+    end
+    return nothing
+end
+
 """
     append_items!(handle::EmbeddedEngine, items) -> Int
 
@@ -1266,21 +1318,6 @@ measured independently at roughly 1000x slower than an all-at-once call for the 
 count. Prefer fewer, larger calls to this function over many small ones whenever a caller
 controls the batching.
 """
-# A project indexes one kind of thing, and the item type says which. Checked per item rather
-# than once per batch so a heterogeneous `Vector{AbstractItem}` is caught on the offending
-# element instead of on whatever happened to be first.
-# Which item a project takes is `payload_kind` spelled the other way round, so it is derived
-# rather than restated: a fourth engine kind would otherwise need remembering here too.
-const _ITEM_KIND = Dict(Schema.DenseItem => :dense, Schema.SparseItem => :sparse,
-                        Schema.TextItem => :text)
-const _KIND_ITEM = Dict(v => k for (k, v) in _ITEM_KIND)
-
-_check_item(engine, item::Schema.AbstractItem) =
-    _ITEM_KIND[typeof(item)] === IndexEngine.payload_kind(engine) || payload_mismatch(
-        "this project indexes $(IndexEngine.payload_kind(engine)), so it takes " *
-        "$(nameof(_KIND_ITEM[IndexEngine.payload_kind(engine)]))s; got a $(typeof(item))" *
-        (item.doc_id === nothing ? "" : " (doc_id $(item.doc_id))"))
-
 function append_items!(handle::EmbeddedEngine, items::AbstractVector{<:Schema.AbstractItem})
     _check_open(handle)
     handle.wrote[] = true
@@ -1293,6 +1330,7 @@ function append_items!(handle::EmbeddedEngine, items::AbstractVector{<:Schema.Ab
     # them here, and it writes them to the same file, from which its index is rebuilt (issue #3).
     stages_vectors = is_dense_graph || IndexEngine.isquantized(engine)
     writes_vectors = IndexEngine.payload_kind(engine) === :dense
+    writes_vectors && _check_dense_dimensions(handle, items)
     staged_vectors = Vector{Float32}[]
     staged_texts = String[]
     text_sp = is_text ? _current_size(engine) + 1 : 0
@@ -1506,6 +1544,12 @@ A dense vector handed to a sparse project is rejected rather than sparsified. It
 be a mistake worth naming (a project's items are `SparseItem`s, so its queries are sparse too),
 and sparsifying silently would turn a dimension mismatch into posting lists selected from
 whatever the values happened to be.
+
+A dense project compares the length of `vector` with the length of its indexed vectors (see
+`IndexEngine.dense_dimension`), and raises `WrongDimension` when they differ. Without this
+check, the distance raises `DimensionMismatch` of Julia, which is not an `EngineError`, and the
+server answers `500`. An index without vectors has no dimension, and a query of any length
+finds nothing in it.
 """
 function _search_query(engine::IndexEngine.AbstractSearchEngine, vector)
     kind = IndexEngine.payload_kind(engine)
@@ -1516,7 +1560,12 @@ function _search_query(engine::IndexEngine.AbstractSearchEngine, vector)
             "index! with more than 64 staged vectors, and until then the project has nothing to search")
         return IndexEngine.prepare_query(engine, convert(Vector{Float32}, vector))
     end
-    kind === :dense && return convert(Vector{Float32}, vector)
+    if kind === :dense
+        dim = IndexEngine.dense_dimension(engine)
+        dim === nothing || length(vector) == dim ||
+            wrong_dimension(dim, length(vector), "query dimension $(length(vector)) does not match the project's $dim")
+        return convert(Vector{Float32}, vector)
+    end
     kind === :sparse || payload_mismatch("search(handle, vector) needs a dense or sparse project; this one holds $kind")
     vector isa AbstractSparseVector ||
         payload_mismatch("a sparse project searches with a SparseVector{Float32,Int32}, not a $(typeof(vector)); " *
@@ -1654,9 +1703,10 @@ function _batch_query_database(engine::IndexEngine.AbstractSearchEngine, queries
     prepared = [_search_query(engine, q) for q in queries]
     if kind === :dense
         dim = length(first(prepared))
-        all(q -> length(q) == dim, prepared) ||
-            wrong_dimension(dim, length(first(prepared)),
-                  "every query in a batch must have the project's dimension ($dim)")
+        bad = findfirst(q -> length(q) != dim, prepared)
+        bad === nothing ||
+            wrong_dimension(dim, length(prepared[bad]),
+                  "every query in a batch must have the same dimension: query 1 has $dim, query $bad has $(length(prepared[bad]))")
         # The codes of a sketched project are `UInt64` or `UInt8`, not `Float32`.
         M = Matrix{eltype(first(prepared))}(undef, dim, length(prepared))
         for (j, q) in enumerate(prepared)

@@ -122,6 +122,9 @@ end
         h = create_project(workdir, "nokeep", DenseVectors(; index=Exhaustive(), storage=Quantized(SQ(8; range=PerVectorRange()))))
         append_items!(h, items[1:100])
         index!(h)
+        # The file of staged vectors is removed, and the encoder gives the dimension of an append.
+        @test !isfile(joinpath(workdir, "nokeep", "dense_vectors.mmapdb"))
+        @test_throws WrongDimension append_items!(h, [DenseItem(rand(Float32, 3))])
         append_items!(h, items[101:200])
         @test fetch_items(h, ["frankenstein_150"])[1].payload == items[150].vector
         @test fetch_items(h, ["frankenstein_50"])[1].payload === nothing

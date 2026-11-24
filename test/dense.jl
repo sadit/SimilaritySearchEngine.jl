@@ -137,3 +137,43 @@ end
         close_project!(h2)
     end
 end
+
+@testset "dense dataset: a query or an item of another dimension raises WrongDimension" begin
+    mktempworkdir() do workdir
+        # A project of Float32 vectors takes its dimension from its first vector. Before
+        # 2026-11-24 the engine did not check it. A query of another length raised
+        # DimensionMismatch of Julia, which the server answered with 500. An item of another
+        # length was indexed and stored by an exact project before its file refused it.
+        for (name, index) in (("wd_exact", Exhaustive()), ("wd_graph", Graph()))
+            h = create_project(workdir, name, DenseVectors(; index))
+            # Without vectors there is no dimension: a query of any length finds nothing.
+            @test isempty(search(h, rand(Float32, 3), 3))
+            append_items!(h, [DenseItem(rand(Float32, 8); doc_id="v$i") for i in 1:30])
+            # A graph project stages the vectors: its index is empty, and the file of vectors
+            # gives the dimension of an append.
+            e = try
+                append_items!(h, [DenseItem(rand(Float32, 8); doc_id="ok"), DenseItem(rand(Float32, 3); doc_id="bad")])
+                nothing
+            catch err
+                err
+            end
+            @test e isa WrongDimension && e.expected == 8 && e.got == 3 && occursin("bad", e.msg)
+            # Nothing of the batch was written, not even its first item.
+            @test !any(r.exists for r in exists(h, ["ok", "bad"]))
+            index!(h)
+
+            @test_throws WrongDimension search(h, rand(Float32, 3), 3)
+            @test_throws WrongDimension searchbatch(h, [rand(Float32, 8), rand(Float32, 3)], 3)
+            @test_throws WrongDimension append_items!(h, [DenseItem(rand(Float32, 3))])
+            @test length(search(h, rand(Float32, 8), 100)) == 30
+            close_project!(h)
+
+            # Opened again, the dimension comes from the vectors on disk.
+            h = open_project(workdir, name)
+            @test_throws WrongDimension search(h, rand(Float32, 3), 3)
+            @test_throws WrongDimension append_items!(h, [DenseItem(rand(Float32, 3))])
+            @test length(search(h, rand(Float32, 8), 100)) == 30
+            close_project!(h)
+        end
+    end
+end

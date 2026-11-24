@@ -462,9 +462,9 @@ The tests found three facts:
   `reloadDataset` opens it, as `load_project` of the Julia client does.
 - The server keeps the levels of a calibration as `Float32`: `minrecall` 0.9 arrives as
   0.8999999761581421.
-- The engine does not raise `WrongDimension` for a query of a dense project of `Float32`
-  vectors. It is item 10 of "Known Work". The test records the answer of the server and does not
-  check its class.
+- The engine did not raise `WrongDimension` for a query of a dense project of `Float32`
+  vectors. It is item 10 of "Known Work", done the same day. The test checks `WrongDimension`
+  and the status `400` for a query and for an item of another dimension.
 
 The documentation: `manual/server/node-client.qmd`, a link in the bar of the site, the server
 manual, the README and `AGENTS.md`. The seven pages that do not run code were rendered again with
@@ -496,13 +496,23 @@ HTML, with the text that Quarto generated in the other pages.
    needs them. Other consumers: counters for the telemetry, a notification to another system,
    and observers added by a plugin.
 9. **The check of defaults by caller** ("Defaults" above).
-10. **`WrongDimension` for a query of a dense dataset of `Float32` vectors.** The engine checks
-    the dimension of a query of a quantized, a sketched or a sparse project, and of a batch. For
-    a single query of a dense project of `Float32` vectors it does not: `_search_query` in
-    `src/embedded.jl` converts the vector and returns it. The distance then raises
-    `DimensionMismatch` of Julia, which is not an `EngineError`. The server answers `500`
-    without a `kind`, in place of `400` with `WrongDimension`. Found on 2026-11-24 by the test of
-    the Node.js client against a server.
+10. ~~**`WrongDimension` for a query of a dense dataset of `Float32` vectors.**~~ Done on
+    2026-11-24. Found the same day by the test of the Node.js client against a server. A project
+    of `Float32` vectors does not declare a dimension. Its first vector sets it, and the engine
+    did not check it:
+    - A query of another length raised `DimensionMismatch` of Julia, which is not an
+      `EngineError`. The server answered `500` without a `kind`, in place of `400` with
+      `WrongDimension`.
+    - An exact project indexed an item of another length in memory and stored its metadata.
+      Then the file of vectors refused the vector, and the project held an item that the file
+      did not hold.
+
+    Now `IndexEngine.dense_dimension` reads the dimension from the first vector of the index, or
+    from the encoder of a quantized or sketched project. `append_items!` reads it first from the
+    file of vectors, which holds the vectors staged before `index!`. A query or an item of
+    another length raises `WrongDimension`. `append_items!` checks the whole batch before it
+    writes anything. An index without vectors has no dimension, and a query of any length finds
+    nothing in it.
 
 ### Possible Later Work
 

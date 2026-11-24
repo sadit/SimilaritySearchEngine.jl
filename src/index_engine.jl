@@ -703,6 +703,29 @@ vectors at `append_items!` and encode them at `index!`.
 isquantized(engine::AbstractSearchEngine) = engine isa DenseEngine && engine.quant !== nothing
 
 """
+    dense_dimension(engine::DenseEngine) -> Union{Nothing,Int}
+
+The length of the vectors of `engine`, or `nothing` when the engine holds no vector and no
+encoder. A project of `Float32` vectors does not declare a dimension. Its first vector sets it,
+and this function reads it from the first vector of the index. A quantized or sketched engine
+reads it from its encoder, which exists after the first `index!`.
+
+The vectors that a project stages before `index!` are not in the index. A caller with the
+project reads their length from the file of vectors.
+"""
+function dense_dimension(engine::DenseEngine)
+    if isquantized(engine)
+        enc = engine.quant.encoder
+        return enc === nothing ? nothing : Int(enc.dim)
+    end
+    # Under the read lock, because an insertion can resize the database while it is read.
+    read_lock(engine.lock) do
+        db = database(engine.backend.index)
+        length(db) == 0 ? nothing : length(db[1])
+    end
+end
+
+"""
     SparseEngine
 
 A project of sparse vectors: it takes `SparseItem`s and indexes them
