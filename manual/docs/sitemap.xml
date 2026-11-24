@@ -18,7 +18,7 @@
   </url>
   <url>
     <loc>https://sadit.github.io/SimilaritySearchEngine.jl/server/manual.html</loc>
-    <lastmod>2026-11-24T13:17:47.754Z</lastmod>
+    <lastmod>2026-11-24T16:31:53.735Z</lastmod>
   </url>
   <url>
     <loc>https://sadit.github.io/SimilaritySearchEngine.jl/server/tutorial.html</loc>
@@ -30,6 +30,10 @@
   </url>
   <url>
     <loc>https://sadit.github.io/SimilaritySearchEngine.jl/server/julia-client.html</loc>
-    <lastmod>2026-11-24T15:19:31.424Z</lastmod>
+    <lastmod>2026-11-24T16:19:23.141Z</lastmod>
+  </url>
+  <url>
+    <loc>https://sadit.github.io/SimilaritySearchEngine.jl/server/node-client.html</loc>
+    <lastmod>2026-11-24T16:45:21.893Z</lastmod>
   </url>
 </urlset>

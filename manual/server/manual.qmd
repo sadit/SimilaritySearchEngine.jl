@@ -31,9 +31,9 @@ are described here.
 | `interactive.jl` | guided invocation through `REPL.TerminalMenus` |
 | `apps/` | the three installable app entry points |
 
-Two clients of the HTTP API are in this directory and are separate packages: `python/`, for
-Python, and `julia/`, the [Julia client](julia-client.qmd), whose functions have the names of the
-engine's functions.
+Three clients of the HTTP API are in this directory and are separate packages: `python/`, for
+Python, `julia/`, the [Julia client](julia-client.qmd), whose functions have the names of the
+engine's functions, and `node/`, the [Node.js client](node-client.qmd), with one method per route.
 
 The schema, the persistence layer, the index engine and project management are not part of this
 package. They are `SimilaritySearchEngine.Schema`, `.Persistence`, `.IndexEngine` and
@@ -486,8 +486,8 @@ It does not limit `fetch` or a posting list either, and a posting list takes `li
 
 **Compression.** The server compresses a response with gzip when the request accepts it
 (`Accept-Encoding: gzip`) and the body has at least `[server] gzip_min_bytes` bytes, 1024 by
-default. The response then has `Content-Encoding: gzip`. The Julia and the Python clients
-accept gzip and decompress it, so a caller of a client does nothing. On 2026-11-23, the 200
+default. The response then has `Content-Encoding: gzip`. The Julia, the Python and the Node.js
+clients accept gzip and decompress it, so a caller of a client does nothing. On 2026-11-23, the 200
 results of a search over 200 paragraphs of *Frankenstein* took 11,984 bytes, and 2,161 bytes
 compressed. `[server] gzip = false` turns the compression off (section 6).
 
@@ -1145,6 +1145,8 @@ engine's suite uses the same selection: its files are `dense`, `text`, `persiste
   hierarchy, the concurrency model, and the typed errors this package maps.
 - The [Julia client](julia-client.qmd): the engine's functions over the HTTP API of a remote
   server.
+- The [Node.js client](node-client.qmd): one method per route, in TypeScript, for Node.js 22 or
+  later.
 - The reference, generated from the docstrings of both packages:
   [Server API](https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html) and
   [Engine API](https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html).

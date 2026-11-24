@@ -219,9 +219,16 @@ describe("requests", () => {
   });
 
   test("a request that takes longer than the timeout fails with the error of the signal", async () => {
+    // The timer of AbortSignal.timeout does not keep the process alive. A real request has a
+    // socket that does; this one has none, so it holds a timer until the signal aborts. Without
+    // it, Node.js 22 ends the event loop before the timeout and cancels the test.
     const fetch = (_input: string | URL | Request, init: RequestInit = {}) =>
       new Promise<Response>((_resolve, reject) => {
-        init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+        const alive = setTimeout(() => reject(new Error("the signal did not abort in 5 s")), 5000);
+        init.signal?.addEventListener("abort", () => {
+          clearTimeout(alive);
+          reject(init.signal?.reason);
+        });
       });
     const client = new SimilaritySearchClient("http://127.0.0.1:8080", { timeout: 20, fetch: fetch as typeof globalThis.fetch });
     await assert.rejects(client.healthz(), { name: "TimeoutError" });

@@ -54,6 +54,7 @@ const TEST_FILES = [
     TestFile("api/18", "api/test_18_followers.jl"; tags=["api", "followers", "partitions", "text", "dense", "ctl"], light=false),
     TestFile("api/19", "api/test_19_plugins.jl"; tags=["api", "followers", "plugins"], light=false),
     TestFile("api/20", "api/test_20_storage.jl"; tags=["api", "dense", "storage", "client"], light=false),
+    TestFile("api/21", "api/test_21_node_client.jl"; tags=["api", "client", "node"], light=false),
     TestFile("cli/01", "cli/test_01_build.jl"; tags=["cli", "build"], light=false),
     TestFile("cli/02", "cli/test_02_search.jl"; tags=["cli", "search"], light=false),
     TestFile("cli/03", "cli/test_03_describe_rebuild_closestpair.jl"; tags=["cli", "rebuild"], light=false),

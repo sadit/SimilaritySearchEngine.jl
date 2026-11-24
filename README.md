@@ -15,6 +15,8 @@ This repository holds **three packages**:
 | `SimilaritySearchServer` | REST API, CLIs, job queue, and three installable apps over that engine | [`server/`](server/) |
 | `SimilaritySearchClient` | a Julia client of the REST API, with the engine's function names; depends on HTTP.jl and JSON.jl only | [`server/julia/`](server/julia/) |
 
+Two more clients of the REST API are in `server/`: one for Python, in [`server/python/`](server/python/), and one for Node.js, in TypeScript, in [`server/node/`](server/node/).
+
 They are developed together and tested in one CI run, with separate dependency sets: loading the server's tree costs 1.32 s and 28 transitive packages, which a caller embedding the engine never pays. The section "Development Strategy" of [`PLAN.md`](PLAN.md) says why the packages are separate, how they are kept in step, and where the errors are mapped. `PLAN.md` also describes the state of the packages and the planned work, and [`CHANGELOG.md`](CHANGELOG.md) records their history.
 
 ---
@@ -110,6 +112,7 @@ repository, and the engine and the service layer are two halves of one thing any
   - [Multilingual Case Study](manual/tutorials/paragraph-search.qmd): Real-world evaluation over Project Gutenberg and Wikipedia paragraph corpora.
   - [Server Manual](manual/server/manual.qmd) and [Server Tutorial](manual/server/tutorial.qmd): the REST API, the job queue, the two command lines, and the error mapping.
   - [Julia Client](manual/server/julia-client.qmd): the engine's functions over the REST API of a remote server.
+  - [Node.js Client](manual/server/node-client.qmd): one method per route of the REST API, in TypeScript, for Node.js 22 or later.
 - **API Reference**, generated with Documenter.jl from the docstrings of both packages:
   [Engine API](https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html),
   [Server API](https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html) and
@@ -132,7 +135,9 @@ Pkg.test(test_args=["text"])        # only the files named or tagged "text"
 
 The times are those of the outer testset, measured on 2026-11-23 with 8 threads (`julia -t 8`). The four suites ran at the same time on one machine of 60 cores.
 
-A run that receives names or tags includes only the test files that match one of them, with their heavy testsets. Each suite lists its files, with their names and tags, in the table `TEST_FILES` of its `runtests.jl`. The server's files are `api/01` to `api/20`, `cli/01` to `cli/08`, `e2e`, `boundary`, `dispatcher` and `config`. The engine's files include `dense`, `text`, `persistence`, `quantized`, `sketches`, `followers` and `events`. `SSE_TEST_SELECT="api/13 jobs"` gives the same selection from the environment. A name that matches no file is an error. `test/selection.jl` implements the selection for both suites.
+A run that receives names or tags includes only the test files that match one of them, with their heavy testsets. Each suite lists its files, with their names and tags, in the table `TEST_FILES` of its `runtests.jl`. The server's files are `api/01` to `api/21`, `cli/01` to `cli/08`, `e2e`, `boundary`, `dispatcher` and `config`. The engine's files include `dense`, `text`, `persistence`, `quantized`, `sketches`, `followers` and `events`. `SSE_TEST_SELECT="api/13 jobs"` gives the same selection from the environment. A name that matches no file is an error. `test/selection.jl` implements the selection for both suites.
+
+The Node.js client has its own tests, which need no server: `npm install` and `npm test` in `server/node/`, with Node.js 22 or later. Its tests against a server are `api/21` of the server's full level, which uses the `node` of `SSE_NODE` or of `PATH`.
 
 The split follows the clock, not importance. The engine's full level adds the whole-dataset algorithms, the concurrency stress test, the text testsets that fit a linguistic profile from a corpus, and the resident memory of a quantized project -- everything they cover is covered in the light run too, at a size that runs in about a second each. The server's light level (321 assertions, 29 s, measured on 2026-11-23) covers the boundary with the engine -- wire names to engine types, engine errors to status and exit codes, wire items to engine items -- without starting a server or spawning a subprocess; its full level (1,385 assertions, 38 min, measured on the same day) adds the HTTP, job, CLI and Julia client end-to-end suites. `SSE_TEST_LEVEL=full` selects the full level from CI.
 

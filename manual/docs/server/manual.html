@@ -171,6 +171,10 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <a class="dropdown-item" href="../server/julia-client.html">
  <span class="dropdown-text">Julia client</span></a>
   </li>  
+        <li>
+    <a class="dropdown-item" href="../server/node-client.html">
+ <span class="dropdown-text">Node.js client</span></a>
+  </li>  
     </ul>
   </li>
 </ul>
@@ -321,7 +325,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </tr>
 </tbody>
 </table>
-<p>Two clients of the HTTP API are in this directory and are separate packages: <code>python/</code>, for Python, and <code>julia/</code>, the <a href="../server/julia-client.html">Julia client</a>, whose functions have the names of the engine’s functions.</p>
+<p>Three clients of the HTTP API are in this directory and are separate packages: <code>python/</code>, for Python, <code>julia/</code>, the <a href="../server/julia-client.html">Julia client</a>, whose functions have the names of the engine’s functions, and <code>node/</code>, the <a href="../server/node-client.html">Node.js client</a>, with one method per route.</p>
 <p>The schema, the persistence layer, the index engine and project management are not part of this package. They are <code>SimilaritySearchEngine.Schema</code>, <code>.Persistence</code>, <code>.IndexEngine</code> and <code>.Project</code>.</p>
 </section>
 <section id="how-a-dataset-is-held" class="level2">
@@ -732,7 +736,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"kind"</span><span class="fu">:</span><span class="st">"InvalidOption"</span><span class="fu">,</span></span>
 <span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a> <span class="dt">"error"</span><span class="fu">:</span><span class="st">"k = 500 is larger than max_k = 100 of the dataset 'ds'. max_k is set when ..."</span><span class="fu">}</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p><code>max_k</code> limits <code>search</code>, <code>ftsearch</code>, the searches of a follower, which use <code>max_k</code> of the leader, and the hybrid search, whose <code>k</code> is at most <code>max_k</code> of each of its two datasets. It does not limit the jobs, whose results go to a file, or the commands of <code>similarity-search</code>. It does not limit <code>fetch</code> or a posting list either, and a posting list takes <code>limit</code>.</p>
-<p><strong>Compression.</strong> The server compresses a response with gzip when the request accepts it (<code>Accept-Encoding: gzip</code>) and the body has at least <code>[server] gzip_min_bytes</code> bytes, 1024 by default. The response then has <code>Content-Encoding: gzip</code>. The Julia and the Python clients accept gzip and decompress it, so a caller of a client does nothing. On 2026-11-23, the 200 results of a search over 200 paragraphs of <em>Frankenstein</em> took 11,984 bytes, and 2,161 bytes compressed. <code>[server] gzip = false</code> turns the compression off (section 6).</p>
+<p><strong>Compression.</strong> The server compresses a response with gzip when the request accepts it (<code>Accept-Encoding: gzip</code>) and the body has at least <code>[server] gzip_min_bytes</code> bytes, 1024 by default. The response then has <code>Content-Encoding: gzip</code>. The Julia, the Python and the Node.js clients accept gzip and decompress it, so a caller of a client does nothing. On 2026-11-23, the 200 results of a search over 200 paragraphs of <em>Frankenstein</em> took 11,984 bytes, and 2,161 bytes compressed. <code>[server] gzip = false</code> turns the compression off (section 6).</p>
 <p><code>GET /api/v1/jobs/{job_id}/result</code> sends the file of the result in parts, without reading it into memory, and compresses it as it is read when the request accepts gzip.</p>
 </section>
 <section id="followers" class="level3">
@@ -1317,6 +1321,7 @@ Correct or remove [plugins.Decades] in config.toml, and start the server again.<
 <li>The <a href="../server/tutorial.html">server tutorial</a>: the same interface in use, in twelve steps. A dataset is created, indexed and queried, and a job is executed. A dense dataset stores its vectors quantized, the items are organized with followers and with a plugin, and the server requires a token.</li>
 <li>The <a href="../architecture.html">architecture of the engine</a>: the storage layout, the engine hierarchy, the concurrency model, and the typed errors this package maps.</li>
 <li>The <a href="../server/julia-client.html">Julia client</a>: the engine’s functions over the HTTP API of a remote server.</li>
+<li>The <a href="../server/node-client.html">Node.js client</a>: one method per route, in TypeScript, for Node.js 22 or later.</li>
 <li>The reference, generated from the docstrings of both packages: <a href="https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html">Server API</a> and <a href="https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html">Engine API</a>.</li>
 </ul>
 

@@ -101,6 +101,11 @@ jobs:
         with:
           version: '1.12'
       - uses: julia-actions/cache@v3
+      # api/21 of the server's full level tests the Node.js client against the test server. It
+      # uses the `node` in PATH, installs the client and builds it.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
       - name: Engine, full level
         run: julia --project=. -e 'using Pkg; Pkg.test(test_args=["full"])'
         env:

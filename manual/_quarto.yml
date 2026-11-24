@@ -35,6 +35,8 @@ website:
             text: "Tutorial"
           - href: server/julia-client.qmd
             text: "Julia client"
+          - href: server/node-client.qmd
+            text: "Node.js client"
     # Absolute URLs rather than relative ones: this navbar is shared by pages at two different
     # depths, and `quarto preview` serves them off a local port where no relative path could
     # reach the generated reference anyway.

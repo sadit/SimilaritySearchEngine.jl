@@ -1,0 +1,1011 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.9.38">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>Node.js Client – SimilaritySearchEngine.jl</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="../">
+<script src="../site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="../site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="../site_libs/quarto-html/popper.min.js"></script>
+<script src="../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-15634bcf2e68342d4ad2dfa704d543f6.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../site_libs/bootstrap/bootstrap-3e7735b7b22659e5fa437aca0bb49075.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+
+
+<link rel="stylesheet" href="../styles.css">
+</head>
+
+<body class="nav-fixed quarto-light">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a class="navbar-brand" href="../index.html">
+    <span class="navbar-title">SimilaritySearchEngine.jl</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="Search"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" role="menu" aria-expanded="false" aria-label="Toggle navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../index.html"> 
+<span class="menu-text">Home</span></a>
+  </li>  
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-engine" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">Engine</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-engine">    
+        <li>
+    <a class="dropdown-item" href="../architecture.html">
+ <span class="dropdown-text">Architecture</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="../tutorials/index.html">
+ <span class="dropdown-text">Tutorials</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="../tutorials/getting-started.html">
+ <span class="dropdown-text">Getting started</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="../tutorials/paragraph-search.html">
+ <span class="dropdown-text">Paragraph search</span></a>
+  </li>  
+    </ul>
+  </li>
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-server" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">Server</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-server">    
+        <li>
+    <a class="dropdown-item" href="../server/manual.html">
+ <span class="dropdown-text">Manual</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="../server/tutorial.html">
+ <span class="dropdown-text">Tutorial</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="../server/julia-client.html">
+ <span class="dropdown-text">Julia client</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="../server/node-client.html">
+ <span class="dropdown-text">Node.js client</span></a>
+  </li>  
+    </ul>
+  </li>
+</ul>
+            <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-api-reference" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">API reference</span>
+    </a>
+    <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="nav-menu-api-reference">    
+        <li>
+    <a class="dropdown-item" href="https://sadit.github.io/SimilaritySearchEngine.jl/api/engine.html">
+ <span class="dropdown-text">Engine API</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html">
+ <span class="dropdown-text">Server API</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="https://sadit.github.io/SimilaritySearchEngine.jl/api/client.html">
+ <span class="dropdown-text">Julia client API</span></a>
+  </li>  
+    </ul>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link" href="https://github.com/sadit/SimilaritySearchEngine.jl"> 
+<span class="menu-text">GitHub</span></a>
+  </li>  
+</ul>
+          </div> <!-- /navcollapse -->
+            <div class="quarto-navbar-tools">
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+</header>
+<!-- content -->
+<div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">On this page</h2>
+   
+  <ul>
+  <li><a href="#installation" id="toc-installation" class="nav-link active" data-scroll-target="#installation">1. Installation</a></li>
+  <li><a href="#use" id="toc-use" class="nav-link" data-scroll-target="#use">2. Use</a></li>
+  <li><a href="#the-names-of-the-fields" id="toc-the-names-of-the-fields" class="nav-link" data-scroll-target="#the-names-of-the-fields">3. The Names of the Fields</a></li>
+  <li><a href="#methods" id="toc-methods" class="nav-link" data-scroll-target="#methods">4. Methods</a></li>
+  <li><a href="#errors" id="toc-errors" class="nav-link" data-scroll-target="#errors">5. Errors</a></li>
+  <li><a href="#jobs" id="toc-jobs" class="nav-link" data-scroll-target="#jobs">6. Jobs</a></li>
+  <li><a href="#size-of-a-search" id="toc-size-of-a-search" class="nav-link" data-scroll-target="#size-of-a-search">7. Size of a Search</a></li>
+  <li><a href="#followers" id="toc-followers" class="nav-link" data-scroll-target="#followers">8. Followers</a></li>
+  <li><a href="#administration" id="toc-administration" class="nav-link" data-scroll-target="#administration">9. Administration</a></li>
+  <li><a href="#tests" id="toc-tests" class="nav-link" data-scroll-target="#tests">10. Tests</a></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default">
+<div class="quarto-title">
+<h1 class="title">Node.js Client</h1>
+<p class="subtitle lead">similarity-search-client: the HTTP API of a remote server, from Node.js and TypeScript</p>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<p><code>similarity-search-client</code> is a package for Node.js in <code>server/node/</code> of this repository. It sends requests to the HTTP API of a running <code>similarity-search-serve</code> process. It is written in TypeScript and is distributed as JavaScript modules with their type declarations. It has no dependency at run time, and it needs Node.js 22 or later.</p>
+<p>The client has the shape of the Python client: one class, <code>SimilaritySearchClient</code>, with one method per route. A method returns the JSON of the response, with the field names of the server. Section 3 explains why the names are not converted to camelCase.</p>
+<section id="installation" class="level2">
+<h2 class="anchored" data-anchor-id="installation">1. Installation</h2>
+<p>The package is not published on npm. Build it from a copy of this repository, and install it in a project from that directory:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> SimilaritySearchEngine.jl/server/node</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="ex">npm</span> install                  <span class="co"># installs TypeScript and builds dist/</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> my-project</span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="ex">npm</span> install ../SimilaritySearchEngine.jl/server/node</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><code>npm install</code> in <code>server/node</code> runs the script <code>prepare</code>, which compiles <code>src/</code> to <code>dist/</code>. A project that installs the package from its directory uses that <code>dist/</code>: npm adds a link to the directory in <code>node_modules/</code>. After a change to <code>src/</code>, <code>npm run build</code> compiles it again.</p>
+<p>npm 11 does not run the script <code>prepare</code> of a dependency that the project has not approved, and it says so with a warning <code>install-scripts</code>. The package was compiled in its own directory, so the warning needs no action.</p>
+</section>
+<section id="use" class="level2">
+<h2 class="anchored" data-anchor-id="use">2. Use</h2>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode ts code-with-copy"><code class="sourceCode typescript"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> { SimilaritySearchClient<span class="op">,</span> NotFound } <span class="im">from</span> <span class="st">"similarity-search-client"</span><span class="op">;</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> client <span class="op">=</span> <span class="kw">new</span> <span class="fu">SimilaritySearchClient</span>(<span class="st">"http://127.0.0.1:8080"</span><span class="op">,</span> { token<span class="op">:</span> <span class="bu">process</span><span class="op">.</span><span class="at">env</span><span class="op">.</span><span class="at">SSE_TOKEN</span> })<span class="op">;</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="cf">await</span> client<span class="op">.</span><span class="fu">createDataset</span>({ id<span class="op">:</span> <span class="st">"papers"</span><span class="op">,</span> index_kind<span class="op">:</span> <span class="st">"searchgraph"</span><span class="op">,</span> distance<span class="op">:</span> <span class="st">"NormCosine"</span><span class="op">,</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>                             partition_by<span class="op">:</span> <span class="st">"repo"</span><span class="op">,</span> max_k<span class="op">:</span> <span class="dv">1000</span> })<span class="op">;</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="cf">await</span> client<span class="op">.</span><span class="fu">append</span>(<span class="st">"papers"</span><span class="op">,</span> vectors<span class="op">.</span><span class="fu">map</span>((v<span class="op">,</span> i) <span class="kw">=&gt;</span> ({ doc_id<span class="op">:</span> <span class="vs">`p</span><span class="sc">${</span>i<span class="sc">}</span><span class="vs">`</span><span class="op">,</span> vector<span class="op">:</span> v<span class="op">,</span> repo<span class="op">:</span> repos[i] })))<span class="op">;</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> { results } <span class="op">=</span> <span class="cf">await</span> client<span class="op">.</span><span class="fu">search</span>(<span class="st">"papers"</span><span class="op">,</span> q<span class="op">,</span> { k<span class="op">:</span> <span class="dv">10</span> })<span class="op">;</span>       <span class="co">// [{ doc_id, _id, distance }, ...]</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a><span class="cf">await</span> client<span class="op">.</span><span class="fu">search</span>(<span class="st">"papers"</span><span class="op">,</span> q<span class="op">,</span> { k<span class="op">:</span> <span class="dv">10</span><span class="op">,</span> partition<span class="op">:</span> <span class="st">"repo-a"</span> })<span class="op">;</span></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a><span class="cf">await</span> client<span class="op">.</span><span class="fu">search</span>(<span class="st">"papers"</span><span class="op">,</span> q<span class="op">,</span> { k<span class="op">:</span> <span class="dv">10</span><span class="op">,</span> filter<span class="op">:</span> { year<span class="op">:</span> { gte<span class="op">:</span> <span class="dv">2020</span> } } })<span class="op">;</span></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a><span class="cf">await</span> client<span class="op">.</span><span class="fu">fetch</span>(<span class="st">"papers"</span><span class="op">,</span> [<span class="st">"p1"</span><span class="op">,</span> <span class="dv">3</span>])<span class="op">;</span>                                <span class="co">// by doc_id or by _id</span></span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a><span class="cf">await</span> client<span class="op">.</span><span class="fu">exists</span>(<span class="st">"papers"</span><span class="op">,</span> [<span class="st">"p1"</span><span class="op">,</span> <span class="dv">3</span>])<span class="op">;</span></span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a><span class="cf">await</span> client<span class="op">.</span><span class="fu">deleteItem</span>(<span class="st">"papers"</span><span class="op">,</span> <span class="dv">3</span>)<span class="op">;</span>                                   <span class="co">// the _id</span></span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a><span class="cf">await</span> client<span class="op">.</span><span class="fu">calibrate</span>(<span class="st">"papers"</span><span class="op">,</span> { minrecall<span class="op">:</span> <span class="fl">0.9</span> })<span class="op">;</span></span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a><span class="cf">await</span> client<span class="op">.</span><span class="fu">createDataset</span>({ id<span class="op">:</span> <span class="st">"papers_text"</span><span class="op">,</span> index_kind<span class="op">:</span> <span class="st">"bm25_invfile"</span> })<span class="op">;</span></span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a><span class="cf">await</span> client<span class="op">.</span><span class="fu">append</span>(<span class="st">"papers_text"</span><span class="op">,</span> texts<span class="op">.</span><span class="fu">map</span>((text<span class="op">,</span> i) <span class="kw">=&gt;</span> ({ doc_id<span class="op">:</span> <span class="vs">`p</span><span class="sc">${</span>i<span class="sc">}</span><span class="vs">`</span><span class="op">,</span> text })))<span class="op">;</span></span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a><span class="cf">await</span> client<span class="op">.</span><span class="fu">ftsearch</span>(<span class="st">"papers_text"</span><span class="op">,</span> <span class="st">"redes neuronales"</span><span class="op">,</span> { k<span class="op">:</span> <span class="dv">5</span> })<span class="op">;</span></span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a><span class="cf">await</span> client<span class="op">.</span><span class="fu">hybridSearch</span>(<span class="st">"papers"</span><span class="op">,</span> <span class="st">"papers_text"</span><span class="op">,</span> { vector<span class="op">:</span> q<span class="op">,</span> text<span class="op">:</span> <span class="st">"redes neuronales"</span><span class="op">,</span> k<span class="op">:</span> <span class="dv">5</span> })<span class="op">;</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Every method is <code>async</code>. Several requests at the same time are several promises:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode ts code-with-copy"><code class="sourceCode typescript"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> [a<span class="op">,</span> b] <span class="op">=</span> <span class="cf">await</span> <span class="bu">Promise</span><span class="op">.</span><span class="fu">all</span>([client<span class="op">.</span><span class="fu">search</span>(<span class="st">"papers"</span><span class="op">,</span> q1)<span class="op">,</span> client<span class="op">.</span><span class="fu">search</span>(<span class="st">"papers"</span><span class="op">,</span> q2)])<span class="op">;</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>The constructor takes the root of the server, without <code>/api/v1</code>, and three options:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: left;">option</th>
+<th style="text-align: left;">what it is</th>
+<th style="text-align: left;">default</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;"><code>token</code></td>
+<td style="text-align: left;">sent as <code>Authorization: Bearer &lt;token&gt;</code> with every request</td>
+<td style="text-align: left;">no token</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>timeout</code></td>
+<td style="text-align: left;">milliseconds to wait for a response; <code>0</code> waits without a limit</td>
+<td style="text-align: left;">60,000</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>fetch</code></td>
+<td style="text-align: left;">a function with the signature of <code>fetch</code>, used in place of the global one</td>
+<td style="text-align: left;">the global <code>fetch</code></td>
+</tr>
+</tbody>
+</table>
+<p>A calibration or a large append can take minutes. Give such a request a client with a larger <code>timeout</code>.</p>
+<p>A vector is a <code>number[]</code>, a <code>Float32Array</code> or any array-like object of numbers. The client sends it as a JSON array. This applies to <code>vector</code>, <code>indices</code> and <code>values</code> of an item, and to the vectors of <code>search</code>, <code>hybridSearch</code>, <code>followerSearch</code> and the <code>queries</code> of <code>calibrate</code>. <code>JSON.stringify</code> alone writes a <code>Float32Array</code> as an object with numbered keys, not as an array.</p>
+</section>
+<section id="the-names-of-the-fields" class="level2">
+<h2 class="anchored" data-anchor-id="the-names-of-the-fields">3. The Names of the Fields</h2>
+<p>The options of a method and the responses have the field names of the server, in snake_case: <code>index_kind</code>, <code>meta_schema</code>, <code>max_k</code>, <code>doc_id</code>, <code>beamsearch_overrides</code>. The JSON examples of the <a href="../server/manual.html">server manual</a> apply without changes. The names of the methods are in camelCase.</p>
+<p>The client does not convert the names. The metadata fields of an item have the names that the user gave them, and a <code>fetch</code> returns them merged with the fields of the record. A conversion would change the names of the user. The options that belong to the client and not to the server are in camelCase: <code>pollInterval</code> and <code>timeout</code> of <code>waitJob</code>, and the fields <code>jobId</code>, <code>jobKind</code> and <code>exitCode</code> of the errors.</p>
+<p><code>src/types.ts</code> declares an interface for each request and each response that the server manual documents. A response can have more fields than its interface: the server adds a field without changing its version.</p>
+</section>
+<section id="methods" class="level2">
+<h2 class="anchored" data-anchor-id="methods">4. Methods</h2>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: left;">method</th>
+<th style="text-align: left;">route</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;"><code>healthz()</code>, <code>readyz()</code></td>
+<td style="text-align: left;"><code>GET /healthz</code>, <code>GET /readyz</code></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>metrics()</code></td>
+<td style="text-align: left;"><code>GET /metrics</code>; returns the text of Prometheus</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>createDataset(options)</code></td>
+<td style="text-align: left;"><code>POST /api/v1/datasets</code></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>listDatasets({ offset, limit })</code></td>
+<td style="text-align: left;"><code>GET /api/v1/datasets</code></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>getDataset(id)</code>, <code>deleteDataset(id)</code></td>
+<td style="text-align: left;"><code>GET</code>, <code>DELETE /api/v1/datasets/{id}</code></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>getLog(id, { offset, limit })</code></td>
+<td style="text-align: left;"><code>GET /api/v1/datasets/{id}/log</code></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>getVocab(id, { scan, sample })</code></td>
+<td style="text-align: left;"><code>GET /api/v1/datasets/{id}/vocab</code></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>getPartitions(id)</code></td>
+<td style="text-align: left;"><code>GET /api/v1/datasets/{id}/partitions</code></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>append(id, items)</code></td>
+<td style="text-align: left;"><code>POST /api/v1/datasets/{id}/append</code></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>search(id, vector, { k, filter, beamsearch_overrides, partition })</code></td>
+<td style="text-align: left;"><code>POST /api/v1/datasets/{id}/search</code></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>ftsearch(id, text, { k, filter, partition })</code></td>
+<td style="text-align: left;"><code>POST /api/v1/datasets/{id}/ftsearch</code></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>hybridSearch(denseId, lexicalId, { vector, text, k })</code></td>
+<td style="text-align: left;"><code>POST /api/v1/search/hybrid</code></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>fetch(id, ids)</code>, <code>exists(id, ids)</code></td>
+<td style="text-align: left;"><code>POST .../fetch</code>, <code>GET .../exists</code></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>deleteItem(id, _id)</code></td>
+<td style="text-align: left;"><code>POST /api/v1/datasets/{id}/delete</code></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>calibrate(id, { minrecall, numqueries, ksearch, queries, partition })</code></td>
+<td style="text-align: left;"><code>POST /api/v1/datasets/{id}/calibrate</code></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>postingList(id, key, { follower, limit })</code></td>
+<td style="text-align: left;"><code>GET .../postings</code>, or <code>GET .../followers/{follower}/postings</code></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>createFollower(id, options)</code>, <code>listFollowers(id)</code></td>
+<td style="text-align: left;"><code>POST</code>, <code>GET /api/v1/datasets/{id}/followers</code></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>getFollower(id, name)</code>, <code>deleteFollower(id, name)</code></td>
+<td style="text-align: left;"><code>GET</code>, <code>DELETE .../followers/{name}</code></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>syncFollower(id, name)</code>, <code>rebuildFollower(id, name)</code></td>
+<td style="text-align: left;"><code>POST .../followers/{name}/sync</code>, <code>/rebuild</code></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>followerPartitions(id, name)</code></td>
+<td style="text-align: left;"><code>GET .../followers/{name}/partitions</code></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>followerSearch(id, follower, { vector or keys, k, t, filter, minrecall })</code></td>
+<td style="text-align: left;"><code>POST .../followers/{follower}/search</code></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>followerFtsearch(id, follower, text, { k, filter })</code></td>
+<td style="text-align: left;"><code>POST .../followers/{follower}/ftsearch</code></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>followerCalibrate(id, follower, { minrecall, numqueries, ksearch })</code></td>
+<td style="text-align: left;"><code>POST .../followers/{follower}/calibrate</code></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>migratePartitions(id, { name, disjoint })</code></td>
+<td style="text-align: left;"><code>POST /api/v1/datasets/{id}/migrate-partitions</code></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>getGroup(id)</code></td>
+<td style="text-align: left;"><code>GET /api/v1/datasets/{id}/group</code></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>listPlugins()</code></td>
+<td style="text-align: left;"><code>GET /api/v1/plugins</code></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>submitJob(kind, params)</code>, <code>getJob(jobId)</code>, <code>listJobs(options)</code></td>
+<td style="text-align: left;"><code>POST /api/v1/jobs/{kind}</code>, <code>GET /api/v1/jobs/{jobId}</code>, <code>GET /api/v1/jobs</code></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>getJobResult(jobId)</code></td>
+<td style="text-align: left;"><code>GET /api/v1/jobs/{jobId}/result</code>; returns the text of the result</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>blockJob</code>, <code>resumeJob</code>, <code>killJob</code>, <code>cancelJob</code></td>
+<td style="text-align: left;"><code>POST .../block</code>, <code>/resume</code>, <code>/kill</code>, <code>DELETE /api/v1/jobs/{jobId}</code></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>createToken</code>, <code>listTokens</code>, <code>pruneTokens</code>, <code>revokeToken</code></td>
+<td style="text-align: left;"><code>/api/v1/admin/tokens</code></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>jobsGc({ retention_seconds })</code></td>
+<td style="text-align: left;"><code>POST /api/v1/admin/jobs/gc</code></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>unloadDataset(id)</code>, <code>reloadDataset(id, { max_k, edit_correction })</code></td>
+<td style="text-align: left;"><code>POST /api/v1/admin/datasets/{id}/unload</code>, <code>/reload</code></td>
+</tr>
+</tbody>
+</table>
+<p>The client escapes a dataset id, a follower name, a job id and a token as one segment of the path. A follower of one partition is written <code>name=value</code>, as in the HTTP API: <code>client.followerSearch("papers", "by_repo=unicach", { vector: q })</code>.</p>
+<p><code>request(method, path, { body, query, text })</code> sends a request to a route that has no method. <code>path</code> starts with <code>/</code>, and <code>text: true</code> returns the text of the response instead of its JSON.</p>
+<p>The Python client has no method for <code>GET .../vocab</code>, and its <code>create_dataset</code> does not take <code>dimension</code> or <code>edit_correction</code>. This client has them. <code>hybridSearch</code> sends <code>vector</code>, <code>text</code> and <code>k</code>, which are the fields that the server reads.</p>
+</section>
+<section id="errors" class="level2">
+<h2 class="anchored" data-anchor-id="errors">5. Errors</h2>
+<p>The client throws the error classes of the engine, with the same names and the same four categories: <code>InvalidRequest</code>, <code>NotFound</code>, <code>ConflictingState</code> and <code>StorageFailure</code>. <code>e instanceof NotFound</code> is true for every error of that category.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode ts code-with-copy"><code class="sourceCode typescript"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="cf">try</span> {</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>  <span class="cf">await</span> client<span class="op">.</span><span class="fu">search</span>(<span class="st">"papers"</span><span class="op">,</span> q<span class="op">,</span> { partition<span class="op">:</span> <span class="st">"repo-x"</span> })<span class="op">;</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>} <span class="cf">catch</span> (e) {</span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>(e <span class="kw">instanceof</span> UnknownPartition)) <span class="cf">throw</span> e<span class="op">;</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>  <span class="bu">console</span><span class="op">.</span><span class="fu">log</span>(e<span class="op">.</span><span class="at">message</span>)<span class="op">;</span>          <span class="co">// the message lists the closest partition names</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>The server sends the name of the engine’s error in the <code>kind</code> field of its error responses, and the client throws the class with that name. Every error has <code>status</code>, the HTTP status, <code>kind</code>, the <code>kind</code> of the response or <code>null</code>, and <code>message</code>, the message of the server. A response without a known <code>kind</code> throws the generic class of its status:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: left;">status</th>
+<th style="text-align: left;">class</th>
+<th style="text-align: left;">category</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">400</td>
+<td style="text-align: left;"><code>RequestRejected</code></td>
+<td style="text-align: left;"><code>InvalidRequest</code></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">404</td>
+<td style="text-align: left;"><code>ResourceNotFound</code>, for example a dataset that does not exist</td>
+<td style="text-align: left;"><code>NotFound</code></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">409</td>
+<td style="text-align: left;"><code>StateConflict</code></td>
+<td style="text-align: left;"><code>ConflictingState</code></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">401, 403</td>
+<td style="text-align: left;"><code>Unauthenticated</code>, <code>Forbidden</code></td>
+<td style="text-align: left;"><code>AccessDenied</code></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">500</td>
+<td style="text-align: left;"><code>ServerFailure</code></td>
+<td style="text-align: left;">none</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">other</td>
+<td style="text-align: left;"><code>UnexpectedResponse</code></td>
+<td style="text-align: left;">none</td>
+</tr>
+</tbody>
+</table>
+<p>All of them extend <code>RemoteError</code>, which extends <code>Error</code>. A connection that fails is not wrapped. If no server listens on the address, the error is the <code>TypeError</code> of <code>fetch</code>. If the response takes longer than <code>timeout</code>, the error is a <code>DOMException</code> named <code>TimeoutError</code>.</p>
+<p>The light suite of the server reads <code>src/errors.ts</code> and checks that it has a class for every error of the engine, in the same category. A new error of the engine makes that test fail until the client has it.</p>
+</section>
+<section id="jobs" class="level2">
+<h2 class="anchored" data-anchor-id="jobs">6. Jobs</h2>
+<p><code>runJob(kind, params, { pollInterval, timeout })</code> submits a job and waits for it. It asks for the state of the job every <code>pollInterval</code> milliseconds, 1,000 by default, and returns the record of the job when it completes. <code>waitJob(jobId, options)</code> waits for a job that is already submitted. On the server, each job is a separate Julia process, so a job takes at least the time that the server needs to start one.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode ts code-with-copy"><code class="sourceCode typescript"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> record <span class="op">=</span> <span class="cf">await</span> client<span class="op">.</span><span class="fu">runJob</span>(<span class="st">"allknn"</span><span class="op">,</span> { dataset<span class="op">:</span> <span class="st">"papers"</span><span class="op">,</span> k<span class="op">:</span> <span class="dv">16</span> })<span class="op">;</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> rows <span class="op">=</span> (<span class="cf">await</span> client<span class="op">.</span><span class="fu">getJobResult</span>(record<span class="op">.</span><span class="at">id</span>))<span class="op">.</span><span class="fu">trim</span>()<span class="op">.</span><span class="fu">split</span>(<span class="st">"</span><span class="sc">\n</span><span class="st">"</span>)<span class="op">.</span><span class="fu">map</span>((l) <span class="kw">=&gt;</span> <span class="bu">JSON</span><span class="op">.</span><span class="fu">parse</span>(l))<span class="op">;</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="co">// Several jobs at the same time.</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> [a<span class="op">,</span> b] <span class="op">=</span> <span class="cf">await</span> <span class="bu">Promise</span><span class="op">.</span><span class="fu">all</span>([</span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>  client<span class="op">.</span><span class="fu">runJob</span>(<span class="st">"allknn"</span><span class="op">,</span> { dataset<span class="op">:</span> <span class="st">"papers"</span><span class="op">,</span> k<span class="op">:</span> <span class="dv">16</span> })<span class="op">,</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>  client<span class="op">.</span><span class="fu">runJob</span>(<span class="st">"fft"</span><span class="op">,</span> { dataset<span class="op">:</span> <span class="st">"papers"</span><span class="op">,</span> k<span class="op">:</span> <span class="dv">100</span> })<span class="op">,</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>])<span class="op">;</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>The parameters of each kind are <code>dataset</code> and <code>k</code> for <code>allknn</code> and <code>fft</code>, <code>dataset</code> and <code>epsilon</code> for <code>neardup</code>, <code>dataset</code>, <code>queries</code> and <code>k</code> for <code>hsp</code>, <code>dataset</code> for <code>dump</code>, and <code>dataset</code> and <code>bundle</code> for <code>load</code>. Another kind, such as <code>searchbatch</code>, is submitted with <code>command</code>, the arguments of the server’s command line.</p>
+<p><code>getJobResult</code> returns the text of the result, because its format depends on the kind: JSON lines for <code>allknn</code>, one JSON object for <code>fft</code> and <code>neardup</code>, and for <code>dump</code> an object with <code>bundle_dir</code> and <code>manifest</code>. The bundle of <code>dump</code> stays on the server: <code>bundle_dir</code> is a path on the file system of the server, which <code>load</code> takes. <code>load</code> writes the new dataset to the working directory of the server, and <code>reloadDataset(id)</code> opens it:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6"><pre class="sourceCode ts code-with-copy"><code class="sourceCode typescript"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> dumped <span class="op">=</span> <span class="cf">await</span> client<span class="op">.</span><span class="fu">runJob</span>(<span class="st">"dump"</span><span class="op">,</span> { dataset<span class="op">:</span> <span class="st">"papers"</span> })<span class="op">;</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> { bundle_dir } <span class="op">=</span> <span class="bu">JSON</span><span class="op">.</span><span class="fu">parse</span>(<span class="cf">await</span> client<span class="op">.</span><span class="fu">getJobResult</span>(dumped<span class="op">.</span><span class="at">id</span>))<span class="op">;</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="cf">await</span> client<span class="op">.</span><span class="fu">runJob</span>(<span class="st">"load"</span><span class="op">,</span> { bundle<span class="op">:</span> bundle_dir<span class="op">,</span> dataset<span class="op">:</span> <span class="st">"papers_copy"</span> })<span class="op">;</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a><span class="cf">await</span> client<span class="op">.</span><span class="fu">reloadDataset</span>(<span class="st">"papers_copy"</span>)<span class="op">;</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>A job that fails throws <code>JobFailed</code>. Its <code>exitCode</code> is the exit status of the job’s process, and its <code>category</code> is the class of the category that this status names: 2 is <code>InvalidRequest</code>, 4 is <code>NotFound</code>, 5 is <code>ConflictingState</code> and 70 is <code>StorageFailure</code>. Other statuses have <code>category === null</code>; 1 is a dataset directory that does not exist. For example, <code>fft</code> on a text dataset fails with <code>exitCode === 2</code> and <code>category === InvalidRequest</code>. The message of the engine’s error stays in the output of the process on the server. After <code>timeout</code> milliseconds, <code>waitJob</code> throws <code>JobTimeout</code>, and the job keeps running on the server.</p>
+</section>
+<section id="size-of-a-search" class="level2">
+<h2 class="anchored" data-anchor-id="size-of-a-search">7. Size of a Search</h2>
+<p>A search answers its <code>k</code> results in one response. <code>k</code> is at most <code>max_k</code> of the dataset, 100 by default, and a larger <code>k</code> throws <code>InvalidOption</code>. <code>createDataset({ ..., max_k: 1000 })</code> sets it, <code>reloadDataset(id, { max_k: 1000 })</code> changes it, and <code>getDataset(id)</code> reports it. The <a href="../server/manual.html#size-of-a-response">server manual</a> describes it.</p>
+<p>The server compresses a large response with gzip. The <code>fetch</code> of Node.js asks for gzip and decompresses the response, so the client does nothing for it. On 2026-11-24, the test of the client against the server checked that a search of 99 results arrives compressed.</p>
+</section>
+<section id="followers" class="level2">
+<h2 class="anchored" data-anchor-id="followers">8. Followers</h2>
+<p>A follower of a dataset reads the items of the dataset and organizes them by keys. A partition follower restricts a search to the items of one key. A keyword follower indexes the keys of each item in an inverted file. The <a href="../server/manual.html#followers">server manual</a> describes both kinds and their routes.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode ts code-with-copy"><code class="sourceCode typescript"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="cf">await</span> client<span class="op">.</span><span class="fu">createFollower</span>(<span class="st">"papers"</span><span class="op">,</span> { name<span class="op">:</span> <span class="st">"by_repo"</span><span class="op">,</span> kind<span class="op">:</span> <span class="st">"partition"</span><span class="op">,</span> source<span class="op">:</span> <span class="st">"meta:repo"</span><span class="op">,</span> disjoint<span class="op">:</span> <span class="kw">false</span> })<span class="op">;</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="cf">await</span> client<span class="op">.</span><span class="fu">createFollower</span>(<span class="st">"papers_text"</span><span class="op">,</span> { name<span class="op">:</span> <span class="st">"kw"</span><span class="op">,</span> kind<span class="op">:</span> <span class="st">"keyword"</span><span class="op">,</span> source<span class="op">:</span> <span class="st">"keywords"</span><span class="op">,</span> policy<span class="op">:</span> <span class="st">"manual"</span> })<span class="op">;</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a><span class="cf">await</span> client<span class="op">.</span><span class="fu">followerSearch</span>(<span class="st">"papers"</span><span class="op">,</span> <span class="st">"by_repo=unicach"</span><span class="op">,</span> { vector<span class="op">:</span> q<span class="op">,</span> k<span class="op">:</span> <span class="dv">10</span> })<span class="op">;</span>     <span class="co">// one partition</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="cf">await</span> client<span class="op">.</span><span class="fu">followerFtsearch</span>(<span class="st">"papers_text"</span><span class="op">,</span> <span class="st">"by_repo=unicach"</span><span class="op">,</span> <span class="st">"redes"</span><span class="op">,</span> { k<span class="op">:</span> <span class="dv">10</span> })<span class="op">;</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a><span class="cf">await</span> client<span class="op">.</span><span class="fu">followerCalibrate</span>(<span class="st">"papers"</span><span class="op">,</span> <span class="st">"by_repo=unicach"</span><span class="op">,</span> { minrecall<span class="op">:</span> <span class="fl">0.9</span> })<span class="op">;</span></span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a><span class="cf">await</span> client<span class="op">.</span><span class="fu">followerPartitions</span>(<span class="st">"papers"</span><span class="op">,</span> <span class="st">"by_repo"</span>)<span class="op">;</span></span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a><span class="cf">await</span> client<span class="op">.</span><span class="fu">followerSearch</span>(<span class="st">"papers_text"</span><span class="op">,</span> <span class="st">"kw"</span><span class="op">,</span> { keys<span class="op">:</span> [<span class="st">"Elizabeth"</span><span class="op">,</span> <span class="st">"Geneva"</span>]<span class="op">,</span> k<span class="op">:</span> <span class="dv">10</span><span class="op">,</span> t<span class="op">:</span> <span class="dv">1</span> })<span class="op">;</span></span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a><span class="cf">await</span> client<span class="op">.</span><span class="fu">postingList</span>(<span class="st">"papers_text"</span><span class="op">,</span> <span class="st">"Elizabeth"</span><span class="op">,</span> { follower<span class="op">:</span> <span class="st">"kw"</span><span class="op">,</span> limit<span class="op">:</span> <span class="dv">100</span> })<span class="op">;</span></span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a><span class="cf">await</span> client<span class="op">.</span><span class="fu">postingList</span>(<span class="st">"papers_text"</span><span class="op">,</span> <span class="st">"monster"</span>)<span class="op">;</span>                                 <span class="co">// a token of the dataset</span></span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a>(<span class="cf">await</span> client<span class="op">.</span><span class="fu">getFollower</span>(<span class="st">"papers_text"</span><span class="op">,</span> <span class="st">"kw"</span>))<span class="op">.</span><span class="at">lag</span><span class="op">;</span>      <span class="co">// items not processed yet</span></span>
+<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a><span class="cf">await</span> client<span class="op">.</span><span class="fu">syncFollower</span>(<span class="st">"papers_text"</span><span class="op">,</span> <span class="st">"kw"</span>)<span class="op">;</span>           <span class="co">// processes them</span></span>
+<span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a><span class="cf">await</span> client<span class="op">.</span><span class="fu">migratePartitions</span>(<span class="st">"papers"</span><span class="op">,</span> { name<span class="op">:</span> <span class="st">"repo"</span><span class="op">,</span> disjoint<span class="op">:</span> <span class="kw">true</span> })<span class="op">;</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><code>followerSearch</code> takes <code>vector</code> for one partition, <code>name=value</code>, or <code>keys</code> for a keyword follower. It throws a <code>TypeError</code> before the request when it receives both or neither. <code>migratePartitions</code> throws a <code>TypeError</code> when <code>disjoint</code> is not <code>true</code> or <code>false</code>, because the server has no default for it.</p>
+<p>A key source or a kind of a plugin of the server is named <code>Plugin.name</code>. With options, it is an object:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb8"><pre class="sourceCode ts code-with-copy"><code class="sourceCode typescript"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="cf">await</span> client<span class="op">.</span><span class="fu">listPlugins</span>()<span class="op">;</span>     <span class="co">// { plugins: [{ name: "Decades", key_sources: ["Decades.decade"], ... }] }</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="cf">await</span> client<span class="op">.</span><span class="fu">createFollower</span>(<span class="st">"papers"</span><span class="op">,</span> { name<span class="op">:</span> <span class="st">"by_decade"</span><span class="op">,</span> kind<span class="op">:</span> <span class="st">"partition"</span><span class="op">,</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>                                        source<span class="op">:</span> { name<span class="op">:</span> <span class="st">"Decades.decade"</span><span class="op">,</span> field<span class="op">:</span> <span class="st">"year"</span> } })<span class="op">;</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="administration" class="level2">
+<h2 class="anchored" data-anchor-id="administration">9. Administration</h2>
+<p><code>createToken</code>, <code>listTokens</code>, <code>revokeToken</code> and <code>pruneTokens</code> manage the tokens, and need the <code>admin</code> permission. The token is in the response of <code>createToken</code> only. <code>unloadDataset</code> and <code>reloadDataset</code> close and open a dataset without stopping the server. <code>getLog</code> reads the operation log of a dataset. <code>jobsGc</code> removes the finished jobs older than <code>retention_seconds</code>, one day by default. The <a href="../server/manual.html#tokens">server manual</a> describes the permissions.</p>
+</section>
+<section id="tests" class="level2">
+<h2 class="anchored" data-anchor-id="tests">10. Tests</h2>
+<p>The tests of the package need no server. A <code>fetch</code> given to the constructor checks the method, the path and the body of each route, and answers. They also check the selection of the errors, the timeout and <code>waitJob</code>.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb9"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> server/node</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="ex">npm</span> install</span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="ex">npm</span> test</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>The tests against a server are in <code>test/server.test.ts</code> and <code>test/auth.test.ts</code>. They run in the full level of the server’s suite, in <code>server/test/api/test_21_node_client.jl</code>, which starts the server, builds the client and runs them. That file uses the <code>node</code> of the environment variable <code>SSE_NODE</code>, or the one in <code>PATH</code>. When that <code>node</code> is older than 22, the file skips the tests and prints why. CI runs the tests without a server with Node.js 22 and 24.</p>
+
+
+</section>
+
+</main> <!-- /main -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp("https:\/\/sadit\.github\.io\/SimilaritySearchEngine\.jl\/");
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+</div> <!-- /content -->
+
+
+
+
+</body></html>

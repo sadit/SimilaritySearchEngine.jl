@@ -263,8 +263,10 @@ Where to read more: `manual/server/manual.qmd` and the server tutorial
   `jobs.run_job` and `fields.ftsearch_fields`. `stress_client.py` sends requests to a server.
   The repository has no tests of the Python client. Its changes are checked by hand against a
   server: the last check was on 2026-11-23, with httpx 0.28.1.
-- **Node.js.** `similarity-search-client`, in `server/node/`, since 2026-11-24 (§5.17, phase
-  10a). It has a method for each route, and it has no manual page yet.
+- **Node.js.** `similarity-search-client`, in `server/node/`, since 2026-11-24 (§5.17). It is
+  written in TypeScript, and it needs Node.js 22 or later. It has the shape of the Python client,
+  with a method for each route, and the error classes of the engine. Its page is
+  `manual/server/node-client.qmd`. It is not published on npm.
 
 ### Tests
 
@@ -276,6 +278,9 @@ Where to read more: `manual/server/manual.qmd` and the server tutorial
 | server, light | 321 | 29 s | 2026-11-23 |
 | server, full | 1,385 | 38 min 11 s | 2026-11-23 |
 | Julia client, without a server | 63 | | 2026-11-23 |
+| server, light | 351 | | 2026-11-24, after §5.17 |
+| Node.js client, without a server | 72 tests | | 2026-11-24, Node.js 22.23.5 and 24.22.3 |
+| server, `api/21` (Node.js client against a server) | 7, over 12 tests of Node.js | 3 min 40 s | 2026-11-24 |
 
 The times were measured with 8 threads. `Pkg.test(test_args=["jobs", "api/17"])` runs only the
 files with those names or tags (`TEST_FILES` in each `runtests.jl`). The full suite of the
@@ -293,13 +298,13 @@ the shared test server.
 
 ## Planned Work
 
-The queue on 2026-11-24 is §5.17, a client for Node.js. The design before it, §5.16, was built
-on 2026-11-23.
+No phase is queued on 2026-11-24. The last design, §5.17, a client for Node.js, was built on
+2026-11-24. The user sets the next queue.
 
 ### §5.17. A Client for Node.js (design, 2026-11-24)
 
-Status: designed on 2026-11-24, and phase 10a built on the same date. It was item 10 of
-"Known Work". The user decided the shape of the API, the language, the installation of Node.js
+Status: designed on 2026-11-24, and phases 10a and 10b built on the same date. It was item 10
+of "Known Work". The user decided the shape of the API, the language, the installation of Node.js
 and the four questions of the design on 2026-11-24.
 
 #### What exists
@@ -440,6 +445,35 @@ Tests: 72 without a server, with Node.js 24.22.3 (`npm test`). The light suite o
 checks the errors of the Node.js client: `boundary` has 351 tests, 43 of them new. CI has a job
 `node-client` with Node.js 22 and 24.
 
+The first run of that job, on commit `717d15b`, failed with Node.js 22. The test of the timeout
+gave the client a `fetch` without I/O, and the timer of `AbortSignal.timeout` does not keep the
+process alive, so Node.js 22 ended the event loop before the timeout. The `fetch` of the test now
+holds a timer until the signal aborts. A real request has a socket, which keeps the process alive.
+
+**10b (2026-11-24).** The tests against a server are `test/server.test.ts`, 11 tests, and
+`test/auth.test.ts`, 1 test. `server/test/api/test_21_node_client.jl` builds the client with
+`npm install` or `npm run build`, runs the two files with `node --test --test-reporter=tap`, and
+reads the counts of TAP. For `auth.test.ts` it creates two tokens and enables the authentication
+of the shared server, as `api/17` does. CI installs Node.js 24 in the job of the full suite.
+
+The tests found three facts:
+
+- `load` writes the dataset to the working directory of the server and does not open it.
+  `reloadDataset` opens it, as `load_project` of the Julia client does.
+- The server keeps the levels of a calibration as `Float32`: `minrecall` 0.9 arrives as
+  0.8999999761581421.
+- The engine does not raise `WrongDimension` for a query of a dense project of `Float32`
+  vectors. It is item 10 of "Known Work". The test records the answer of the server and does not
+  check its class.
+
+The documentation: `manual/server/node-client.qmd`, a link in the bar of the site, the server
+manual, the README and `AGENTS.md`. The seven pages that do not run code were rendered again with
+Quarto 1.9.38, because the bar of the site is in each page. `julia-client.html` had been rendered
+with Quarto 1.10.18 by `7109c7a`. It is now rendered with 1.9.38, as the other pages, and the two
+style files of 1.10.18 that no page uses were removed. `paragraph-search.qmd` runs Julia with the
+data of its tutorial, so its page was not rendered again: the link of the bar was added to its
+HTML, with the text that Quarto generated in the other pages.
+
 ### Known Work, Not Scheduled
 
 1. **Tokens stored as a hash.** The token database stores each token as a RocksDB key, and
@@ -462,6 +496,13 @@ checks the errors of the Node.js client: `boundary` has 351 tests, 43 of them ne
    needs them. Other consumers: counters for the telemetry, a notification to another system,
    and observers added by a plugin.
 9. **The check of defaults by caller** ("Defaults" above).
+10. **`WrongDimension` for a query of a dense dataset of `Float32` vectors.** The engine checks
+    the dimension of a query of a quantized, a sketched or a sparse project, and of a batch. For
+    a single query of a dense project of `Float32` vectors it does not: `_search_query` in
+    `src/embedded.jl` converts the vector and returns it. The distance then raises
+    `DimensionMismatch` of Julia, which is not an `EngineError`. The server answers `500`
+    without a `kind`, in place of `400` with `WrongDimension`. Found on 2026-11-24 by the test of
+    the Node.js client against a server.
 
 ### Possible Later Work
 

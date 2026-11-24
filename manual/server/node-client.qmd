@@ -1,0 +1,228 @@
+---
+title: "Node.js Client"
+subtitle: "similarity-search-client: the HTTP API of a remote server, from Node.js and TypeScript"
+---
+
+`similarity-search-client` is a package for Node.js in `server/node/` of this repository. It sends requests to the HTTP API of a running `similarity-search-serve` process. It is written in TypeScript and is distributed as JavaScript modules with their type declarations. It has no dependency at run time, and it needs Node.js 22 or later.
+
+The client has the shape of the Python client: one class, `SimilaritySearchClient`, with one method per route. A method returns the JSON of the response, with the field names of the server. Section 3 explains why the names are not converted to camelCase.
+
+## 1. Installation
+
+The package is not published on npm. Build it from a copy of this repository, and install it in a project from that directory:
+
+```bash
+cd SimilaritySearchEngine.jl/server/node
+npm install                  # installs TypeScript and builds dist/
+
+cd my-project
+npm install ../SimilaritySearchEngine.jl/server/node
+```
+
+`npm install` in `server/node` runs the script `prepare`, which compiles `src/` to `dist/`. A project that installs the package from its directory uses that `dist/`: npm adds a link to the directory in `node_modules/`. After a change to `src/`, `npm run build` compiles it again.
+
+npm 11 does not run the script `prepare` of a dependency that the project has not approved, and it says so with a warning `install-scripts`. The package was compiled in its own directory, so the warning needs no action.
+
+## 2. Use
+
+```ts
+import { SimilaritySearchClient, NotFound } from "similarity-search-client";
+
+const client = new SimilaritySearchClient("http://127.0.0.1:8080", { token: process.env.SSE_TOKEN });
+
+await client.createDataset({ id: "papers", index_kind: "searchgraph", distance: "NormCosine",
+                             partition_by: "repo", max_k: 1000 });
+await client.append("papers", vectors.map((v, i) => ({ doc_id: `p${i}`, vector: v, repo: repos[i] })));
+
+const { results } = await client.search("papers", q, { k: 10 });       // [{ doc_id, _id, distance }, ...]
+await client.search("papers", q, { k: 10, partition: "repo-a" });
+await client.search("papers", q, { k: 10, filter: { year: { gte: 2020 } } });
+await client.fetch("papers", ["p1", 3]);                                // by doc_id or by _id
+await client.exists("papers", ["p1", 3]);
+await client.deleteItem("papers", 3);                                   // the _id
+await client.calibrate("papers", { minrecall: 0.9 });
+
+await client.createDataset({ id: "papers_text", index_kind: "bm25_invfile" });
+await client.append("papers_text", texts.map((text, i) => ({ doc_id: `p${i}`, text })));
+await client.ftsearch("papers_text", "redes neuronales", { k: 5 });
+await client.hybridSearch("papers", "papers_text", { vector: q, text: "redes neuronales", k: 5 });
+```
+
+Every method is `async`. Several requests at the same time are several promises:
+
+```ts
+const [a, b] = await Promise.all([client.search("papers", q1), client.search("papers", q2)]);
+```
+
+The constructor takes the root of the server, without `/api/v1`, and three options:
+
+| option | what it is | default |
+| :--- | :--- | :--- |
+| `token` | sent as `Authorization: Bearer <token>` with every request | no token |
+| `timeout` | milliseconds to wait for a response; `0` waits without a limit | 60,000 |
+| `fetch` | a function with the signature of `fetch`, used in place of the global one | the global `fetch` |
+
+A calibration or a large append can take minutes. Give such a request a client with a larger `timeout`.
+
+A vector is a `number[]`, a `Float32Array` or any array-like object of numbers. The client sends it as a JSON array. This applies to `vector`, `indices` and `values` of an item, and to the vectors of `search`, `hybridSearch`, `followerSearch` and the `queries` of `calibrate`. `JSON.stringify` alone writes a `Float32Array` as an object with numbered keys, not as an array.
+
+## 3. The Names of the Fields
+
+The options of a method and the responses have the field names of the server, in snake_case: `index_kind`, `meta_schema`, `max_k`, `doc_id`, `beamsearch_overrides`. The JSON examples of the [server manual](manual.qmd) apply without changes. The names of the methods are in camelCase.
+
+The client does not convert the names. The metadata fields of an item have the names that the user gave them, and a `fetch` returns them merged with the fields of the record. A conversion would change the names of the user. The options that belong to the client and not to the server are in camelCase: `pollInterval` and `timeout` of `waitJob`, and the fields `jobId`, `jobKind` and `exitCode` of the errors.
+
+`src/types.ts` declares an interface for each request and each response that the server manual documents. A response can have more fields than its interface: the server adds a field without changing its version.
+
+## 4. Methods
+
+| method | route |
+| :--- | :--- |
+| `healthz()`, `readyz()` | `GET /healthz`, `GET /readyz` |
+| `metrics()` | `GET /metrics`; returns the text of Prometheus |
+| `createDataset(options)` | `POST /api/v1/datasets` |
+| `listDatasets({ offset, limit })` | `GET /api/v1/datasets` |
+| `getDataset(id)`, `deleteDataset(id)` | `GET`, `DELETE /api/v1/datasets/{id}` |
+| `getLog(id, { offset, limit })` | `GET /api/v1/datasets/{id}/log` |
+| `getVocab(id, { scan, sample })` | `GET /api/v1/datasets/{id}/vocab` |
+| `getPartitions(id)` | `GET /api/v1/datasets/{id}/partitions` |
+| `append(id, items)` | `POST /api/v1/datasets/{id}/append` |
+| `search(id, vector, { k, filter, beamsearch_overrides, partition })` | `POST /api/v1/datasets/{id}/search` |
+| `ftsearch(id, text, { k, filter, partition })` | `POST /api/v1/datasets/{id}/ftsearch` |
+| `hybridSearch(denseId, lexicalId, { vector, text, k })` | `POST /api/v1/search/hybrid` |
+| `fetch(id, ids)`, `exists(id, ids)` | `POST .../fetch`, `GET .../exists` |
+| `deleteItem(id, _id)` | `POST /api/v1/datasets/{id}/delete` |
+| `calibrate(id, { minrecall, numqueries, ksearch, queries, partition })` | `POST /api/v1/datasets/{id}/calibrate` |
+| `postingList(id, key, { follower, limit })` | `GET .../postings`, or `GET .../followers/{follower}/postings` |
+| `createFollower(id, options)`, `listFollowers(id)` | `POST`, `GET /api/v1/datasets/{id}/followers` |
+| `getFollower(id, name)`, `deleteFollower(id, name)` | `GET`, `DELETE .../followers/{name}` |
+| `syncFollower(id, name)`, `rebuildFollower(id, name)` | `POST .../followers/{name}/sync`, `/rebuild` |
+| `followerPartitions(id, name)` | `GET .../followers/{name}/partitions` |
+| `followerSearch(id, follower, { vector or keys, k, t, filter, minrecall })` | `POST .../followers/{follower}/search` |
+| `followerFtsearch(id, follower, text, { k, filter })` | `POST .../followers/{follower}/ftsearch` |
+| `followerCalibrate(id, follower, { minrecall, numqueries, ksearch })` | `POST .../followers/{follower}/calibrate` |
+| `migratePartitions(id, { name, disjoint })` | `POST /api/v1/datasets/{id}/migrate-partitions` |
+| `getGroup(id)` | `GET /api/v1/datasets/{id}/group` |
+| `listPlugins()` | `GET /api/v1/plugins` |
+| `submitJob(kind, params)`, `getJob(jobId)`, `listJobs(options)` | `POST /api/v1/jobs/{kind}`, `GET /api/v1/jobs/{jobId}`, `GET /api/v1/jobs` |
+| `getJobResult(jobId)` | `GET /api/v1/jobs/{jobId}/result`; returns the text of the result |
+| `blockJob`, `resumeJob`, `killJob`, `cancelJob` | `POST .../block`, `/resume`, `/kill`, `DELETE /api/v1/jobs/{jobId}` |
+| `createToken`, `listTokens`, `pruneTokens`, `revokeToken` | `/api/v1/admin/tokens` |
+| `jobsGc({ retention_seconds })` | `POST /api/v1/admin/jobs/gc` |
+| `unloadDataset(id)`, `reloadDataset(id, { max_k, edit_correction })` | `POST /api/v1/admin/datasets/{id}/unload`, `/reload` |
+
+The client escapes a dataset id, a follower name, a job id and a token as one segment of the path. A follower of one partition is written `name=value`, as in the HTTP API: `client.followerSearch("papers", "by_repo=unicach", { vector: q })`.
+
+`request(method, path, { body, query, text })` sends a request to a route that has no method. `path` starts with `/`, and `text: true` returns the text of the response instead of its JSON.
+
+The Python client has no method for `GET .../vocab`, and its `create_dataset` does not take `dimension` or `edit_correction`. This client has them. `hybridSearch` sends `vector`, `text` and `k`, which are the fields that the server reads.
+
+## 5. Errors
+
+The client throws the error classes of the engine, with the same names and the same four categories: `InvalidRequest`, `NotFound`, `ConflictingState` and `StorageFailure`. `e instanceof NotFound` is true for every error of that category.
+
+```ts
+try {
+  await client.search("papers", q, { partition: "repo-x" });
+} catch (e) {
+  if (!(e instanceof UnknownPartition)) throw e;
+  console.log(e.message);          // the message lists the closest partition names
+}
+```
+
+The server sends the name of the engine's error in the `kind` field of its error responses, and the client throws the class with that name. Every error has `status`, the HTTP status, `kind`, the `kind` of the response or `null`, and `message`, the message of the server. A response without a known `kind` throws the generic class of its status:
+
+| status | class | category |
+| :--- | :--- | :--- |
+| 400 | `RequestRejected` | `InvalidRequest` |
+| 404 | `ResourceNotFound`, for example a dataset that does not exist | `NotFound` |
+| 409 | `StateConflict` | `ConflictingState` |
+| 401, 403 | `Unauthenticated`, `Forbidden` | `AccessDenied` |
+| 500 | `ServerFailure` | none |
+| other | `UnexpectedResponse` | none |
+
+All of them extend `RemoteError`, which extends `Error`. A connection that fails is not wrapped. If no server listens on the address, the error is the `TypeError` of `fetch`. If the response takes longer than `timeout`, the error is a `DOMException` named `TimeoutError`.
+
+The light suite of the server reads `src/errors.ts` and checks that it has a class for every error of the engine, in the same category. A new error of the engine makes that test fail until the client has it.
+
+## 6. Jobs
+
+`runJob(kind, params, { pollInterval, timeout })` submits a job and waits for it. It asks for the state of the job every `pollInterval` milliseconds, 1,000 by default, and returns the record of the job when it completes. `waitJob(jobId, options)` waits for a job that is already submitted. On the server, each job is a separate Julia process, so a job takes at least the time that the server needs to start one.
+
+```ts
+const record = await client.runJob("allknn", { dataset: "papers", k: 16 });
+const rows = (await client.getJobResult(record.id)).trim().split("\n").map((l) => JSON.parse(l));
+
+// Several jobs at the same time.
+const [a, b] = await Promise.all([
+  client.runJob("allknn", { dataset: "papers", k: 16 }),
+  client.runJob("fft", { dataset: "papers", k: 100 }),
+]);
+```
+
+The parameters of each kind are `dataset` and `k` for `allknn` and `fft`, `dataset` and `epsilon` for `neardup`, `dataset`, `queries` and `k` for `hsp`, `dataset` for `dump`, and `dataset` and `bundle` for `load`. Another kind, such as `searchbatch`, is submitted with `command`, the arguments of the server's command line.
+
+`getJobResult` returns the text of the result, because its format depends on the kind: JSON lines for `allknn`, one JSON object for `fft` and `neardup`, and for `dump` an object with `bundle_dir` and `manifest`. The bundle of `dump` stays on the server: `bundle_dir` is a path on the file system of the server, which `load` takes. `load` writes the new dataset to the working directory of the server, and `reloadDataset(id)` opens it:
+
+```ts
+const dumped = await client.runJob("dump", { dataset: "papers" });
+const { bundle_dir } = JSON.parse(await client.getJobResult(dumped.id));
+await client.runJob("load", { bundle: bundle_dir, dataset: "papers_copy" });
+await client.reloadDataset("papers_copy");
+```
+
+A job that fails throws `JobFailed`. Its `exitCode` is the exit status of the job's process, and its `category` is the class of the category that this status names: 2 is `InvalidRequest`, 4 is `NotFound`, 5 is `ConflictingState` and 70 is `StorageFailure`. Other statuses have `category === null`; 1 is a dataset directory that does not exist. For example, `fft` on a text dataset fails with `exitCode === 2` and `category === InvalidRequest`. The message of the engine's error stays in the output of the process on the server. After `timeout` milliseconds, `waitJob` throws `JobTimeout`, and the job keeps running on the server.
+
+## 7. Size of a Search
+
+A search answers its `k` results in one response. `k` is at most `max_k` of the dataset, 100 by default, and a larger `k` throws `InvalidOption`. `createDataset({ ..., max_k: 1000 })` sets it, `reloadDataset(id, { max_k: 1000 })` changes it, and `getDataset(id)` reports it. The [server manual](manual.qmd#size-of-a-response) describes it.
+
+The server compresses a large response with gzip. The `fetch` of Node.js asks for gzip and decompresses the response, so the client does nothing for it. On 2026-11-24, the test of the client against the server checked that a search of 99 results arrives compressed.
+
+## 8. Followers
+
+A follower of a dataset reads the items of the dataset and organizes them by keys. A partition follower restricts a search to the items of one key. A keyword follower indexes the keys of each item in an inverted file. The [server manual](manual.qmd#followers) describes both kinds and their routes.
+
+```ts
+await client.createFollower("papers", { name: "by_repo", kind: "partition", source: "meta:repo", disjoint: false });
+await client.createFollower("papers_text", { name: "kw", kind: "keyword", source: "keywords", policy: "manual" });
+
+await client.followerSearch("papers", "by_repo=unicach", { vector: q, k: 10 });     // one partition
+await client.followerFtsearch("papers_text", "by_repo=unicach", "redes", { k: 10 });
+await client.followerCalibrate("papers", "by_repo=unicach", { minrecall: 0.9 });
+await client.followerPartitions("papers", "by_repo");
+
+await client.followerSearch("papers_text", "kw", { keys: ["Elizabeth", "Geneva"], k: 10, t: 1 });
+await client.postingList("papers_text", "Elizabeth", { follower: "kw", limit: 100 });
+await client.postingList("papers_text", "monster");                                 // a token of the dataset
+
+(await client.getFollower("papers_text", "kw")).lag;      // items not processed yet
+await client.syncFollower("papers_text", "kw");           // processes them
+await client.migratePartitions("papers", { name: "repo", disjoint: true });
+```
+
+`followerSearch` takes `vector` for one partition, `name=value`, or `keys` for a keyword follower. It throws a `TypeError` before the request when it receives both or neither. `migratePartitions` throws a `TypeError` when `disjoint` is not `true` or `false`, because the server has no default for it.
+
+A key source or a kind of a plugin of the server is named `Plugin.name`. With options, it is an object:
+
+```ts
+await client.listPlugins();     // { plugins: [{ name: "Decades", key_sources: ["Decades.decade"], ... }] }
+await client.createFollower("papers", { name: "by_decade", kind: "partition",
+                                        source: { name: "Decades.decade", field: "year" } });
+```
+
+## 9. Administration
+
+`createToken`, `listTokens`, `revokeToken` and `pruneTokens` manage the tokens, and need the `admin` permission. The token is in the response of `createToken` only. `unloadDataset` and `reloadDataset` close and open a dataset without stopping the server. `getLog` reads the operation log of a dataset. `jobsGc` removes the finished jobs older than `retention_seconds`, one day by default. The [server manual](manual.qmd#tokens) describes the permissions.
+
+## 10. Tests
+
+The tests of the package need no server. A `fetch` given to the constructor checks the method, the path and the body of each route, and answers. They also check the selection of the errors, the timeout and `waitJob`.
+
+```bash
+cd server/node
+npm install
+npm test
+```
+
+The tests against a server are in `test/server.test.ts` and `test/auth.test.ts`. They run in the full level of the server's suite, in `server/test/api/test_21_node_client.jl`, which starts the server, builds the client and runs them. That file uses the `node` of the environment variable `SSE_NODE`, or the one in `PATH`. When that `node` is older than 22, the file skips the tests and prints why. CI runs the tests without a server with Node.js 22 and 24.

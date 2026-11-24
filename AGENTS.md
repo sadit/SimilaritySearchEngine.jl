@@ -45,6 +45,10 @@ julia --project=server -t auto -e 'using Pkg; Pkg.test()'
 
 # Julia client (no server needed; the tests against a server are in the server's full suite)
 julia --project=server/julia -e 'using Pkg; Pkg.test()'
+
+# Node.js client, Node.js 22 or later (no server needed; api/21 of the server's full suite
+# runs its tests against a server)
+cd server/node && npm install && npm test
 ```
 
 While working, run only the test files a change touches: `Pkg.test(test_args=["jobs", "api/17"])`
@@ -53,7 +57,9 @@ server's full suite takes about 30 minutes. Run it with `test_args=["full"]` bef
 and before a commit that changes the job model, the dispatcher or the shared test server.
 
 A new engine error type is not finished until the Julia client has a type of the same name, in
-the same category (`server/julia/src/errors.jl`).
+the same category (`server/julia/src/errors.jl`), and the Node.js client has a class of the same
+name, in the same category and in `ERROR_KINDS` (`server/node/src/errors.ts`). The light suite of
+the server checks both.
 
 Julia 1.12 or later, in every package: it is what CI verifies, and the server's `[apps]`
 entries need `Pkg.Apps`, which does not exist before it.
