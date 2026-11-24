@@ -198,7 +198,7 @@ end
     # be answered with that file's contents: here, a permission decided by a file instead of by
     # the request, and a dataset created from a file.
     workdir = mktempdir()
-    app = AppState(workdir, nothing, nothing, nothing, Tokens.open_token_manager(workdir),
+    app = AppState(workdir, nothing, nothing, Tokens.open_token_manager(workdir),
                    Dict{String, SSE.EmbeddedEngine}(), ReentrantLock(), false)
     cd(mktempdir()) do
         write("req.json", JSON3.write(Dict("dataset" => "corpus_es", "id" => "from_file",
@@ -215,7 +215,7 @@ end
     workdir = mktempdir()
     mgr = Tokens.open_token_manager(workdir)
     ok = () -> json_response(200, Dict("status" => "ok"))
-    app = AppState(workdir, nothing, nothing, nothing, mgr,
+    app = AppState(workdir, nothing, nothing, mgr,
                    Dict{String, SSE.EmbeddedEngine}(), ReentrantLock(), true)
     request(token) = token === nothing ? HTTP.Request("GET", "/api/v1/datasets") :
                                          HTTP.Request("GET", "/api/v1/datasets", ["Authorization" => "Bearer $token"])
@@ -259,7 +259,7 @@ end
     api = filter(r -> occursin("\"/api/v1", r), routes)
     open_routes = filter(r -> !occursin("\"/api/v1", r), routes)
 
-    @test length(api) == 46
+    @test length(api) == 45
     @test all(r -> occursin("_guard(", r), api)
     # Health and metrics stay open on purpose: a supervisor and a metrics collector have no
     # token, and refusing them would report a healthy server as down.
@@ -463,7 +463,7 @@ end
 @testset "a search waits for a slot instead of joining an unbounded crowd" begin
     workdir = mktempdir()
     mgr = Tokens.open_token_manager(workdir)
-    app = AppState(workdir, nothing, nothing, nothing, mgr,
+    app = AppState(workdir, nothing, nothing, mgr,
                    Dict{String, SSE.EmbeddedEngine}(), ReentrantLock(), false, 3)
 
     running = Threads.Atomic{Int}(0)

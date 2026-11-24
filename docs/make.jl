@@ -16,7 +16,7 @@ makedocs(;
     modules=[SimilaritySearchEngine, Errors, Schema, Project, IndexEngine, Persistence,
              SimilaritySearchServer, SimilaritySearchServer.Server, SimilaritySearchServer.Jobs,
              SimilaritySearchServer.Executors, SimilaritySearchServer.Tokens,
-             SimilaritySearchServer.Telemetry, SimilaritySearchServer.Cursors,
+             SimilaritySearchServer.Telemetry,
              SimilaritySearchClient],
     authors="Eric S. Tellez",
     # A `Remotes.Remote`, not the equivalent URL template. Both produce the same "Edit on

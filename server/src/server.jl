@@ -14,12 +14,12 @@ using RocksDB
 # TextSearch's own `using`.
 import SimilaritySearch
 import TextSearch
+import CodecZlib
 using ..Schema
 using ..Project
 using ..Tokens
 using ..IndexEngine
 using ..Jobs
-using ..Cursors
 using ..Executors
 using ..Persistence
 using ..Telemetry
@@ -98,10 +98,9 @@ end
     _parse_offset_limit(params, total) -> (offset, limit)
 
 Plain, stateless `offset`/`limit` pagination (PLAN.md §5.4) for listing endpoints cheap
-enough to recompute per request (`GET /api/v1/datasets`, `GET /api/v1/jobs`) — distinct
-from the opaque `Cursors`-backed pagination `handle_search` uses for an actually
-expensive-to-recompute result set. `offset` clamps to `0`; `limit` defaults to `total`
-(i.e. "no limit") when absent or unparseable.
+enough to recompute per request (`GET /api/v1/datasets`, `GET /api/v1/jobs`). A search has
+no pagination: it answers its `k` results in one response (PLAN.md §5.16). `offset` clamps
+to `0`; `limit` defaults to `total` (i.e. "no limit") when absent or unparseable.
 """
 function _parse_offset_limit(params::AbstractDict, total::Int)
     offset = max(0, something(tryparse(Int, get(params, "offset", "0")), 0))
@@ -134,7 +133,6 @@ Holds the global application state for the server.
 # Fields
 - `workdir::String`: Root working directory for data and jobs.
 - `job_mgr::Any`: Job manager instance.
-- `cursor_mgr::Any`: Result-cursor manager instance (§5.4's pagination protocol).
 - `executor::Any`: Job executor backend.
 - `token_mgr::Any`: Token manager instance (§4.1 identity model).
 - `datasets::Dict{String, ProjectManager}`: Cache of open datasets.
@@ -144,7 +142,6 @@ Holds the global application state for the server.
 struct AppState
     workdir::String
     job_mgr::Any # JobManager
-    cursor_mgr::Any # Cursors.CursorManager
     executor::Any # AbstractJobExecutor
     token_mgr::Any # Tokens.TokenManager
     # One open project per dataset id. This used to be two maps -- a ProjectManager and an
@@ -179,19 +176,73 @@ struct AppState
 
     # The errors and the periodic processing of the followers of the datasets (PLAN.md §5.12).
     followers::FollowerRegistry
+
+    # The `max_k` of each loaded dataset (PLAN.md §5.16), read from its `descriptor.json` when
+    # the dataset is created or opened. A dataset that is not here has `DEFAULT_MAX_K`.
+    max_k::Dict{String,Int}
 end
 
-AppState(workdir, job_mgr, cursor_mgr, executor, token_mgr, handles, lock, auth_enabled::Bool,
+AppState(workdir, job_mgr, executor, token_mgr, handles, lock, auth_enabled::Bool,
          query_slots::Int=query_slot_count(Threads.nthreads(), 20, 0),
          batch_cap::Int=inprocess_batch_cap(Threads.nthreads(), 20)) =
-    AppState(workdir, job_mgr, cursor_mgr, executor, token_mgr, handles, lock, Ref(auth_enabled),
+    AppState(workdir, job_mgr, executor, token_mgr, handles, lock, Ref(auth_enabled),
              Telemetry.MetricsRegistry(), Base.Semaphore(query_slots),
-             Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), batch_cap, FollowerRegistry(DEFAULT_FOLLOWER_CHECK_SECONDS))
+             Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), batch_cap, FollowerRegistry(DEFAULT_FOLLOWER_CHECK_SECONDS),
+             Dict{String,Int}())
 
-# The seven-argument form is the one every existing caller uses, and it leaves authentication
-# off, which is the default of `[auth] enabled`.
-AppState(workdir, job_mgr, cursor_mgr, executor, token_mgr, handles, lock) =
-    AppState(workdir, job_mgr, cursor_mgr, executor, token_mgr, handles, lock, false)
+# The six-argument form leaves authentication off, which is the default of `[auth] enabled`.
+AppState(workdir, job_mgr, executor, token_mgr, handles, lock) =
+    AppState(workdir, job_mgr, executor, token_mgr, handles, lock, false)
+
+"""
+    DEFAULT_MAX_K
+
+The `max_k` of a dataset created without one, and of a dataset whose `descriptor.json` has
+none (PLAN.md §5.16). `max_k` is the largest `k` that a search of the dataset can ask for: a
+search answers its `k` results in one response. A dataset that needs more sets `max_k` when
+it is created (`"max_k"` of `POST /api/v1/datasets`, or `build --max-k`), or changes it with
+`POST /api/v1/admin/datasets/{id}/reload` and the body `{"max_k": n}`.
+"""
+const DEFAULT_MAX_K = 100
+
+"""
+    dataset_max_k(app, id) -> Int
+
+The `max_k` of the dataset `id` (PLAN.md §5.16), or [`DEFAULT_MAX_K`](@ref) for a dataset that
+the server has not opened.
+"""
+dataset_max_k(app::AppState, id::AbstractString) = get(app.max_k, String(id), DEFAULT_MAX_K)
+
+# A `max_k` of a request or of a descriptor: a positive integer, or `nothing` when it is not one.
+_parse_max_k(v) = v isa Integer && !(v isa Bool) && v >= 1 ? Int(v) : nothing
+
+# The `max_k` that a descriptor holds, or `DEFAULT_MAX_K` for one written before the field existed.
+_descriptor_max_k(descriptor::AbstractDict) = something(_parse_max_k(get(descriptor, "max_k", nothing)), DEFAULT_MAX_K)
+
+"""
+    check_search_k(app, ids, data) -> Union{Nothing, HTTP.Response}
+
+Checks the `k` of a search request against the `max_k` of each dataset in `ids` (PLAN.md
+§5.16). Returns `nothing` when the request can run, or the `400` response with the kind
+`InvalidOption`: for a `k` that is not a positive integer, for a `k` larger than `max_k`, and for
+`page_size`, which was removed with the result cursors on 2026-11-23.
+"""
+function check_search_k(app::AppState, ids, data::AbstractDict)
+    haskey(data, "page_size") && return engine_error_response(SSE.InvalidOption(:page_size,
+        "'page_size' was removed on 2026-11-23: a search answers its k results in one response, " *
+        "and the max_k of the dataset limits k"))
+    k = get(data, "k", 10)
+    k isa Integer && !(k isa Bool) && k >= 1 ||
+        return engine_error_response(SSE.InvalidOption(:k, "'k' must be a positive integer; got $(repr(k))"))
+    for id in ids
+        m = dataset_max_k(app, id)
+        k <= m || return engine_error_response(SSE.InvalidOption(:k,
+            "k = $k is larger than max_k = $m of the dataset '$id'. max_k is set when the dataset is created " *
+            "(\"max_k\" of POST /api/v1/datasets, or build --max-k), and " *
+            "POST /api/v1/admin/datasets/$id/reload with {\"max_k\": n} changes it"))
+    end
+    return nothing
+end
 
 """
     query_slot_count(total_threads, batch_pct, configured) -> Int
@@ -503,6 +554,9 @@ function handle_create_dataset(req::HTTP.Request, app::AppState)
     edit_correction = get(data, "edit_correction", false)
     edit_correction isa Bool ||
         return json_response(400, Dict("error" => "'edit_correction' must be true or false"))
+    # PLAN.md §5.16: the largest `k` that a search of the dataset can ask for.
+    max_k = _parse_max_k(get(data, "max_k", DEFAULT_MAX_K))
+    max_k === nothing && return json_response(400, Dict("error" => "'max_k' must be a positive integer"))
     # Stored by the engine inside the project (PLAN.md §5.9), so it is not written to
     # `descriptor.json`: reopening the project restores it.
     partition_by = get(data, "partition_by", nothing)
@@ -539,6 +593,7 @@ function handle_create_dataset(req::HTTP.Request, app::AppState)
             app.handles[id] = SSE.create_project(datasets_root(app), id, spec;
                 meta_schema=declared, partitions,
                 runtime=SSE.Runtime(maxbatches=app.batch_cap, edit_correction=edit_correction))
+            app.max_k[id] = max_k
         end
     catch e
         e isa SSE.EngineError || rethrow()
@@ -547,7 +602,7 @@ function handle_create_dataset(req::HTTP.Request, app::AppState)
 
     descriptor = Dict(
         "id" => id, "index_kind" => index_type, "distance" => distance, "created_at" => string(now(UTC)),
-        "edit_correction" => edit_correction
+        "edit_correction" => edit_correction, "max_k" => max_k
     )
     write(descriptor_path(app, id), JSON3.write(descriptor))
 
@@ -586,6 +641,7 @@ function _reload_one_dataset!(app::AppState, id::String)
                                                  edit_correction=get(descriptor, "edit_correction", false) === true))
     lock(app.lock) do
         app.handles[id] = handle
+        app.max_k[id] = _descriptor_max_k(descriptor)
     end
     open_dataset_followers!(app, id, handle)
     return true
@@ -650,6 +706,7 @@ function handle_delete_dataset(req::HTTP.Request, app::AppState, id::String)
             # the handle, so a request that still holds it gets `ProjectClosed` (409).
             SSE.close_project!(app.handles[id]; compact=false)
             delete!(app.handles, id)
+            delete!(app.max_k, id)
         end
     end
 
@@ -694,13 +751,20 @@ after an explicit `unload`). `404` if `id` has no `descriptor.json` on disk at a
 The body is optional. `{"edit_correction": true}` or `false` changes that setting of a text
 dataset: it is written to `descriptor.json` and the dataset is reopened with it. A value
 that is not a boolean, or `true` for a dataset that does not hold text, is a `400`, and the
-dataset stays loaded as it was.
+dataset stays loaded as it was. `{"max_k": n}` changes the largest `k` that a search of the
+dataset can ask for (PLAN.md §5.16) in the same way; `n` is a positive integer.
 """
 function handle_reload_dataset(req::HTTP.Request, app::AppState, id::String)
     valid_project_id(id) || return json_response(400, Dict("error" => "invalid dataset id"))
 
     body = String(req.body)
     data = isempty(body) ? Dict{String, Any}() : JSON3.read(codeunits(body), Dict{String, Any})
+    if haskey(data, "max_k")
+        max_k = _parse_max_k(data["max_k"])
+        max_k === nothing && return json_response(400, Dict("error" => "'max_k' must be a positive integer"))
+        isfile(descriptor_path(app, id)) || return json_response(404, Dict("error" => "dataset_not_found"))
+        _update_descriptor!(app, id, Dict("max_k" => max_k))
+    end
     if haskey(data, "edit_correction")
         edit_correction = data["edit_correction"]
         edit_correction isa Bool ||
@@ -761,6 +825,7 @@ function dataset_descriptor(app::AppState, id::String)
     get!(base, "beamsearch_baseline", nothing)
     get!(base, "calibration", nothing)
     get!(base, "edit_correction", false)
+    base["max_k"] = _descriptor_max_k(base)
 
     loaded = haskey(app.handles, id)
     base["loaded"] = loaded
@@ -804,8 +869,7 @@ end
 found under `<workdir>/datasets/`, not just the ones currently cached in
 `app.handles` — this listing works purely off each dataset's `descriptor.json`
 sidecar and doesn't need `reload_datasets!` to have run first (see `dataset_descriptor`'s
-note). Paginated with plain `offset`/`limit` (§5.4) — cheap to recompute per request,
-unlike `handle_search`'s cursor-backed pagination.
+note). Paginated with plain `offset`/`limit` (§5.4), which is cheap to recompute per request.
 """
 function handle_list_datasets(req::HTTP.Request, app::AppState)
     base = joinpath(app.workdir, "datasets")
@@ -907,9 +971,7 @@ unimplemented until now, see chunk 15's note): a paginated, newest-first dump of
 `op_log` column family. Real content as of this chunk -- `Telemetry.log_operation` is now
 wired into `search`/`ftsearch`/`append`/`delete` (`_run_search`/`handle_append`/
 `handle_delete_item`). Cheap-enough-to-recompute full scan + plain `offset`/`limit`
-(`_parse_offset_limit`, same as `handle_list_jobs`/`handle_list_datasets`), not a
-`Cursors`-backed cursor -- `op_log` is already append-only historical data, none of
-`Cursors`' "materialize an expensive-to-recompute result set" concern applies here. `404`
+(`_parse_offset_limit`, same as `handle_list_jobs`/`handle_list_datasets`). `404`
 if `id` isn't a currently-loaded dataset (its `op_log` CF is only reachable through a live
 `RocksDB.DB` handle, same constraint every other loaded-dataset-only endpoint already has).
 """
@@ -1246,23 +1308,6 @@ function _run_search(handle, index::String, req::HTTP.Request, query, k::Int;
     return hits
 end
 
-"""
-    _paginate_results(app, index, results, page_size) -> Dict
-
-Materializes `results` behind a fresh `Cursors` cursor (PLAN.md §5.4) and returns its
-first page plus the `cursor_id` for polling the rest via
-`GET /api/v1/cursors/{cursor_id}`. Purely opt-in — a caller that never sends `page_size`
-keeps getting the full `results` list inline, unchanged from before this existed.
-"""
-function _paginate_results(app::AppState, index::String, results::AbstractVector, page_size::Int)
-    cursor_id = Cursors.create_cursor!(app.cursor_mgr, index, results; page_size=page_size)
-    page = Cursors.poll_cursor!(app.cursor_mgr, cursor_id; limit=page_size)
-    return Dict(
-        "status" => "searched", "id" => index, "cursor_id" => cursor_id,
-        "results" => page.results, "exhausted" => page.exhausted, "total" => page.total,
-    )
-end
-
 function handle_search(req::HTTP.Request, app::AppState, index::String)
     haskey(app.handles, index) || return json_response(404, Dict("error" => "dataset_not_found"))
     engine = app.handles[index].engine
@@ -1270,7 +1315,9 @@ function handle_search(req::HTTP.Request, app::AppState, index::String)
 
     data = JSON3.read(codeunits(String(req.body)), Dict{String, Any})
     haskey(data, "vector") || return json_response(400, Dict("error" => "search requires a 'vector' field"))
-    k = get(data, "k", 10)
+    bad_k = check_search_k(app, (index,), data)
+    bad_k === nothing || return bad_k
+    k = Int(get(data, "k", 10))
     query = convert(Vector{Float32}, data["vector"])
     filter_spec = get(data, "filter", nothing)
     # PLAN.md §5.10: one partition of a dense dataset.
@@ -1305,9 +1352,6 @@ function handle_search(req::HTTP.Request, app::AppState, index::String)
     end
 
     results, insufficient = _format_results(hits, k)
-
-    page_size = get(data, "page_size", nothing)
-    page_size !== nothing && return json_response(200, _paginate_results(app, index, results, Int(page_size)); extra_headers=extra_headers)
 
     body = Dict{String, Any}("status" => "searched", "id" => index, "results" => results)
     insufficient && (body["insufficient_results"] = true)
@@ -1416,7 +1460,9 @@ function handle_ftsearch(req::HTTP.Request, app::AppState, index::String)
     data = JSON3.read(codeunits(String(req.body)), Dict{String, Any})
     haskey(data, "text") || return json_response(400, Dict("error" => "ftsearch requires a 'text' field"))
     data["text"] isa AbstractString || return json_response(400, Dict("error" => "'text' must be a string"))
-    k = get(data, "k", 10)
+    bad_k = check_search_k(app, (index,), data)
+    bad_k === nothing || return bad_k
+    k = Int(get(data, "k", 10))
     filter_spec = get(data, "filter", nothing)
     partition = get(data, "partition", nothing)
     partition === nothing || partition isa AbstractString ||
@@ -1546,7 +1592,9 @@ function handle_hybrid_search(req::HTTP.Request, app::AppState)
     (haskey(app.handles, dense_id) && haskey(app.handles, lexical_id)) ||
         return json_response(404, Dict("error" => "dataset_not_found"))
 
-    k = get(data, "k", 10)
+    bad_k = check_search_k(app, (dense_id, lexical_id), data)
+    bad_k === nothing || return bad_k
+    k = Int(get(data, "k", 10))
 
     # One slot for the request, not one per search it runs: a request that took two would
     # deadlock against itself on a server whose bound is one.
@@ -1696,8 +1744,7 @@ const JOB_STATE_BY_NAME = Dict(lowercase(string(s)) => s for s in instances(Jobs
 
 `GET /api/v1/jobs?status=&kind=&offset=&limit=` (PLAN.md §5.4/§5.5): lists jobs across
 every spool state, optionally filtered to one `status` and/or one `kind`, paginated with
-plain `offset`/`limit` (§5.4) — cheap enough to recompute per request that it doesn't
-need `Cursors`. Doesn't support PLAN.md's `index_uuid` filter: job records in this pass
+plain `offset`/`limit` (§5.4), which is cheap enough to recompute per request. Doesn't support PLAN.md's `index_uuid` filter: job records in this pass
 don't track which dataset/index they targeted as a queryable field, and adding that is
 its own separate bookkeeping change, not part of this endpoint.
 """
@@ -1737,8 +1784,9 @@ end
 """
     handle_get_job_result(req, app, job_id)
 
-`GET /api/v1/jobs/{job_id}/result` (PLAN.md §5.5): streams back the raw file a completed
-heavy job's CLI subprocess wrote (see `handle_submit_job`'s `result_ref` bookkeeping).
+`GET /api/v1/jobs/{job_id}/result` (PLAN.md §5.5): sends back the raw file a completed
+heavy job's CLI subprocess wrote, in parts and without reading it into memory, compressed with
+gzip when the request accepts it (`file_response`, PLAN.md §5.16) (see `handle_submit_job`'s `result_ref` bookkeeping).
 `409` if the job hasn't reached `completed` yet, `404` if there's no `result_ref` at all
 (e.g. a job submitted via the raw `"command"` escape hatch, which doesn't set one).
 
@@ -1765,7 +1813,9 @@ function handle_get_job_result(req::HTTP.Request, app::AppState, job_id::String)
         return json_response(200, Dict("bundle_dir" => result_ref, "manifest" => manifest))
     end
 
-    return HTTP.Response(200, JSON_HEADERS, read(result_ref))
+    # In parts, compressed while it is read when the request accepts gzip (PLAN.md §5.16): the
+    # result of a job can be larger than the memory a request should take.
+    return file_response(req, result_ref)
 end
 
 """
@@ -1854,12 +1904,8 @@ end
 """
     handle_jobs_gc(req, app) -> HTTP.Response
 
-`POST /api/v1/admin/jobs/gc` (PLAN.md §5.5/§1's `similarity-search-ctl jobs gc`, and the
-note that job GC and result-cursor GC share one command since they're the same kind of
-spool-record lifecycle): sweeps `open/` cursors whose TTL lapsed into `expired/`
-(`Cursors.gc_expired!`), then purges every file now sitting in `expired/`
-(`Cursors.purge_expired!`) and every `completed`/`failed` job record older than
-`retention_seconds` (`Jobs.purge_finished!`, default 24h, overridable in the body --
+`POST /api/v1/admin/jobs/gc` (PLAN.md §5.5/§1's `similarity-search-ctl jobs gc`): purges
+every `completed`/`failed` job record older than `retention_seconds` (`Jobs.purge_finished!`, default 24h, overridable in the body --
 `{"retention_seconds": 3600}` -- since a fixed default would make this awkward to exercise
 in a hardened test without actually waiting a day).
 """
@@ -1868,47 +1914,8 @@ function handle_jobs_gc(req::HTTP.Request, app::AppState)
     data = isempty(body) ? Dict{String, Any}() : JSON3.read(codeunits(body), Dict{String, Any})
     retention_seconds = get(data, "retention_seconds", 86400)
 
-    cursors_expired = Cursors.gc_expired!(app.cursor_mgr)
-    cursors_purged = Cursors.purge_expired!(app.cursor_mgr)
     jobs_purged = Jobs.purge_finished!(app.job_mgr; retention_seconds=retention_seconds)
-
-    return json_response(200, Dict(
-        "status" => "ok",
-        "cursors_expired" => cursors_expired,
-        "cursors_purged" => cursors_purged,
-        "jobs_purged" => jobs_purged,
-    ))
-end
-
-# ==========================================
-# Cursor Endpoints
-# ==========================================
-
-"""
-    handle_poll_cursor(req, app, cursor_id) -> HTTP.Response
-
-`GET /api/v1/cursors/{cursor_id}?limit=N` (PLAN.md §5.4): returns the next page of a
-result cursor's materialized results and advances it (see `handle_search`'s opt-in
-`page_size` param for how a cursor gets created in the first place). `404` if the cursor
-never existed at all; `409` if it did but isn't `open` anymore (already `exhausted` or
-`expired`) — the same "not found" vs. "found but not in the right state" distinction
-`handle_get_job_result` already draws for jobs.
-"""
-function handle_poll_cursor(req::HTTP.Request, app::AppState, cursor_id::String)
-    state, _ = Cursors.get_cursor(app.cursor_mgr, cursor_id)
-    state === nothing && return json_response(404, Dict("error" => "not_found"))
-    state === Cursors.Open || return json_response(409, Dict("error" => "cursor is $(lowercase(string(state))), nothing more to poll"))
-
-    params = queryparams(HTTP.URI(req.target))
-    limit = haskey(params, "limit") ? tryparse(Int, params["limit"]) : nothing
-
-    page = Cursors.poll_cursor!(app.cursor_mgr, cursor_id; limit=limit)
-    page === nothing && return json_response(409, Dict("error" => "cursor is no longer open"))
-
-    return json_response(200, Dict(
-        "cursor_id" => cursor_id, "results" => page.results,
-        "exhausted" => page.exhausted, "total" => page.total, "offset" => page.offset,
-    ))
+    return json_response(200, Dict("status" => "ok", "jobs_purged" => jobs_purged))
 end
 
 # ==========================================
@@ -1974,7 +1981,8 @@ end
 # ==========================================
 
 """
-    run_server(host::String, port::Int, app::AppState; async::Bool=false)
+    run_server(host::String, port::Int, app::AppState; async=false, gzip=DEFAULT_GZIP,
+               gzip_min_bytes=DEFAULT_GZIP_MIN_BYTES)
 
 Registers all HTTP routes and starts the Oxygen.jl server.
 
@@ -1983,8 +1991,13 @@ Registers all HTTP routes and starts the Oxygen.jl server.
 - `port::Int`: The port to listen on.
 - `app::AppState`: The global application state.
 - `async::Bool`: If `true`, returns immediately instead of blocking (used by tests).
+- `gzip::Bool`: whether a response is compressed with gzip when the request accepts it
+  (`[server] gzip`, PLAN.md §5.16). See [`gzip_middleware`](@ref).
+- `gzip_min_bytes::Integer`: the size from which a response body is compressed
+  (`[server] gzip_min_bytes`).
 """
-function run_server(host::String, port::Int, app::AppState; async::Bool=false)
+function run_server(host::String, port::Int, app::AppState; async::Bool=false, gzip::Bool=DEFAULT_GZIP,
+                    gzip_min_bytes::Integer=DEFAULT_GZIP_MIN_BYTES)
     @get "/healthz" req -> handle_healthz(req)
     @get "/readyz" req -> handle_readyz(req, app)
     @get "/metrics" req -> handle_metrics(req, app)
@@ -2023,7 +2036,6 @@ function run_server(host::String, port::Int, app::AppState; async::Bool=false)
     @get "/api/v1/jobs/{job_id}" (req, job_id) -> _guard(() -> handle_get_job(req, app, job_id), req, app, :read, "*")
     @get "/api/v1/jobs" req -> _guard(() -> handle_list_jobs(req, app), req, app, :read, "*")
 
-    @get "/api/v1/cursors/{cursor_id}" (req, cursor_id) -> _guard(() -> handle_poll_cursor(req, app, cursor_id), req, app, :read, "*")
 
     @post "/api/v1/admin/tokens" req -> _guard(() -> handle_create_token(req, app), req, app, :admin, "*")
     @get "/api/v1/admin/tokens" req -> _guard(() -> handle_list_tokens(req, app), req, app, :admin, "*")
@@ -2053,7 +2065,7 @@ function run_server(host::String, port::Int, app::AppState; async::Bool=false)
     @get "/api/v1/plugins" req -> _guard(() -> handle_list_plugins(req, app), req, app, :read, "*")
 
     println("Starting SimilaritySearchServer at http://$host:$port")
-    serve(host=host, port=port, async=async)
+    serve(host=host, port=port, async=async, middleware=gzip ? [gzip_middleware(gzip_min_bytes)] : [])
 end
 
 
@@ -2309,5 +2321,6 @@ function parse_distance(dist::Union{AbstractString,Nothing})
 end
 include("plugins.jl")
 include("followers_api.jl")
+include("compression.jl")
 
 end # module

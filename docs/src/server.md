@@ -8,7 +8,7 @@ end
 # SimilaritySearchServer API
 
 The service layer: the HTTP API, the job spool, the two command lines, and the supporting
-machinery for access tokens, telemetry and result cursors. It is a separate package, in
+machinery for access tokens and telemetry. It is a separate package, in
 `server/` of this same repository, and it reaches the engine only through the public API
 documented under [Engine API](engine.md) -- the same surface any other caller has.
 
@@ -47,13 +47,13 @@ Modules = [SimilaritySearchServer.Jobs, SimilaritySearchServer.Executors]
 Order   = [:type, :function, :constant]
 ```
 
-## `Tokens`, `Telemetry` and `Cursors`
+## `Tokens` and `Telemetry`
 
-Access tokens, the `op_log` operation history (whose `distance_evaluations` figure comes from
-the engine's [`SearchStats`](engine.md#SimilaritySearchEngine.SearchStats)), and server-side
-cursors for paging a materialized result set.
+Access tokens, and the `op_log` operation history, whose `distance_evaluations` figure comes
+from the engine's [`SearchStats`](engine.md#SimilaritySearchEngine.SearchStats). The server
+has no result cursors since 2026-11-23: a search answers its `k` results in one response.
 
 ```@autodocs
-Modules = [SimilaritySearchServer.Tokens, SimilaritySearchServer.Telemetry, SimilaritySearchServer.Cursors]
+Modules = [SimilaritySearchServer.Tokens, SimilaritySearchServer.Telemetry]
 Order   = [:type, :function, :constant]
 ```

@@ -217,6 +217,9 @@ function build_settings()
             arg_type = Int
         "--storage"
             help = "Dense index only: how the vectors are stored, a JSON object as the 'storage' field of POST /api/v1/datasets, for example '{\"kind\": \"quantized\", \"bits\": 4}' or '{\"kind\": \"sketched\", \"hyperplanes\": 256, \"bits\": 8}' (default: Float32 vectors)"
+        "--max-k"
+            help = "The largest k that a search of the dataset can ask for when a server serves it (default 100); POST /api/v1/admin/datasets/{id}/reload with {\"max_k\": n} changes it"
+            arg_type = Int
     end
 
     @add_arg_table! s["searchbatch"] begin

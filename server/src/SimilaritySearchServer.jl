@@ -16,11 +16,11 @@ import SimilaritySearchEngine as SSE
 # Schema/Persistence/Dataset/IndexEngine used to be defined locally here (include'd from
 # schema.jl/persistence.jl/dataset.jl/index_engine.jl) -- extracted verbatim into the new
 # SimilaritySearchEngine.jl package (PLAN.md §8.5, chunk 22), since none of the four ever
-# depended on anything else in this package (Jobs/Cursors/Tokens/Telemetry/Executors/Server
+# depended on anything else in this package (Jobs/Tokens/Telemetry/Executors/Server
 # are HTTP/CLI-specific glue that stayed behind). The bare `using SimilaritySearchEngine.X`
 # form below reproduces the exact same bare-name availability the old `include`d-then-
 # nested-`module` definitions gave -- both the plain module-name binding every nested
-# `Server`/`Jobs`/`Cursors`/`Telemetry` module's own `using ..Project`-style relative
+# `Server`/`Jobs`/`Telemetry` module's own `using ..Project`-style relative
 # import needs, and the unqualified `ProjectManager`/`AbstractSearchEngine` availability
 # this file's own `run_serve` uses. Placed *before* every `include` below (not just before
 # the ones that need it) since a nested module's own top-level `using ..Project` resolves
@@ -40,7 +40,6 @@ include("ctl_handlers.jl")
 include("telemetry.jl")
 include("tokens.jl")
 include("jobs.jl")
-include("cursors.jl")
 include("executors.jl")
 include("server.jl")
 
@@ -48,7 +47,6 @@ using .Telemetry
 using .Tokens
 using .Server
 using .Jobs
-using .Cursors
 using .Executors
 
 """
@@ -88,9 +86,9 @@ handler mapping regardless of how the arguments were collected" principle
 function run_serve(host::String, port::Int, workdir::String;
                    auth_enabled::Bool=false, batch_threads_pct::Real=20,
                    max_concurrent_queries::Int=0,
-                   follower_check_seconds::Real=Server.DEFAULT_FOLLOWER_CHECK_SECONDS)::Cint
+                   follower_check_seconds::Real=Server.DEFAULT_FOLLOWER_CHECK_SECONDS,
+                   gzip::Bool=Server.DEFAULT_GZIP, gzip_min_bytes::Int=Server.DEFAULT_GZIP_MIN_BYTES)::Cint
     job_mgr = Jobs.init_job_manager(workdir)
-    cursor_mgr = Cursors.init_cursor_manager(workdir)
     executor = Executors.LocalCLIExecutor()
     token_mgr = Tokens.open_token_manager(workdir)
 
@@ -109,7 +107,6 @@ function run_serve(host::String, port::Int, workdir::String;
     app = Server.AppState(
         workdir,
         job_mgr,
-        cursor_mgr,
         executor,
         token_mgr,
         Dict{String, SimilaritySearchEngine.EmbeddedEngine}(),
@@ -147,8 +144,24 @@ function run_serve(host::String, port::Int, workdir::String;
             "($(batch_threads_pct)% of this server's $(Threads.nthreads()) thread(s)). Queries use the rest.")
     errormonitor(@async Executors.run_dispatcher!(job_mgr, executor; max_concurrent, threads_per_job))
 
-    Server.run_server(host, port, app)
+    println(gzip ? "Responses of $gzip_min_bytes bytes or more are compressed with gzip when the request accepts it." :
+                   "Responses are not compressed ([server] gzip = false).")
+    Server.run_server(host, port, app; gzip, gzip_min_bytes)
     return 0
+end
+
+"""
+    resolve_gzip(server_cfg::AbstractDict) -> (gzip::Bool, gzip_min_bytes::Int)
+
+The compression of the responses, from the `[server]` section of the configuration file
+(PLAN.md §5.16). `gzip` is true unless the file sets it to `false`. A `gzip_min_bytes` that is
+not a non-negative integer is replaced by the default.
+"""
+function resolve_gzip(server_cfg::AbstractDict)
+    gzip = get(server_cfg, "gzip", Server.DEFAULT_GZIP) !== false
+    m = get(server_cfg, "gzip_min_bytes", Server.DEFAULT_GZIP_MIN_BYTES)
+    gzip_min_bytes = m isa Integer && !(m isa Bool) && m >= 0 ? Int(m) : Server.DEFAULT_GZIP_MIN_BYTES
+    return gzip, gzip_min_bytes
 end
 
 """
@@ -240,6 +253,7 @@ function main_serve(args::Vector{String})::Cint
     followers_cfg = get(config, "followers", Dict{String, Any}())
     check = get(followers_cfg, "check_seconds", Server.DEFAULT_FOLLOWER_CHECK_SECONDS)
     follower_check_seconds = check isa Real && check > 0 ? Float64(check) : Server.DEFAULT_FOLLOWER_CHECK_SECONDS
+    gzip, gzip_min_bytes = resolve_gzip(server_cfg)
 
     # The plugins are loaded before any dataset is opened, because a follower of a plugin is
     # opened with its leader. A plugin that the configuration declares and that cannot be
@@ -257,7 +271,7 @@ function main_serve(args::Vector{String})::Cint
     # The code of a plugin was defined after this function was compiled; `invokelatest` runs the
     # server in the world that has it.
     return Base.invokelatest(run_serve, host, port, workdir; auth_enabled, batch_threads_pct, max_concurrent_queries,
-                             follower_check_seconds)
+                             follower_check_seconds, gzip, gzip_min_bytes)
 end
 
 end # module

@@ -60,9 +60,9 @@ class SimilaritySearchClient:
     # --- datasets ---------------------------------------------------------------------
 
     def create_dataset(self, id=None, index_type="searchgraph", distance="L2", meta_schema=None,
-                        partition_by=None, partition_graph_min=None, storage=None):
+                        partition_by=None, partition_graph_min=None, storage=None, max_k=None):
         return self._call(*p.create_dataset(id, index_type, distance, meta_schema, partition_by,
-                                                partition_graph_min, storage))
+                                                partition_graph_min, storage, max_k))
 
     def list_datasets(self, offset=0, limit=None):
         return self._call(*p.list_datasets(offset, limit))
@@ -81,9 +81,8 @@ class SimilaritySearchClient:
     def append(self, index, items):
         return self._call(*p.append(index, items))
 
-    def search(self, index, vector, k=10, filter=None, beamsearch_overrides=None, page_size=None,
-               partition=None):
-        return self._call(*p.search(index, vector, k, filter, beamsearch_overrides, page_size, partition))
+    def search(self, index, vector, k=10, filter=None, beamsearch_overrides=None, partition=None):
+        return self._call(*p.search(index, vector, k, filter, beamsearch_overrides, partition))
 
     def ftsearch(self, index, text, k=10, partition=None, filter=None):
         return self._call(*p.ftsearch(index, text, k, partition, filter))
@@ -129,9 +128,8 @@ class SimilaritySearchClient:
     def follower_partitions(self, index, name):
         return self._call(*p.follower_partitions(index, name))
 
-    def follower_search(self, index, follower, vector=None, keys=None, k=10, t=None, filter=None, minrecall=None,
-                        page_size=None):
-        return self._call(*p.follower_search(index, follower, vector, keys, k, t, filter, minrecall, page_size))
+    def follower_search(self, index, follower, vector=None, keys=None, k=10, t=None, filter=None, minrecall=None):
+        return self._call(*p.follower_search(index, follower, vector, keys, k, t, filter, minrecall))
 
     def follower_ftsearch(self, index, follower, text, k=10, filter=None):
         return self._call(*p.follower_ftsearch(index, follower, text, k, filter))
@@ -177,11 +175,6 @@ class SimilaritySearchClient:
     def list_jobs(self, status=None, kind=None, offset=0, limit=None):
         return self._call(*p.list_jobs(status, kind, offset, limit))
 
-    # --- cursors ------------------------------------------------------------------
-
-    def poll_cursor(self, cursor_id, limit=None):
-        return self._call(*p.poll_cursor(cursor_id, limit))
-
     # --- admin ------------------------------------------------------------------------
 
     def create_token(self, user="anonymous", permissions=None, expires_at=None):
@@ -202,5 +195,5 @@ class SimilaritySearchClient:
     def unload_dataset(self, id):
         return self._call(*p.unload_dataset(id))
 
-    def reload_dataset(self, id):
-        return self._call(*p.reload_dataset(id))
+    def reload_dataset(self, id, max_k=None):
+        return self._call(*p.reload_dataset(id, max_k))

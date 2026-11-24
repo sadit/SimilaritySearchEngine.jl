@@ -26,7 +26,8 @@ are described here.
 | `followers_api.jl` | the routes of followers, and the task of `serve` that processes the periodic followers |
 | `plugins.jl` | loading the plugins of `[plugins]`, and the wire names of their key sources and kinds of follower |
 | `jobs.jl`, `executors.jl` | the job spool: an atomic directory tree (`queued/`, `running/`, `completed/`, `failed/`) of `.job.toml` files, dispatched as independent Julia subprocesses |
-| `tokens.jl`, `telemetry.jl`, `cursors.jl` | access tokens, the `op_log` operation history, and server-side result cursors for pagination |
+| `tokens.jl`, `telemetry.jl` | access tokens, and the `op_log` operation history |
+| `compression.jl` | the compression of responses with gzip, and the result of a job sent in parts |
 | `interactive.jl` | guided invocation through `REPL.TerminalMenus` |
 | `apps/` | the three installable app entry points |
 
@@ -115,7 +116,8 @@ is read through `GET /api/v1/datasets/{id}/log`.
 - `POST /api/v1/datasets` — creates one. Accepts `id`, `index_kind` (see section 3),
   `distance`, `dimension`, an optional `meta_schema`, `edit_correction` for a text dataset,
   `partition_by` for a text or dense dataset, `partition_graph_min` for a dense dataset
-  with `partition_by`, and `storage` for a dense dataset. Answers `201`. The fields `join_group`,
+  with `partition_by`, `storage` for a dense dataset, and `max_k`, the largest `k` of a search
+  (see "Size of a Response"). Answers `201`. The fields `join_group`,
   `holds_metadata` and `key` were removed on 2026-11-10, and a request that contains one of
   them answers `400` (see "Searching Several Text Fields").
 - `GET /api/v1/datasets?offset=&limit=` — every dataset on disk, loaded or not.
@@ -127,7 +129,7 @@ is read through `GET /api/v1/datasets/{id}/log`.
   without restarting the server. The `rebuild` subcommand of the command line requires this,
   because the RocksDB write lock is exclusive per process. `/reload` accepts an optional body
   `{"edit_correction": true}` or `false`, which changes that setting and reopens the dataset
-  with it.
+  with it, and `{"max_k": n}`, which changes `max_k`.
 
 ```json
 POST /api/v1/datasets          {"status":"created","id":"ds"}
@@ -139,7 +141,7 @@ GET /api/v1/datasets/{id}
 {"id":"ds", "index_kind":"searchgraph", "distance":"L2",
  "created_at":"2026-09-14T19:41:57.059", "loaded":true,
  "doc_count":5, "tombstone_count":0, "tombstone_ratio":0,
- "edit_correction":false,
+ "edit_correction":false, "max_k":100,
  "meta_schema":[{"name":"year","type":"int64"}], "partition_by":null,
  "beamsearch_baseline":{"bsize":4,"delta":1,"maxvisits":1000000},
  "storage":{"kind":"float32"}, "encoder":null}
@@ -383,9 +385,10 @@ or for a sketched dataset without `rerank`.
 - `POST /api/v1/datasets/{id}/append` — inserts items. A dense item contains `vector`, a text
   item contains `text`, and a sparse item contains `indices` and `values`. The fields
   `doc_id`, `keywords` and `refs`, and any other field, become the metadata of the item.
-- `POST /api/v1/datasets/{id}/search` — dense and sparse search, with optional `filter`,
-  `page_size`, `beamsearch_overrides`, and `partition` for a dense dataset with a partition
-  field. `filter` applies to the results of the partition. A partition name the dataset does
+- `POST /api/v1/datasets/{id}/search` — dense and sparse search, with `vector`, `k`, and
+  optional `filter`, `beamsearch_overrides`, and `partition` for a dense dataset with a partition
+  field. `k` is 10 when it is absent, and at most `max_k` of the dataset (see "Size of a
+  Response"). `filter` applies to the results of the partition. A partition name the dataset does
   not hold answers `404` with the kind `UnknownPartition`. `partition` on a dataset without a
   partition field, or together with `beamsearch_overrides`, answers `400`: the overrides
   apply to the graph of the whole dataset.
@@ -449,6 +452,47 @@ An operation on one dataset is addressed under that dataset. The two queries tha
 than one are under `/api/v1/search/`, which is the only place where a route is not about a
 single dataset. The earlier prefix `/api/v1/simsearch/` was removed on 2026-09-13: it marked a
 distinction that the API stopped making.
+
+### Size of a Response
+
+A search answers its `k` results in one response. The server has no cursors and no
+`page_size` since 2026-11-23. The server computed every result before it sent the first page,
+so a cursor divided the response and saved no computation. A request with `page_size` answers
+`400` with the kind `InvalidOption`.
+
+**`max_k`** is the largest `k` that a search of a dataset can ask for. It is 100 when the
+dataset is created without it. It is a setting of the dataset, kept in `descriptor.json`:
+
+- `POST /api/v1/datasets` with `"max_k": 1000` sets it when the dataset is created.
+- `POST /api/v1/admin/datasets/{id}/reload` with the body `{"max_k": 1000}` changes it.
+- `similarity-search build --max-k 1000` sets it for a dataset of the command line. `dump` and
+  `load` keep it.
+- `GET /api/v1/datasets/{id}` and `describe` report it. A dataset created before 2026-11-23
+  has 100.
+
+A search with a larger `k` answers `400` with the kind `InvalidOption`, and the message says
+how to change `max_k`:
+
+```json
+POST .../search  {"vector": [...], "k": 500}   [400]
+{"kind":"InvalidOption",
+ "error":"k = 500 is larger than max_k = 100 of the dataset 'ds'. max_k is set when ..."}
+```
+
+`max_k` limits `search`, `ftsearch`, the searches of a follower, which use `max_k` of the
+leader, and the hybrid search, whose `k` is at most `max_k` of each of its two datasets. It
+does not limit the jobs, whose results go to a file, or the commands of `similarity-search`.
+It does not limit `fetch` or a posting list either, and a posting list takes `limit`.
+
+**Compression.** The server compresses a response with gzip when the request accepts it
+(`Accept-Encoding: gzip`) and the body has at least `[server] gzip_min_bytes` bytes, 1024 by
+default. The response then has `Content-Encoding: gzip`. The Julia and the Python clients
+accept gzip and decompress it, so a caller of a client does nothing. On 2026-11-23, the 200
+results of a search over 200 paragraphs of *Frankenstein* took 11,984 bytes, and 2,161 bytes
+compressed. `[server] gzip = false` turns the compression off (section 6).
+
+`GET /api/v1/jobs/{job_id}/result` sends the file of the result in parts, without reading it
+into memory, and compresses it as it is read when the request accepts gzip.
 
 ### Followers
 
@@ -531,10 +575,10 @@ with `%`. The permission is the one of the leader:
 | `POST /datasets/{id}/followers/{f}/sync` | write | processes the new items now |
 | `POST /datasets/{id}/followers/{f}/rebuild` | admin | builds the follower again from every indexed item |
 | `GET /datasets/{id}/followers/{f}/partitions` | read | the partitions of a partition follower |
-| `POST /datasets/{id}/followers/{f}=value/search` | read | `search` in one partition of a dense dataset: `vector`, `k`, `filter`, `minrecall`, `page_size` |
+| `POST /datasets/{id}/followers/{f}=value/search` | read | `search` in one partition of a dense dataset: `vector`, `k`, `filter`, `minrecall` |
 | `POST /datasets/{id}/followers/{f}=value/ftsearch` | read | `ftsearch` in one partition of a text dataset: `text`, `k`, `filter` |
 | `POST /datasets/{id}/followers/{f}=value/calibrate` | write | calibrates the graph of one partition: `minrecall`, `numqueries`, `ksearch` |
-| `POST /datasets/{id}/followers/{f}/search` | read | a keyword follower: `keys`, `k`, `t`, `filter`, `page_size` |
+| `POST /datasets/{id}/followers/{f}/search` | read | a keyword follower: `keys`, `k`, `t`, `filter` |
 | `GET /datasets/{id}/followers/{f}/postings?key=&limit=` | read | the posting list of one key of a keyword follower |
 | `GET /datasets/{id}/postings?key=&limit=` | read | the posting list of a token of a text dataset, or of a dimension of a sparse dataset |
 | `POST /datasets/{id}/migrate-partitions` | admin | moves the partitions of `partition_by` to a partition follower: `name`, `disjoint` |
@@ -862,7 +906,7 @@ insertion uses the engine's own context under an exclusive write lock.
 - `GET /api/v1/jobs?offset=&limit=`, `GET /api/v1/jobs/{job_id}` and `/result` — the jobs,
   the state of one, and its output.
 - `POST /api/v1/jobs/{job_id}/block`, `/resume`, `/kill`, and `DELETE /api/v1/jobs/{job_id}`.
-- `POST /api/v1/admin/jobs/gc` — removes the jobs and cursors that have expired.
+- `POST /api/v1/admin/jobs/gc` — removes the finished jobs older than `retention_seconds`.
 
 ```json
 POST /api/v1/jobs/allknn  [202]   {"status":"accepted","job_id":"fe3198116091f825"}
@@ -872,11 +916,11 @@ GET /api/v1/jobs
  "jobs":[{"id":"fe3198116091f825","kind":"allknn","status":"queued"}]}
 
 POST /api/v1/admin/jobs/gc
-{"status":"ok","jobs_purged":[],"cursors_purged":[],"cursors_expired":[]}
+{"status":"ok","jobs_purged":[]}
 ```
 
 A job's state is `queued`, `running`, `blocked`, `completed` or `failed`.
-`GET /api/v1/jobs/{job_id}/result` streams the file the job wrote, except for `dump`, whose
+`GET /api/v1/jobs/{job_id}/result` sends the file the job wrote, in parts, except for `dump`, whose
 result is a directory: for that one it answers `{"bundle_dir": ..., "manifest": {...}}`.
 
 The result of `allknn` has one line per item: `{"id", "neighbors", "dists"}`. The result of
@@ -980,6 +1024,8 @@ workdir = "./workdir"
 [server]
 host = "127.0.0.1"
 port = 8080
+gzip = true
+gzip_min_bytes = 1024
 
 [resources]
 query_threads_pct = 80
@@ -989,6 +1035,9 @@ max_concurrent_queries = 0
 [followers]
 check_seconds = 10
 ```
+
+`gzip` and `gzip_min_bytes` say when a response is compressed (see "Size of a Response"). A
+`gzip_min_bytes` that is not a non-negative integer is replaced by the default, 1024.
 
 `check_seconds` is how often the task of `serve` looks for periodic followers to process (see
 "Followers"). The section `[plugins]` declares the plugins that `serve` loads when it starts (see
@@ -1039,7 +1088,7 @@ The suite has two levels. A run can also select some of its files.
   items. It also verifies that the Julia client has every error type of the engine. No server
   is started and no subprocess is created. This level detects a change in the engine on the
   day it is made.
-- **full** (1,372 assertions, approximately 39 minutes, measured on 2026-11-23): the end-to-end
+- **full** (1,385 assertions, approximately 38 minutes, measured on 2026-11-23): the end-to-end
   suites for the API, the jobs, the command lines and the Julia client. They start servers and
   execute subprocesses. Near the end, the run produces no output for about ten minutes, while
   the command-line suite waits for jobs to expire. The run has not stopped.
@@ -1051,7 +1100,7 @@ julia --project=server -e 'using Pkg; Pkg.test(test_args=["full"])'
 
 Each test file has a name and a list of tags. The table `TEST_FILES` in
 `server/test/runtests.jl` lists them. The names are `config`, `boundary`, `dispatcher`, `e2e`, `api/01` to
-`api/20` and `cli/01` to `cli/08`. Examples of tags are `jobs`, `cursors`, `client`,
+`api/20` and `cli/01` to `cli/08`. Examples of tags are `jobs`, `responses`, `client`,
 `partitions`, `followers`, `plugins`, `storage`, `auth` and `cli`. A run that receives names or tags includes only the files that
 match one of them. The word `light` adds the files of the light level.
 

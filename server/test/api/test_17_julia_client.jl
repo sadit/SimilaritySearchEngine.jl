@@ -106,7 +106,7 @@ import SimilaritySearchClient as C
     @testset "followers, with the engine's names" begin
         text_item(i) = C.TextItem(rows[i]["text"]; doc_id=rows[i]["doc_id"], keywords=rows[i]["keywords"],
                                   meta=Dict("repo" => repo_of(i)))
-        t = C.create_project(conn, "jc_fl"; index_type="bm25_invfile")
+        t = C.create_project(conn, "jc_fl"; index_type="bm25_invfile", max_k=120)
         C.append_items!(t, [text_item(i) for i in 1:120])
         f = C.create_follower(t, "repo"; kind="partition", source="meta:repo")
         kw = C.create_follower(t, "kw"; kind=:keyword, source="keywords", policy=:manual)
@@ -189,18 +189,18 @@ import SimilaritySearchClient as C
         C.delete_project!(t)
     end
 
-    @testset "pages of a search, through a cursor" begin
+    @testset "a search answers its k results in one response, up to max_k" begin
         h = C.open_project(conn, "jc_dense")
         q = vec(21)
-        pages = C.search_pages(h, q, 50; page_size=20)
-        # Item 9 is deleted above, and the server drops deleted results before it pages them.
-        want = C.search(h, q, 50)
-        @test pages.total == length(want) == 49
-        got = collect(pages)
-        @test length.(got) == [20, 20, 9]
-        @test reduce(vcat, got) == want
-        # The cursor is closed after its last page, so a second pass fails at its second page.
-        @test_throws C.StateConflict collect(pages)
+        # Item 9 is deleted above, and the server drops deleted results.
+        @test length(C.search(h, q, 50)) == 49
+        @test C.project_info(h)["max_k"] == 100
+        err = try
+            C.search(h, q, 101)
+        catch e
+            e
+        end
+        @test err isa C.InvalidOption && occursin("max_k = 100", sprint(showerror, err))
     end
 
     @testset "jobs, with the engine's result types" begin

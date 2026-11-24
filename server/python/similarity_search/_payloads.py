@@ -52,11 +52,13 @@ def metrics():
 # --- datasets -------------------------------------------------------------------------
 
 def create_dataset(id=None, index_type="searchgraph", distance="L2", meta_schema=None,
-                    partition_by=None, partition_graph_min=None, storage=None):
+                    partition_by=None, partition_graph_min=None, storage=None, max_k=None):
+    """``max_k`` is the largest ``k`` that a search of the dataset can ask for; the server
+    takes 100 when it is ``None``. A search answers its ``k`` results in one response."""
     body = _compact({
         "id": id, "index_type": index_type, "distance": distance,
         "meta_schema": meta_schema, "partition_by": partition_by,
-        "partition_graph_min": partition_graph_min, "storage": storage,
+        "partition_graph_min": partition_graph_min, "storage": storage, "max_k": max_k,
     })
     return "POST", "/api/v1/datasets", body, None
 
@@ -85,11 +87,10 @@ def append(index, items):
     return "POST", f"/api/v1/datasets/{index}/append", {"items": items}, None
 
 
-def search(index, vector, k=10, filter=None, beamsearch_overrides=None, page_size=None, partition=None):
+def search(index, vector, k=10, filter=None, beamsearch_overrides=None, partition=None):
     body = _compact({
         "vector": _as_vector(vector), "k": k, "filter": filter,
-        "beamsearch_overrides": beamsearch_overrides, "page_size": page_size,
-        "partition": partition,
+        "beamsearch_overrides": beamsearch_overrides, "partition": partition,
     })
     return "POST", f"/api/v1/datasets/{index}/search", body, None
 
@@ -176,15 +177,14 @@ def follower_partitions(index, name):
     return "GET", _follower_path(index, name, "/partitions"), None, None
 
 
-def follower_search(index, follower, vector=None, keys=None, k=10, t=None, filter=None, minrecall=None,
-                    page_size=None):
+def follower_search(index, follower, vector=None, keys=None, k=10, t=None, filter=None, minrecall=None):
     """A vector in one partition (``follower="name=value"``), or keys in a keyword follower
     (``follower="name"``) -- one of ``vector`` and ``keys``."""
     if (vector is None) == (keys is None):
         raise ValueError("follower_search takes a vector (a partition, name=value) or keys (a keyword follower), not both")
     body = _compact({
         "vector": _as_vector(vector), "keys": None if keys is None else list(keys), "k": k, "t": t,
-        "filter": filter, "minrecall": minrecall, "page_size": page_size,
+        "filter": filter, "minrecall": minrecall,
     })
     return "POST", _follower_path(index, follower, "/search"), body, None
 
@@ -263,13 +263,6 @@ def list_jobs(status=None, kind=None, offset=0, limit=None):
     return "GET", "/api/v1/jobs", None, params
 
 
-# --- cursors ------------------------------------------------------------------------
-
-def poll_cursor(cursor_id, limit=None):
-    params = _compact({"limit": limit})
-    return "GET", f"/api/v1/cursors/{cursor_id}", None, params
-
-
 # --- admin -------------------------------------------------------------------------
 
 def create_token(user="anonymous", permissions=None, expires_at=None):
@@ -297,5 +290,7 @@ def unload_dataset(id):
     return "POST", f"/api/v1/admin/datasets/{id}/unload", None, None
 
 
-def reload_dataset(id):
-    return "POST", f"/api/v1/admin/datasets/{id}/reload", None, None
+def reload_dataset(id, max_k=None):
+    """Reopens a dataset. ``max_k`` changes the largest ``k`` that a search of it can ask for."""
+    body = _compact({"max_k": max_k})
+    return "POST", f"/api/v1/admin/datasets/{id}/reload", body or None, None

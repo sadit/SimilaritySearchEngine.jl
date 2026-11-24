@@ -121,7 +121,7 @@ function build_ctl_settings()
 
     @add_arg_table! s["jobs"] begin
         "queue"
-            help = "List queued/running/blocked jobs (and, informationally, currently-open result cursors)"
+            help = "List queued/running/blocked jobs"
             action = :command
         "result"
             help = "Fetch a completed job's result payload"
@@ -136,7 +136,7 @@ function build_ctl_settings()
             help = "Forcibly terminate a running job"
             action = :command
         "gc"
-            help = "Garbage-collect finished jobs and expired result cursors past retention"
+            help = "Garbage-collect finished jobs past retention"
             action = :command
     end
 

@@ -13,7 +13,8 @@ using JSON3
         # Create Both Indexes. `word_count` is declared+indexed so the metadata filter
         # below can be evaluated against it (§4.5's declared/typed field split).
         meta_schema = [Dict("name" => "word_count", "type" => "int64", "indexed" => true)]
-        resp = HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "hybrid_dense_ds", "index_type" => "searchgraph", "distance" => "L2", "meta_schema" => meta_schema)))
+        resp = HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "hybrid_dense_ds", "index_type" => "searchgraph", "distance" => "L2", "meta_schema" => meta_schema,
+                                                                   "max_k" => 200)))
         @test resp.status == 201
         resp = HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "hybrid_lexical_ds", "index_type" => "bm25_invfile")))
         @test resp.status == 201

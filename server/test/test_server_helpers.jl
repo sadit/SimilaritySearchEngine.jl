@@ -6,7 +6,6 @@ using SimilaritySearchEngine
 using SimilaritySearchServer.Server
 using SimilaritySearchEngine.Project
 using SimilaritySearchServer.Jobs
-using SimilaritySearchServer.Cursors
 using SimilaritySearchServer.Executors
 using SimilaritySearchEngine.IndexEngine
 using SimilaritySearchServer.Tokens
@@ -36,13 +35,11 @@ function ensure_test_server()
     if TEST_SERVER[] === nothing
         workdir = mktempdir()
         job_mgr = Jobs.init_job_manager(workdir)
-        cursor_mgr = Cursors.init_cursor_manager(workdir)
         executor = LocalCLIExecutor()
         token_mgr = Tokens.open_token_manager(workdir)
         app = AppState(
             workdir,
             job_mgr,
-            cursor_mgr,
             executor,
             token_mgr,
             Dict{String, SimilaritySearchEngine.EmbeddedEngine}(),

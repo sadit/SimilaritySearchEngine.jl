@@ -51,9 +51,9 @@ class AsyncSimilaritySearchClient:
     # --- datasets ---------------------------------------------------------------------
 
     async def create_dataset(self, id=None, index_type="searchgraph", distance="L2", meta_schema=None,
-                              partition_by=None, partition_graph_min=None, storage=None):
+                              partition_by=None, partition_graph_min=None, storage=None, max_k=None):
         return await self._call(*p.create_dataset(id, index_type, distance, meta_schema, partition_by,
-                                                partition_graph_min, storage))
+                                                partition_graph_min, storage, max_k))
 
     async def list_datasets(self, offset=0, limit=None):
         return await self._call(*p.list_datasets(offset, limit))
@@ -72,9 +72,8 @@ class AsyncSimilaritySearchClient:
     async def append(self, index, items):
         return await self._call(*p.append(index, items))
 
-    async def search(self, index, vector, k=10, filter=None, beamsearch_overrides=None, page_size=None,
-                     partition=None):
-        return await self._call(*p.search(index, vector, k, filter, beamsearch_overrides, page_size, partition))
+    async def search(self, index, vector, k=10, filter=None, beamsearch_overrides=None, partition=None):
+        return await self._call(*p.search(index, vector, k, filter, beamsearch_overrides, partition))
 
     async def ftsearch(self, index, text, k=10, partition=None, filter=None):
         return await self._call(*p.ftsearch(index, text, k, partition, filter))
@@ -120,9 +119,8 @@ class AsyncSimilaritySearchClient:
     async def follower_partitions(self, index, name):
         return await self._call(*p.follower_partitions(index, name))
 
-    async def follower_search(self, index, follower, vector=None, keys=None, k=10, t=None, filter=None, minrecall=None,
-                              page_size=None):
-        return await self._call(*p.follower_search(index, follower, vector, keys, k, t, filter, minrecall, page_size))
+    async def follower_search(self, index, follower, vector=None, keys=None, k=10, t=None, filter=None, minrecall=None):
+        return await self._call(*p.follower_search(index, follower, vector, keys, k, t, filter, minrecall))
 
     async def follower_ftsearch(self, index, follower, text, k=10, filter=None):
         return await self._call(*p.follower_ftsearch(index, follower, text, k, filter))
@@ -168,11 +166,6 @@ class AsyncSimilaritySearchClient:
     async def list_jobs(self, status=None, kind=None, offset=0, limit=None):
         return await self._call(*p.list_jobs(status, kind, offset, limit))
 
-    # --- cursors ------------------------------------------------------------------
-
-    async def poll_cursor(self, cursor_id, limit=None):
-        return await self._call(*p.poll_cursor(cursor_id, limit))
-
     # --- admin ------------------------------------------------------------------------
 
     async def create_token(self, user="anonymous", permissions=None, expires_at=None):
@@ -193,5 +186,5 @@ class AsyncSimilaritySearchClient:
     async def unload_dataset(self, id):
         return await self._call(*p.unload_dataset(id))
 
-    async def reload_dataset(self, id):
-        return await self._call(*p.reload_dataset(id))
+    async def reload_dataset(self, id, max_k=None):
+        return await self._call(*p.reload_dataset(id, max_k))

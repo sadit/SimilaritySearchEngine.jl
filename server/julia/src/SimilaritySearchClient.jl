@@ -26,7 +26,6 @@ export append_items!, index!, search, ftsearch, fetch_items, exists, delete_item
 export meta_schema, partition_field, partition_graph_min, partitions, vocabulary_report
 export allknn, fft, neardup, dump_project, load_project
 export submit_job, job_info, wait_job, job_result, list_jobs, cancel_job!, kill_job!, block_job!, resume_job!
-export search_pages, SearchPages
 export RemoteFollower, RemoteFollowerView, FollowerStatus
 export create_follower, open_follower, close_follower!, followers, follower_status, sync!
 export rebuild_follower!, delete_follower!, migrate_partitions!, posting_list, plugins
@@ -45,7 +44,6 @@ include("connection.jl")
 include("projects.jl")
 include("operations.jl")
 include("jobs.jl")
-include("cursors.jl")
 include("followers.jl")
 
 end

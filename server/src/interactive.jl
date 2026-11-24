@@ -434,5 +434,6 @@ function run_interactive_serve(config_path::String)
     batch_threads_pct = resolve_batch_threads_pct(resources_cfg)
     configured_slots = get(resources_cfg, "max_concurrent_queries", 0)
     max_concurrent_queries = configured_slots isa Integer ? Int(configured_slots) : 0
-    return run_serve(host, port, workdir; auth_enabled, batch_threads_pct, max_concurrent_queries)
+    gzip, gzip_min_bytes = resolve_gzip(server_cfg)
+    return run_serve(host, port, workdir; auth_enabled, batch_threads_pct, max_concurrent_queries, gzip, gzip_min_bytes)
 end

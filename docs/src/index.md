@@ -58,7 +58,7 @@ prose for both packages of this repository.
 **Reference (here)**
 
 - **[Engine API](engine.md)**: every exported type, interface and function of `SimilaritySearchEngine`, plus its `Errors`, `Schema`, `Project`, `IndexEngine` and `Persistence` submodules.
-- **[Server API](server.md)**: `SimilaritySearchServer` — the HTTP handlers, the job spool, the two command lines, tokens, telemetry and cursors.
+- **[Server API](server.md)**: `SimilaritySearchServer` — the HTTP handlers, the job spool, the two command lines, tokens and telemetry.
 
 **Manual**
 

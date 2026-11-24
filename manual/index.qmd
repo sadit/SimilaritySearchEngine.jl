@@ -119,8 +119,8 @@ developed by path.
   `similarity-search-ctl` operates on a running server over HTTP. Both can be installed as
   applications with `Pkg.Apps`.
 - **Operational interfaces**: access tokens, an operation log per dataset (whose
-  distance-computation counts are obtained from the engine's `SearchStats`), cursors for
-  paginated results, health and metrics endpoints, and unload and reload of a single dataset
+  distance-computation counts are obtained from the engine's `SearchStats`), responses
+  compressed with gzip, health and metrics endpoints, and unload and reload of a single dataset
   without restarting the server.
 - **One error vocabulary**: the engine's four categories are mapped to HTTP status codes and
   to command-line exit codes by category, not by message text.

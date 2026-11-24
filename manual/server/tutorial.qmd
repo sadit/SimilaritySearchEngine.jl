@@ -87,6 +87,12 @@ A filtered search reads a limited number of candidates before applying the filte
 return fewer than `k` results. The response reports this condition in the field
 `insufficient_results`.
 
+A search answers its `k` results in one response. `k` is at most `max_k` of the dataset, 100
+by default. A dataset that needs more is created with `"max_k": 1000` in Step 3, and the
+[server manual](manual.qmd#size-of-a-response) describes how to change it later. A large
+response is compressed with gzip when the request accepts it: `curl --compressed` asks for it
+and decompresses it.
+
 ## Step 5: Read failures
 
 Failures are typed, and the status code identifies the class of the failure without the message

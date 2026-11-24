@@ -71,6 +71,8 @@ function execute_build(cmd_args::Dict)
     index_kind = cmd_args["index-kind"]
     distance = cmd_args["distance"]
     workdir = cmd_args["workdir"]
+    max_k = something(get(cmd_args, "max-k", nothing), Server.DEFAULT_MAX_K)
+    max_k >= 1 || SSE.Errors.invalid_option(:max_k, "--max-k must be a positive integer; got $max_k")
 
     println("Building index '$index_kind' for dataset '$project_id'")
 
@@ -94,9 +96,13 @@ function execute_build(cmd_args::Dict)
 
     inserted = isempty(items) ? 0 : SSE.append_items!(handle, items)
     inserted > 0 && SSE.index!(handle)
-    # Nothing else to write: the project persists itself, which is also why `search`,
-    # `describe` and every job below reopen it instead of reading a separate file.
+    # The project persists itself, which is also why `search`, `describe` and every job below
+    # reopen it instead of reading a separate file. The sidecar of the server holds what the
+    # project does not: `max_k` (PLAN.md §5.16), which `dump` and `load` carry to a server.
     SSE.close_project!(handle)
+    write(joinpath(workdir, project_id, "descriptor.json"), JSON3.write(Dict(
+        "id" => project_id, "index_kind" => index_kind, "distance" => distance,
+        "created_at" => string(now(UTC)), "edit_correction" => false, "max_k" => max_k)))
 
     println("Successfully built index with $inserted items. Saved to $(joinpath(workdir, project_id))")
     return 0
@@ -465,6 +471,11 @@ function execute_describe(cmd_args::Dict)
         "tombstone_count" => tombstones,
         "tombstone_ratio" => doc_count == 0 ? 0.0 : tombstones / doc_count,
     )
+    # The largest k of a search when a server serves the dataset (PLAN.md §5.16), from the
+    # sidecar of the server; a dataset without one has the default.
+    descriptor_file = joinpath(handle.dir, "descriptor.json")
+    desc["max_k"] = isfile(descriptor_file) ?
+        Server._descriptor_max_k(JSON3.read(read(descriptor_file), Dict{String, Any})) : Server.DEFAULT_MAX_K
 
     if is_text
         # The vocabulary and its out-of-vocabulary rates belong to the engine, which fitted
@@ -785,6 +796,7 @@ function execute_dump(cmd_args::Dict)
         "index_kind" => index_kind,
         "distance" => distance,
         "edit_correction" => descriptor === nothing ? false : get(descriptor, "edit_correction", false),
+        "max_k" => descriptor === nothing ? Server.DEFAULT_MAX_K : Server._descriptor_max_k(descriptor),
         "record_count" => length(records),
         "followers" => follower_names,
         "dumped_at" => string(now(UTC)),
@@ -921,6 +933,7 @@ function execute_load(cmd_args::Dict)
         "distance" => get(manifest, "distance", nothing),
         "created_at" => string(now(UTC)),
         "edit_correction" => get(manifest, "edit_correction", false),
+        "max_k" => Server._descriptor_max_k(manifest),
     )
     write(joinpath(target_path, "descriptor.json"), JSON3.write(descriptor))
 

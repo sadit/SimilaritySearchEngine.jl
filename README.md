@@ -134,7 +134,7 @@ The times are those of the outer testset, measured on 2026-11-23 with 8 threads 
 
 A run that receives names or tags includes only the test files that match one of them, with their heavy testsets. Each suite lists its files, with their names and tags, in the table `TEST_FILES` of its `runtests.jl`. The server's files are `api/01` to `api/20`, `cli/01` to `cli/08`, `e2e`, `boundary`, `dispatcher` and `config`. The engine's files include `dense`, `text`, `persistence`, `quantized`, `sketches`, `followers` and `events`. `SSE_TEST_SELECT="api/13 jobs"` gives the same selection from the environment. A name that matches no file is an error. `test/selection.jl` implements the selection for both suites.
 
-The split follows the clock, not importance. The engine's full level adds the whole-dataset algorithms, the concurrency stress test, the text testsets that fit a linguistic profile from a corpus, and the resident memory of a quantized project -- everything they cover is covered in the light run too, at a size that runs in about a second each. The server's light level (321 assertions, 29 s, measured on 2026-11-23) covers the boundary with the engine -- wire names to engine types, engine errors to status and exit codes, wire items to engine items -- without starting a server or spawning a subprocess; its full level (1,372 assertions, 40 min, measured on the same day) adds the HTTP, job, CLI and Julia client end-to-end suites. `SSE_TEST_LEVEL=full` selects the full level from CI.
+The split follows the clock, not importance. The engine's full level adds the whole-dataset algorithms, the concurrency stress test, the text testsets that fit a linguistic profile from a corpus, and the resident memory of a quantized project -- everything they cover is covered in the light run too, at a size that runs in about a second each. The server's light level (321 assertions, 29 s, measured on 2026-11-23) covers the boundary with the engine -- wire names to engine types, engine errors to status and exit codes, wire items to engine items -- without starting a server or spawning a subprocess; its full level (1,385 assertions, 38 min, measured on the same day) adds the HTTP, job, CLI and Julia client end-to-end suites. `SSE_TEST_LEVEL=full` selects the full level from CI.
 
 A skipped testset is named at the end of a light run: a light run that looks identical to a full one is how a suite quietly stops testing something.
 
@@ -148,7 +148,7 @@ MIT. See [LICENSE](LICENSE).
 
 ## The server subpackage
 
-[`server/`](server/) holds `SimilaritySearchServer`: a REST API (Oxygen), two CLIs, an asynchronous job queue with a filesystem spool, tokens, cursors and telemetry, plus three installable apps (`similarity-search`, `similarity-search-admin`, `similarity-search-serve`). It consumes this engine's public API and nothing below it.
+[`server/`](server/) holds `SimilaritySearchServer`: a REST API (Oxygen), two CLIs, an asynchronous job queue with a filesystem spool, tokens and telemetry, plus three installable apps (`similarity-search`, `similarity-search-admin`, `similarity-search-serve`). It consumes this engine's public API and nothing below it.
 
 ```julia
 using Pkg

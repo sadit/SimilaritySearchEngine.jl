@@ -309,13 +309,16 @@ end
 
 """
 `POST /api/v1/datasets/{id}/followers/{f}/search`: with `{f} = name=value`, `search` in a
-partition of a dense leader (`vector`, `k`, `filter`, `minrecall`, `page_size`); with a keyword
-follower, a search by keys (`keys`, `k`, `t`, `filter`, `page_size`).
+partition of a dense leader (`vector`, `k`, `filter`, `minrecall`); with a keyword follower, a
+search by keys (`keys`, `k`, `t`, `filter`). `k` is limited by the `max_k` of the leader
+(PLAN.md §5.16).
 """
 function handle_follower_search(req::HTTP.Request, app, id::String, f::String)
     handle = _leader_or_404(app, id)
     handle isa HTTP.Response && return handle
     data = _body(req)
+    bad_k = check_search_k(app, (id,), data)
+    bad_k === nothing || return bad_k
     k = Int(get(data, "k", 10))
     filter_spec = get(data, "filter", nothing)
     filter = filter_spec === nothing ? nothing : _filter_predicate(filter_spec, SSE.meta_schema(handle))
@@ -337,10 +340,7 @@ function handle_follower_search(req::HTTP.Request, app, id::String, f::String)
                 stats -> SSE.search(fo, String.(keys_), k; t, filter, candidates=FILTER_CANDIDATES(k), stats))
         end
     end
-    response isa HTTP.Response && return response
-    page_size = get(data, "page_size", nothing)
-    page_size === nothing && return json_response(200, response)
-    return json_response(200, _paginate_results(app, id, response["results"], Int(page_size)))
+    response isa HTTP.Response ? response : json_response(200, response)
 end
 
 "`POST /api/v1/datasets/{id}/followers/{name=value}/ftsearch`: `ftsearch` in a partition of a text leader."
@@ -350,6 +350,8 @@ function handle_follower_ftsearch(req::HTTP.Request, app, id::String, f::String)
     data = _body(req)
     text = get(data, "text", nothing)
     text isa AbstractString || return json_response(400, Dict("error" => "ftsearch requires 'text', a string"))
+    bad_k = check_search_k(app, (id,), data)
+    bad_k === nothing || return bad_k
     k = Int(get(data, "k", 10))
     filter_spec = get(data, "filter", nothing)
     filter = filter_spec === nothing ? nothing : _filter_predicate(filter_spec, SSE.meta_schema(handle))

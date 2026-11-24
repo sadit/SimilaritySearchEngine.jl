@@ -9,17 +9,16 @@ using Dates
     # A dummy request: block/resume/kill/unload never read `req.body`, only `app`/the path
     # id -- and the live dispatcher on the shared test server would race any job placed in
     # its own `job_mgr`, so this section drives a throwaway `AppState` (own workdir, own
-    # JobManager/CursorManager/Executor, no dispatcher started at all) and calls the
+    # JobManager/Executor, no dispatcher started at all) and calls the
     # handlers directly, exactly like the HTTP layer would, but deterministically.
     dummy_req = HTTP.Request("POST", "/dummy")
 
     admin_workdir = mktempdir()
     job_mgr = Jobs.init_job_manager(admin_workdir)
-    cursor_mgr = Cursors.init_cursor_manager(admin_workdir)
     executor = LocalCLIExecutor()
     token_mgr = Tokens.open_token_manager(admin_workdir)
     app2 = AppState(
-        admin_workdir, job_mgr, cursor_mgr, executor, token_mgr,
+        admin_workdir, job_mgr, executor, token_mgr,
         Dict{String, SimilaritySearchEngine.EmbeddedEngine}(), ReentrantLock(),
     )
 
@@ -70,7 +69,7 @@ using Dates
     resp = Server.handle_kill_job(dummy_req, app2, job_id2) # already failed
     @test resp.status == 409
 
-    # --- jobs gc: retention-based purge of completed/failed jobs, and cursor GC --
+    # --- jobs gc: retention-based purge of completed/failed jobs --------------
 
     ok_job = Jobs.create_job!(job_mgr, "allknn", String[])
     Jobs.update_job_state!(job_mgr, ok_job, Jobs.Queued, Jobs.Running)
@@ -82,22 +81,15 @@ using Dates
     Jobs.finish_job!(job_mgr, failed_job, false; error="boom")
     @test first(Jobs.get_job(job_mgr, failed_job)) == Jobs.Failed
 
-    long_ttl_cursor = Cursors.create_cursor!(cursor_mgr, "some_ds", [1, 2, 3]; ttl_seconds=3600)
-    short_ttl_cursor = Cursors.create_cursor!(cursor_mgr, "some_ds", [1, 2, 3]; ttl_seconds=0)
-
-    # A large retention should leave both finished jobs (too recent to purge) untouched,
-    # but the already-lapsed cursor still gets swept into expired/ and purged either way
-    # (cursor TTL and job retention are independent knobs).
+    # A large retention should leave both finished jobs (too recent to purge) untouched.
     resp = Server.handle_jobs_gc(HTTP.Request("POST", "/dummy", [], JSON3.write(Dict("retention_seconds" => 999_999))), app2)
     @test resp.status == 200
     body = JSON3.read(String(resp.body))
     @test isempty(body.jobs_purged)
-    @test short_ttl_cursor in body.cursors_expired
-    @test short_ttl_cursor in body.cursors_purged
+    # The server has no result cursors since 2026-11-23 (PLAN.md §5.16), so gc reports none.
+    @test !haskey(body, :cursors_expired) && !haskey(body, :cursors_purged)
     @test first(Jobs.get_job(job_mgr, ok_job)) == Jobs.Completed
     @test first(Jobs.get_job(job_mgr, failed_job)) == Jobs.Failed
-    @test first(Cursors.get_cursor(cursor_mgr, short_ttl_cursor)) === nothing
-    @test first(Cursors.get_cursor(cursor_mgr, long_ttl_cursor)) == Cursors.Open
 
     # retention_seconds=0 makes every already-finished job immediately eligible.
     resp = Server.handle_jobs_gc(HTTP.Request("POST", "/dummy", [], JSON3.write(Dict("retention_seconds" => 0))), app2)
@@ -107,7 +99,6 @@ using Dates
     @test failed_job in body.jobs_purged
     @test first(Jobs.get_job(job_mgr, ok_job)) === nothing
     @test first(Jobs.get_job(job_mgr, failed_job)) === nothing
-    @test first(Cursors.get_cursor(cursor_mgr, long_ttl_cursor)) == Cursors.Open # untouched
 
     # --- single-dataset unload / reload (PLAN.md §5.7's flagged open issue) ------
 

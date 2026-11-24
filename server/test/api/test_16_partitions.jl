@@ -16,7 +16,7 @@ using JSON3
         in_part(i, p) = (v = repo_of(i); v isa AbstractString ? v == p : p in v)
 
         @test HTTP.post("$base_url/datasets", [], JSON3.write(Dict(
-            "id" => "part_ds", "index_type" => "bm25_invfile", "partition_by" => "repo"))).status == 201
+            "id" => "part_ds", "index_type" => "bm25_invfile", "partition_by" => "repo", "max_k" => 150))).status == 201
         @test HTTP.post("$base_url/datasets/part_ds/append", [], JSON3.write(Dict("items" => docs))).status == 200
 
         # The field is reported from the project, and the partitions with their sizes.

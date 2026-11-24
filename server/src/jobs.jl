@@ -66,10 +66,6 @@ function init_job_manager(workdir::String)
     for state in ["queued", "running", "blocked", "completed", "failed"]
         mkpath(joinpath(workdir, "jobs", state))
     end
-    # Directory for paginated cursors
-    for state in ["open", "exhausted", "expired"]
-        mkpath(joinpath(workdir, "cursors", state))
-    end
     return JobManager(workdir)
 end
 

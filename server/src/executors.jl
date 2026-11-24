@@ -108,7 +108,7 @@ end
 """
     result_path(executor::LocalCLIExecutor, handle::String) -> String
 
-Returns the theoretical path where the worker will leave its final results (cursors or logs).
+Returns the theoretical path where the worker will leave its final results or logs.
 
 # Arguments
 - `executor::LocalCLIExecutor`: The execution backend instance.

@@ -65,6 +65,10 @@ check_seconds = 10
 host = "127.0.0.1"
 # Server port
 port = 8080
+# A response is compressed with gzip when the request accepts it (Accept-Encoding: gzip) and
+# its body has at least gzip_min_bytes bytes. The Julia and the Python clients accept gzip.
+gzip = true
+gzip_min_bytes = 1024
 
 [search]
 # Global policy in case of long queries: "deny" or "warn_only"

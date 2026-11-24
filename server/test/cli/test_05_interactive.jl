@@ -37,7 +37,7 @@ using JSON3
 
     build_fields = SimilaritySearchServer._command_fields(settings, "build")
     @test Set(f.dest_name for f in build_fields) == Set(["dataset", "input", "index-kind", "distance", "workdir", "partition-by",
-                                                               "partition-graph-min", "storage"])
+                                                               "partition-graph-min", "storage", "max-k"])
 
     @test SimilaritySearchServer._is_new_id_field("build", "dataset") == true
     @test SimilaritySearchServer._is_new_id_field("load", "dataset") == true

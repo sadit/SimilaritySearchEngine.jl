@@ -18,7 +18,7 @@ Base.show(io::IO, h::RemoteProject) = print(io, "RemoteProject(", repr(h.conn.ur
 """
     create_project(conn::Connection, dataset; index_type=nothing, distance=nothing, dimension=nothing,
                    meta_schema=nothing, partition_by=nothing, partition_graph_min=nothing,
-                   edit_correction=nothing, storage=nothing) -> RemoteProject
+                   edit_correction=nothing, storage=nothing, max_k=nothing) -> RemoteProject
 
 Creates the dataset `dataset` on the server (`POST /api/v1/datasets`) and returns its handle.
 
@@ -37,14 +37,19 @@ dataset has its own graph. Both are described in the server manual.
 fields of that kind. For example, `(kind="quantized", bits=4)` or
 `(kind="sketched", hyperplanes=256, bits=8)`. The fields are described in the server manual.
 [`project_info`](@ref) reports the storage with every field, and its encoder.
+
+`max_k` is the largest `k` that a search of the dataset can ask for, 100 when it is `nothing`.
+A search answers its `k` results in one response, and a larger `k` raises
+[`InvalidOption`](@ref). The server manual describes how to change it after the dataset is
+created. [`project_info`](@ref) reports it.
 """
 function create_project(conn::Connection, dataset::AbstractString; index_type=nothing, distance=nothing,
                         dimension=nothing, meta_schema=nothing, partition_by=nothing,
-                        partition_graph_min=nothing, edit_correction=nothing, storage=nothing)
+                        partition_graph_min=nothing, edit_correction=nothing, storage=nothing, max_k=nothing)
     body = Dict{String,Any}("id" => String(dataset))
     for (key, value) in (("index_type", index_type), ("distance", distance), ("dimension", dimension),
                          ("partition_by", partition_by), ("partition_graph_min", partition_graph_min),
-                         ("edit_correction", edit_correction), ("storage", storage))
+                         ("edit_correction", edit_correction), ("storage", storage), ("max_k", max_k))
         value === nothing || (body[key] = value)
     end
     meta_schema === nothing || (body["meta_schema"] = wire_meta_schema(meta_schema))

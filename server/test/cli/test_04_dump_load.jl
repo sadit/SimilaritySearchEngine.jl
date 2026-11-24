@@ -10,7 +10,7 @@ using JSON3
 
     # --- Dense (searchgraph) round-trip ------------------------------------------
 
-    cmd_build = `julia --project=$proj $cli_script build --dataset dump_dense --input $data_path --index-kind searchgraph --distance L2 --workdir $workdir`
+    cmd_build = `julia --project=$proj $cli_script build --dataset dump_dense --input $data_path --index-kind searchgraph --distance L2 --workdir $workdir --max-k 250`
     @test success(cmd_build)
 
     bundle_dense = joinpath(workdir, "bundle_dense")
@@ -23,10 +23,13 @@ using JSON3
     @test manifest.project_id == "dump_dense"
     @test manifest.index_kind == "searchgraph"
     @test manifest.record_count == 724
+    # `max_k` (PLAN.md §5.16) goes from `build` to the bundle, and from the bundle to the server.
+    @test manifest.max_k == 250
 
     cmd_load = `julia --project=$proj $cli_script load --bundle $bundle_dense --dataset dump_dense_restored --workdir $workdir`
     @test success(cmd_load)
     @test isdir(joinpath(workdir, "datasets", "dump_dense_restored"))
+    @test JSON3.read(read(joinpath(workdir, "datasets", "dump_dense_restored", "descriptor.json"))).max_k == 250
 
     desc_orig = tempname()
     desc_restored = tempname()
@@ -35,6 +38,7 @@ using JSON3
     d1 = JSON3.read(read(desc_orig, String))
     d2 = JSON3.read(read(desc_restored, String))
     @test d1.doc_count == d2.doc_count == 724
+    @test d1.max_k == d2.max_k == 250
     @test d1.tombstone_count == d2.tombstone_count == 0
     # Same distance_stats confirms the restored index is byte-for-byte the same graph,
     # not just "a graph over the same data" (rebuilding from rows would generally differ).
@@ -55,6 +59,7 @@ using JSON3
 
     bundle_lex = joinpath(workdir, "bundle_lex")
     @test success(`julia --project=$proj $cli_script dump --dataset dump_lex --workdir $workdir --output $bundle_lex`)
+    @test JSON3.read(read(joinpath(bundle_lex, "manifest.json"), String)).max_k == 100
     @test success(`julia --project=$proj $cli_script load --bundle $bundle_lex --dataset dump_lex_restored --workdir $workdir`)
 
     desc_lex_restored = tempname()

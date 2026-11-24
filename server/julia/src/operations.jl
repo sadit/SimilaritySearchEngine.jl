@@ -47,7 +47,7 @@ function search(h::RemoteProject, vector::AbstractVector{<:Real}, k::Integer=10;
     return _results(request(h.conn, "POST", dataset_path(h.id, "/search"); body))
 end
 
-"The body of `POST .../search`, shared by `search` and `search_pages`."
+"The body of `POST .../search`."
 function _search_body(vector, k, filter, partition, beamsearch_overrides)
     _check_filter(filter)
     body = Dict{String,Any}("vector" => convert(Vector{Float32}, vector), "k" => Int(k))

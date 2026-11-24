@@ -634,6 +634,9 @@ of it exist.
     format of results is postponed. The user reviewed Avro on 2026-11-23: phase 9c replaces
     the Avro file of `dump` with JSON lines written with JSON3, and Avro leaves both packages.
 
+    Phases 9a (the server and the clients) and 9b (the documentation) done on 2026-11-23
+    (§5.16, "As built"). Next: phase 9c, JSON lines in place of Avro.
+
 The stemmer registry of §5.3 and §9's phase 5 is not on this list: it was discarded. Stemming
 was the way this specification proposed to make a query match a word it does not equal. That
 is now the work of the query pipeline of `TextSearch.jl`, which the engine exposes through the
@@ -2633,8 +2636,9 @@ event of its leader.
 
 ### 5.16. Responses without Cursors (design, 2026-11-23)
 
-Status: designed on 2026-11-23, item 18 of §0, with the decisions of the user. It replaces the
-result cursors of §5.4. The listings of §5.4 keep their `offset` and `limit`.
+Status: designed on 2026-11-23, item 18 of §0, with the decisions of the user. Phases 9a and
+9b were built on the same date ("As built"). It replaces the result cursors of §5.4. The
+listings of §5.4 keep their `offset` and `limit`.
 
 #### What exists
 
@@ -2819,6 +2823,40 @@ The design:
   request without `Accept-Encoding` receives the body as it is. A small body is not
   compressed.
 - The result of a `searchbatch` job is answered compressed, and it equals the file.
+
+#### As built (2026-11-23)
+
+Phases 9a and 9b were built as this section says, with these details:
+
+- `check_search_k` checks every search route: it refuses `page_size`, a `k` that is not a
+  positive integer, and a `k` larger than `max_k`, with `400 InvalidOption`. `AppState` keeps
+  `max_k` of each dataset in memory, read from `descriptor.json` when the dataset is created
+  or opened, so a search reads no file. `AppState` no longer takes a cursor manager, and
+  `init_job_manager` no longer creates `<workdir>/cursors/`. Without the route of the cursors,
+  the server has 45 routes under `/api/v1`.
+- `build` of `similarity-search` now writes `descriptor.json` in the directory of the project,
+  with `max_k`, so that `dump` carries it to the manifest and `load` to the new dataset.
+  Before, a dataset of the command line had no descriptor.
+- The middleware is `gzip_middleware` in `server/src/compression.jl`. Oxygen 1.11 composes it
+  after its serializer, so it receives an `HTTP.Response`. It compresses a body held in memory:
+  a `Vector{UInt8}`, or the `HTTP.BytesBody` that a `String` becomes in HTTP.jl 2.6.
+- The result of a job is sent with `HTTP.CallbackBody`, which HTTP.jl 2.6 writes in parts of
+  16 KiB, through a `GzipCompressorStream` when the request accepts gzip. Oxygen and HTTP.jl
+  allowed it, so the fallback of reading the file into memory was not needed.
+- The Python client's `reload_dataset` takes `max_k`. The server prints at startup whether it
+  compresses, and from how many bytes.
+- Tests: `api/07` is `test_07_responses.jl`, with the tags `responses`, `max_k` and `gzip`. It
+  tests the result of an `allknn` job, not of a `searchbatch` job, and that `max_k` is saved in
+  `descriptor.json`, not a restart of the server. The datasets of `api/03`, `api/16`, `api/17`
+  and `api/18` that search with `k` larger than 100 are created with `max_k`. `cli/04` tests
+  `build --max-k` through `describe`, `dump` and `load`.
+- The full suite of the server passed on 2026-11-23: 1,385 assertions in 38 minutes.
+- Measured on 2026-11-23 with the Python client: the 200 results of a search over 200
+  paragraphs of *Frankenstein* took 11,984 bytes, and 2,161 bytes with gzip.
+- Documentation (9b): "Size of a Response" in the server manual, its sections on datasets,
+  search, followers, jobs, configuration and tests, step 4 of the server tutorial, section 6
+  of the page of the Julia client, the index of the manual, the README, and the reference,
+  which no longer has the module `Cursors`.
 
 ## 6. Hybrid Search Readiness (Suggestions & Specifications)
 

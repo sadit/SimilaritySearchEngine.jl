@@ -137,17 +137,11 @@ The functions that work with any job are these:
 | `list_jobs(conn; status, kind)` | the jobs of the server |
 | `cancel_job!`, `kill_job!`, `block_job!`, `resume_job!` | the control routes; they need the `admin` permission |
 
-## 6. Pages of a Search
+## 6. Size of a Search
 
-`search_pages` runs a dense or sparse search on the server and receives its results in pages, through a cursor of the server. It returns an iterator of `Vector{SearchResult}`, one per page:
+A search answers its `k` results in one response, as in the engine. `k` is at most `max_k` of the dataset, 100 by default, and a larger `k` raises `InvalidOption`. `create_project(conn, "ds"; max_k=1000)` sets it, and `project_info(h)["max_k"]` reports it. The [server manual](manual.qmd#size-of-a-response) describes how to change it. Until 2026-11-23 the client had `search_pages`, which received the results in pages through a cursor of the server. The server no longer has cursors.
 
-```julia
-for page in search_pages(h, q, 10_000; page_size=500)
-    # page::Vector{SearchResult}
-end
-```
-
-The server computes all `k` results at once. Each page after the first is one request. The iterator can be read once, and the cursor expires 300 seconds after the search. A page requested after that, or a second pass, raises `StateConflict`. The engine has no counterpart, because it returns every result at once.
+The server compresses a large response with gzip, and HTTP.jl decompresses it. The client does nothing for it.
 
 ## 7. Followers
 

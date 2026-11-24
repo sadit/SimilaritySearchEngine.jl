@@ -11,7 +11,7 @@ import json
 import os
 import sys
 
-from similarity_search import SimilaritySearchClient, run_job, iter_cursor
+from similarity_search import SimilaritySearchClient, run_job
 
 
 def _load_docs(n=30):
@@ -81,11 +81,9 @@ def run(base_url):
         result_text = c.get_job_result(job_id)
         print("allknn result (first line):", result_text.splitlines()[0])
 
-        # 8. cursors: paginate through a search's remaining pages
-        page1 = c.search("stress_dense", docs[0]["vector"], k=len(docs), page_size=5)
-        print(f"page 1: {len(page1['results'])} results, cursor {page1['cursor_id']}")
-        for page in iter_cursor(c, page1["cursor_id"], limit=5):
-            print(f"  next page: {len(page)} results")
+        # 8. every result of a search in one response, up to the max_k of the dataset
+        everything = c.search("stress_dense", docs[0]["vector"], k=min(len(docs), 100))
+        print(f"one search: {len(everything['results'])} results in one response")
 
         # 9. admin: tokens, unload/reload, jobs gc
         token = c.create_token(user="stress-test", permissions=["search"])["token"]

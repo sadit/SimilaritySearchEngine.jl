@@ -69,9 +69,6 @@ body(x) = Vector{UInt8}(JSON3.write(x))
         @test e isa RemoteError
         @test sprint(showerror, e) == "JobFailed: fft job j1: job process exited with status 2 (InvalidRequest)"
         @test occursin("still on the server", sprint(showerror, JobTimeout("j2", 5.0)))
-        h = RemoteProject(Connection("http://127.0.0.1:1"), "x")
-        @test_throws ArgumentError search_pages(h, [1.0], 10; page_size=0)
-        @test_throws ArgumentError search_pages(h, [1.0], 10; page_size=5, filter=(r, m) -> true)
         @test FFTResult === CenterSelectionResult
     end
 

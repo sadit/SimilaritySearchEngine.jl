@@ -19,7 +19,7 @@ using JSON3
         get_(path) = JSON3.read(String(HTTP.get("$base_url/$path").body))
         failed(f) = try f(); nothing catch e; e.response end
 
-        @test HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "fl_txt", "index_type" => "bm25_invfile"))).status == 201
+        @test HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "fl_txt", "index_type" => "bm25_invfile", "max_k" => 120))).status == 201
         @test HTTP.post("$base_url/datasets/fl_txt/append", [], JSON3.write(Dict("items" => docs[1:80]))).status == 200
 
         # A non-disjoint partition follower and a keyword follower.
