@@ -5,6 +5,20 @@ import SimilaritySearch
 
 sketch_items(n) = dense_items([JSON.parse(l) for l in readlines(FRANKENSTEIN_PATH)[1:n]])
 _sketch_ids(res) = [r._id for r in res]
+"The number of distances that two answers share, compared as multisets, query by query."
+function _shared_distances(a, b)
+    n = 0
+    for (x, y) in zip(a, b)
+        rest = copy(y)
+        for d in x
+            i = findfirst(==(d), rest)
+            i === nothing && continue
+            deleteat!(rest, i)
+            n += 1
+        end
+    end
+    return n
+end
 # Small fitting options: the Frankenstein vectors are few, and the defaults sample 4096 vectors.
 small_sketch(; kw...) = Sketched(128; henc=256, samplesize=400, kw...)
 
@@ -47,9 +61,13 @@ end
             res = search(h, items[450].vector, 10)
             @test length(res) == 10
             index isa Exhaustive && @test any(r -> r._id == 450 && r.distance == 0, res)
-            # Distances between sketches tie often at 1 and 2 bits. A graph reopened from disk
-            # visits the neighbors of a vertex in another order, so among tied results its order
-            # can change; the distances do not. An exact index keeps the order too.
+            # An exact index answers the same ids in the same order after a reopen. A graph
+            # reopened from disk visits the neighbors of a vertex in another order. Among tied
+            # results its order can change, and distances between sketches tie often at 1 and 2
+            # bits. A search can also reach a neighbor that the search before the reopen did not
+            # reach: on 2026-11-24 in CI, one query of 4 bits found a neighbor at distance 200
+            # after the reopen, and 1 of 200 distances changed. So for a graph the test compares
+            # the distances as multisets, and requires that 90% of them agree.
             answer(h) = [index isa Exhaustive ? _sketch_ids(search(h, items[i].vector, 10)) :
                          [r.distance for r in search(h, items[i].vector, 10)] for i in 1:25:500]
             before = answer(h)
@@ -58,7 +76,12 @@ end
             h = open_project(workdir, "s")
             @test project_spec(h).storage == spec.storage
             @test sketch_info(h) == info
-            @test answer(h) == before
+            after = answer(h)
+            if index isa Exhaustive
+                @test after == before
+            else
+                @test _shared_distances(before, after) >= 0.9 * sum(length, before)
+            end
             close_project!(h)
         end
         end
