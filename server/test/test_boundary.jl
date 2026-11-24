@@ -516,6 +516,29 @@ import SimilaritySearchClient as Client
 end
 
 
+# The Node.js client (node/, PLAN.md §5.17) declares the same classes in TypeScript. This test reads
+# its source, so it needs no Node.js: each engine error is a class that extends its category, and
+# it is in ERROR_KINDS, the map that selects the class of a response by its `kind`.
+@testset "the Node.js client has every engine error, in the same category" begin
+    source = read(joinpath(@__DIR__, "..", "node", "src", "errors.ts"), String)
+    parents = Dict(m[1] => m[2] for m in eachmatch(r"export class (\w+) extends (\w+)", source))
+    kinds_block = match(r"ERROR_KINDS[^{]*\{([^}]*)\}", source)
+    @test kinds_block !== nothing
+    kinds = kinds_block === nothing ? String[] : [m[1] for m in eachmatch(r"(\w+)", kinds_block[1])]
+    exported = (getfield(SSE.Errors, n) for n in names(SSE.Errors))
+    engine_types = [T for T in exported if T isa DataType && T <: SSE.EngineError && !isabstracttype(T)]
+    @test length(engine_types) >= 13
+    for T in engine_types
+        name = string(nameof(T))
+        @test get(parents, name, nothing) == string(nameof(supertype(T)))
+        @test name in kinds
+    end
+    for category in ("InvalidRequest", "NotFound", "ConflictingState", "StorageFailure")
+        @test get(parents, category, nothing) == "EngineError"
+    end
+    @test Set(kinds) == Set(keys(Client.ERROR_KINDS))
+end
+
 # The client's `FollowerStatus` has the fields of the engine's, in the same order.
 @testset "the Julia client's follower status has the engine's fields" begin
     @test fieldnames(Client.FollowerStatus) == fieldnames(SSE.FollowerStatus)

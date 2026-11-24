@@ -263,7 +263,8 @@ Where to read more: `manual/server/manual.qmd` and the server tutorial
   `jobs.run_job` and `fields.ftsearch_fields`. `stress_client.py` sends requests to a server.
   The repository has no tests of the Python client. Its changes are checked by hand against a
   server: the last check was on 2026-11-23, with httpx 0.28.1.
-- **Node.js.** There is no client.
+- **Node.js.** `similarity-search-client`, in `server/node/`, since 2026-11-24 (§5.17, phase
+  10a). It has a method for each route, and it has no manual page yet.
 
 ### Tests
 
@@ -292,8 +293,152 @@ the shared test server.
 
 ## Planned Work
 
-No phase is queued on 2026-11-24. The last design, §5.16, was built on 2026-11-23. The user
-sets the next queue.
+The queue on 2026-11-24 is §5.17, a client for Node.js. The design before it, §5.16, was built
+on 2026-11-23.
+
+### §5.17. A Client for Node.js (design, 2026-11-24)
+
+Status: designed on 2026-11-24, and phase 10a built on the same date. It was item 10 of
+"Known Work". The user decided the shape of the API, the language, the installation of Node.js
+and the four questions of the design on 2026-11-24.
+
+#### What exists
+
+- **The Python client** (`server/python/`) is one class, `SimilaritySearchClient`, with one
+  method per route. Each method returns the parsed JSON of the response. An error response
+  raises `httpx.HTTPStatusError`, so a caller reads the `kind` of the body itself. It has no
+  method for `GET /api/v1/datasets/{id}/vocab`, and `create_dataset` does not take `dimension`
+  or `edit_correction`. The repository has no tests of it.
+- **The Julia client** (`server/julia/`) has the names and the result types of the engine. It
+  raises an error class for each `kind` of the engine (`NotFound`, `WrongDimension`, ...). The
+  light suite of the server checks that it has every error of the engine, and `api/17` tests it
+  against a server.
+- **§8.4 of `CHANGELOG.md`** (2026-08) proposed an ES module over `fetch`, plain objects, a
+  `runJob` helper, cursors and a later Avro mode. The cursors and the Avro file were removed on
+  2026-11-23 (§5.16).
+- **Node.js on the development machine.** Until 2026-11-24 the `node` in `PATH` was v12.4.0,
+  the package `nodejs` of miniconda, which has no `fetch`. On 2026-11-24 Node.js 24.22.3 was
+  installed in `~/bin/node-v24.22.3-linux-x64`, the package of miniconda was removed, and
+  `~/.local/bin` has links to `node`, `npm`, `npx` and `corepack` of Node.js 24.
+
+#### Decided (2026-11-24)
+
+1. **The shape of the Python client.** A class, `SimilaritySearchClient`, with one method per
+   route. The methods have the names of the Python client in camelCase: `createDataset`,
+   `search`, `ftsearch`, `submitJob`. Every method is `async`, because `fetch` is.
+2. **TypeScript.** The sources are in `src/*.ts`. `tsc` compiles them to ES modules and `.d.ts`
+   files in `dist/`. The package has no dependency at run time. Its development dependencies
+   are `typescript` 7.0.2 and `@types/node` 24.19.2, published on 2026-07-08 and 2026-10-09.
+3. **Node.js 22 or later.** `fetch` exists in Node.js 18 and later. Node.js 18 and 20 ended
+   their support on 2025-04-30 and 2026-04-30.
+4. **Errors with the names of the engine**, as in the Julia client.
+5. **The names of the fields are those of the wire**, in snake_case, in the options of a method
+   and in the responses: `createDataset({ id, index_kind, max_k })`, `result.doc_id`. A response
+   cannot be translated to camelCase, because the metadata of an item has the names of the user.
+   The TypeScript clients of OpenAI and Anthropic keep the names of their wire too.
+6. **The name is `similarity-search-client`**, free on npm on 2026-11-24. It is not published in
+   this version. A user installs it with `npm install <path to server/node>`.
+7. **No `package-lock.json` in the repository**, as no `Manifest.toml` is committed.
+   `package.json` fixes the exact versions of the two development dependencies, and CI runs
+   `npm install`.
+8. **A test against a server** in the full suite of the server, `api/21` below.
+
+#### Design
+
+The package is in `server/node/`, next to the two other clients.
+
+**Requests.** `new SimilaritySearchClient(url, { token, timeout, fetch })`. `url` is the root of
+the server, `http://127.0.0.1:8080` by default. `token` is sent as `Authorization: Bearer
+<token>`. `timeout` is in milliseconds, 60,000 by default, and `0` waits without a limit. `fetch`
+replaces the global `fetch`, and the tests use it to answer without a server. A path segment,
+such as a dataset id or a follower name, is escaped with `encodeURIComponent`. The `fetch` of
+Node.js asks for gzip and decompresses the response, so the client does nothing for §5.16.
+
+**Responses.** A method returns the parsed JSON of the response. `src/types.ts` declares an
+interface for each response that the server manual documents. `metrics()` returns the text of
+Prometheus. `getJobResult(jobId)` returns the text of the file of the job, because the format
+depends on the kind of job, as in the Python client.
+
+**Vectors.** A method that takes a vector accepts `number[]`, `Float32Array` or any
+`ArrayLike<number>`, and sends it as a JSON array.
+
+**Methods.** One for each route. The new ones, which the Python client does not have, are marked.
+
+| group | methods |
+| :--- | :--- |
+| control | `healthz`, `readyz`, `metrics` |
+| datasets | `createDataset` (with `dimension` and `edit_correction`, new), `listDatasets`, `getDataset`, `deleteDataset`, `getLog`, `getVocab` (new), `getPartitions` |
+| items and searches | `append`, `search`, `ftsearch`, `hybridSearch`, `fetch`, `exists`, `deleteItem`, `calibrate`, `postingList` |
+| followers | `createFollower`, `listFollowers`, `getFollower`, `deleteFollower`, `syncFollower`, `rebuildFollower`, `followerPartitions`, `followerSearch`, `followerFtsearch`, `followerCalibrate`, `migratePartitions`, `getGroup`, `listPlugins` |
+| jobs | `submitJob`, `getJob`, `getJobResult`, `listJobs`, `blockJob`, `resumeJob`, `killJob`, `cancelJob` |
+| administration | `createToken`, `listTokens`, `pruneTokens`, `revokeToken`, `jobsGc`, `unloadDataset`, `reloadDataset` |
+
+`createDataset` sends `index_kind`, the name that the server manual documents. The server also
+accepts `index_type`, which the Python client sends.
+
+**Helpers.** `waitJob(jobId, { pollInterval, timeout })` asks for the state of a job until it
+ends, and returns its record. `runJob(kind, params)` submits a job and waits for it.
+`ftsearchFields(fields, text, { k, partition })` sends one `ftsearch` per field dataset at the
+same time, as `ftsearch_fields_async` of the Python client.
+
+**Errors.** Every error of a response is a subclass of `RemoteError`, which extends `Error`:
+
+- `EngineError` and its four categories, `InvalidRequest`, `NotFound`, `ConflictingState` and
+  `StorageFailure`. Each `kind` of the engine has a class of the same name and category. A
+  response without a known `kind` raises `RequestRejected`, `ResourceNotFound`,
+  `StateConflict` or `ServerFailure`, as in the Julia client.
+- `AccessDenied`, with `Unauthenticated` (401) and `Forbidden` (403).
+- `UnexpectedResponse` for any other status, such as a 502 of a proxy.
+- `JobFailed`, with `exitCode` and the category that the exit code names, and `JobTimeout`.
+
+Each error has `status`, `kind` and `message`. `instanceof NotFound` is true for every error of
+that category. An error of the connection, such as a refused connection or a timeout, is the
+error of `fetch`, as in the Julia client.
+
+**Tests.**
+
+- `npm test` compiles the package and runs `node --test` on `dist/test/`. These tests need no
+  server: a `fetch` given to the constructor checks the method, the path and the body of each
+  route, and answers. They cover each route, the selection of the errors, the timeout and
+  `waitJob`.
+- The light suite of the server checks that `server/node/src/errors.ts` has a class for every
+  error of the engine, as it does for the Julia client. It reads the file and does not need
+  Node.js.
+- A file of the full suite of the server, `api/21`, runs a test file of the client against the
+  shared test server. It uses the `node` of `SSE_NODE`, or the one in `PATH`. When that
+  `node` is older than 22, the file skips its tests and says why.
+- CI gets a job that installs Node.js 22 and 24 with `actions/setup-node` and runs `npm test`.
+
+**Not in this version.** A command line that sends requests, as `stress_client.py`; the names
+and the types of the engine, as the Julia client; a build for browsers.
+
+#### Phases
+
+- **10a.** The package: the client with every route, the errors, the helpers, the tests
+  without a server, the check of the light suite, and the CI job.
+- **10b.** `api/21` against the test server, the manual page `manual/server/node-client.qmd`,
+  the README, and "Clients" in this file.
+
+#### As built
+
+**10a (2026-11-24).** `server/node/` has `src/client.ts`, `src/errors.ts`, `src/types.ts` and
+`src/index.ts`. The client has 47 methods for the 48 routes: `postingList` serves the posting
+list of a dataset and that of a follower. These details differ from the design or add to it:
+
+- `waitJob`, `runJob` and `ftsearchFields` are methods of the client.
+- `request(method, path, { body, query, text })` is public. It sends a request to a route that
+  has no method.
+- `hybridSearch` sends `vector`, `text` and `k`. The Python client also sends `alpha` and
+  `filter`, and the server ignores both.
+- `waitJob` and `runJob` take `pollInterval` and `timeout` in milliseconds. These are options
+  of the client, so their names are in camelCase. The errors have `jobId`, `jobKind` and
+  `exitCode` for the same reason.
+- A `Float32Array` in `vector`, `indices` or `values` of an item is converted to an array.
+  `JSON.stringify` writes a typed array as an object with numbered keys.
+
+Tests: 72 without a server, with Node.js 24.22.3 (`npm test`). The light suite of the server
+checks the errors of the Node.js client: `boundary` has 351 tests, 43 of them new. CI has a job
+`node-client` with Node.js 22 and 24.
 
 ### Known Work, Not Scheduled
 
@@ -317,7 +462,6 @@ sets the next queue.
    needs them. Other consumers: counters for the telemetry, a notification to another system,
    and observers added by a plugin.
 9. **The check of defaults by caller** ("Defaults" above).
-10. **A Node.js client** (§8.4). It was never started.
 
 ### Possible Later Work
 

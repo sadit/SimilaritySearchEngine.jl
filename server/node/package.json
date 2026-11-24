@@ -1,0 +1,35 @@
+{
+  "name": "similarity-search-client",
+  "version": "0.1.0",
+  "description": "A client of the HTTP API of similarity-search-serve, the server of SimilaritySearchEngine.jl.",
+  "license": "MIT",
+  "author": "Eric S. Tellez <donsadit@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sadit/SimilaritySearchEngine.jl.git",
+    "directory": "server/node"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "types": "./dist/src/index.d.ts",
+  "files": [
+    "dist/src"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "prepare": "tsc -p .",
+    "test": "tsc -p . && node --test \"dist/test/**/*.test.js\""
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2"
+  }
+}

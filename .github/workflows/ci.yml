@@ -63,6 +63,30 @@ jobs:
         env:
           JULIA_NUM_THREADS: auto
 
+  # The Node.js client (server/node/, PLAN.md §5.17), without a server: its tests answer each
+  # request with a function given to the client. Its tests against a server run in the server's
+  # full suite. Node.js 22 is the oldest version the package supports, and 24 is the active LTS.
+  node-client:
+    name: Node.js client - Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node:
+          - '22'
+          - '24'
+    defaults:
+      run:
+        working-directory: server/node
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+      # No lock file is committed (PLAN.md §5.17): package.json fixes the exact versions.
+      - run: npm install --no-audit --no-fund
+      - run: npm test
+
   # The full level: everything above plus the engine's whole-dataset algorithms and the
   # server's HTTP/job/CLI end-to-end suites, which start real servers and spawn Julia
   # subprocesses. Minutes rather than seconds, so it runs before a release (a tag) or on
