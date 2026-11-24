@@ -381,7 +381,7 @@ window.Quarto = {
 <li><strong>It does not reach backwards.</strong> Declaring on a project that already holds records reads none of them. The declaration governs what is written from then on; <code>rebuild</code> is what rewrites the rest. This is what makes declaring cheap on a project of any size.</li>
 <li><strong>It is not an index.</strong> The declared fields are stored in <code>meta</code> as before, and a filter over them is still evaluated per candidate. What the declaration changes is the comparison: a field declared <code>:timestamp</code> is compared as an instant rather than as the text that stores it, so two spellings of one instant match.</li>
 </ul>
-<p>The declaration lives in the project, not in the record: giving <code>MetadataRecord</code> a typed column per declared field would make its Julia type vary from one project to the next, which propagates to every function that handles a record, to the Avro table <code>dump</code> writes, and to a process that holds several projects at once. <code>schema_version</code> on the record is what ties a record to the declaration it was written under.</p>
+<p>The declaration lives in the project, not in the record: giving <code>MetadataRecord</code> a typed column per declared field would make its Julia type vary from one project to the next, which propagates to every function that handles a record, to the metadata file <code>dump</code> writes, and to a process that holds several projects at once. <code>schema_version</code> on the record is what ties a record to the declaration it was written under.</p>
 <hr>
 </section>
 </section>

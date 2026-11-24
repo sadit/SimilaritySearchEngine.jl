@@ -1,6 +1,6 @@
 module Persistence
 
-using Avro
+using JSON3
 using RocksDB
 using SimilaritySearch
 using TextSearch
@@ -463,56 +463,32 @@ caller wants `vcat(load_staged_text_blocks(store)...)` for the flat, restore-rea
 load_staged_text_blocks(store::StagedTextStore) = [texts for (_, texts) in store.dict]
 
 # ---------------------------------------------------------
-# Avro Serialization for Projects (Dump / Load, PLAN.md §4.4)
+# The metadata of a dump bundle, as JSON lines (PLAN.md §5.16, phase 9c)
 # ---------------------------------------------------------
 #
-# !!! note "Corrected against the real Avro.jl API (empirically verified, not just read from docs)"
-#     Avro.jl's `writetable`/`readtable` are a plain `Tables.jl` reader/writer: given a
-#     `Vector` of a concrete Julia struct, `writetable` derives the Avro schema directly
-#     from the struct's field types (via `StructTypes.jl`), and `readtable` hands back
-#     property-accessible rows of that same shape. There is no `schema=` keyword to
-#     `writetable`, and `Avro.parseschema` is for *reading* raw bytes against an
-#     externally-known schema, not for dictating what `writetable` writes -- the previous
-#     version of this file called `Avro.writetable(path, records; schema=parsed_schema)`,
-#     which doesn't match any real keyword `writetable` accepts. Confirmed via a direct
-#     round-trip test (`Vector{Float32}`, `String`, `Int64`, `Bool` fields) before writing
-#     `DumpRecord` below.
+# Until 2026-11-23 this file was `dataset.avro`, written with Avro.jl. It held the same fields,
+# with `meta` as a JSON string inside the Avro file, and Avro.jl inferred its schema from the
+# rows. A JSON line holds `meta` as an object, a reader needs no library beyond a JSON parser,
+# and an empty project writes an empty file.
 
 """
     DumpRecord
 
-One project row in a `dump` bundle's Avro export (PLAN.md §4.4) -- the cross-language
-interop format `load` (or any non-Julia Avro reader) consumes. Mirrors
-`Schema.MetadataRecord` field-for-field (all concrete types, so they go straight into
-Avro columns -- confirmed empirically -- rather than through a JSON-encoded
-`declared_json` blob the way the pre-`Schema` redesign version of this struct needed) plus
-`meta_json` for the one part that *can't* be a native Avro column (`meta`'s values are
-heterogeneous/`Any`-typed, which `Avro.jl`'s schema inference rejects outright -- see
-`Schema.MetadataRecord`'s own docstring) and `tombstoned`.
-
-Deliberately does *not* carry `vector`/`text`: unlike the pre-`Schema` redesign version of
-this struct (where `MetadataRecord.extra` held the complete original raw item, `vector`/
-`text` included, making `declared_json`/`extra_json` alone a lossless copy), `meta` here
-never contains `vector`/`text` at all -- both live only in the engine's own dedicated,
-1..n-indexed column family (see `EngineStore`/`InvertedFileObjectStore`). A caller wiring
-up a real `execute_dump`/`execute_load` on top of this must separately export/import that
-column family (already exactly what `EngineStore`'s own block-based fields are for) for a
-dump bundle to be losslessly restorable -- this struct alone is the metadata half only.
+The metadata of one item in the `dataset.jsonl` of a `dump` bundle (PLAN.md §5.16): one JSON
+line per item, in the order of `_id`. It holds the fields of [`Schema.MetadataRecord`](@ref),
+the `meta` of the item and whether the item is deleted. It does not hold the vector or the text
+of the item: the bundle carries the project itself for that, in `project/`.
 
 # Fields
-- `_id::Int32`: matches [`Schema.MetadataRecord`](@ref)'s `_id` -- the index position
-  `add_item!`/`push_item!` assigned it.
+- `_id::Int32`: the identifier of the item in the project.
 - `schema_version::Int`: copied from the record, see [`Schema.MetadataRecord`](@ref).
 - `doc_id::Union{String,Nothing}`: copied from the record.
 - `keywords::Vector{String}`: copied from the record.
 - `refs::Vector{String}`: copied from the record.
-- `meta_json::Union{String,Nothing}`: the record's `meta`, already JSON-encoded (see
-  `Schema.encode_meta`/`Project.get_raw_meta`) -- `nothing` if this `_id` had no `meta`
-  stored at all (not the same as an empty JSON object).
-- `tombstoned::Bool`: whether this `_id` was in the engine's `deleted_ids` at dump time.
-  `load` restores tombstones from the copied JLD2 snapshot's own `deleted_ids` (already
-  authoritative, see `Server.handle_delete_item`), not by recomputing them from this flag
-  -- it's carried here purely for a non-Julia consumer that only has the Avro file.
+- `meta::Union{String,Nothing}`: the `meta` of the item as JSON text, as the project stores it
+  (`Project.get_raw_meta`), or `nothing` when the item has no `meta`. In the file it is a JSON
+  object, not a string.
+- `deleted::Bool`: whether the item was deleted when the bundle was written.
 """
 struct DumpRecord
     _id::Int32
@@ -520,55 +496,80 @@ struct DumpRecord
     doc_id::Union{String,Nothing}
     keywords::Vector{String}
     refs::Vector{String}
-    meta_json::Union{String,Nothing}
-    tombstoned::Bool
+    meta::Union{String,Nothing}
+    deleted::Bool
 end
 
 """
-    DumpRecord(record::Schema.MetadataRecord, meta_json::Union{String,Nothing}, tombstoned::Bool) -> DumpRecord
+    DumpRecord(record::Schema.MetadataRecord, meta::Union{String,Nothing}, deleted::Bool) -> DumpRecord
 
-Convenience constructor for a real `execute_dump` caller: pulls every
-[`Schema.MetadataRecord`](@ref) field across as-is, pairing it with its already-encoded
-`meta_json` (e.g. `Project.get_raw_meta(project, record._id)`) and `tombstoned` flag.
+The line of an item from its record, its `meta` as JSON text, and whether it is deleted.
 """
-DumpRecord(record::Schema.MetadataRecord, meta_json::Union{String,Nothing}, tombstoned::Bool) =
-    DumpRecord(record._id, record.schema_version, record.doc_id, record.keywords, record.refs, meta_json, tombstoned)
+DumpRecord(record::Schema.MetadataRecord, meta::Union{String,Nothing}, deleted::Bool) =
+    DumpRecord(record._id, record.schema_version, record.doc_id, record.keywords, record.refs, meta, deleted)
 
 """
-    write_dump_records(filepath::String, records::Vector{DumpRecord}) -> String
+    write_dump_records(filepath::String, records) -> String
 
-Writes `records` as an Avro object container file. Errors if `records` is empty --
-`Avro.writetable` has no schema to infer from a table with no rows, so an empty project's
-dump must be handled by the caller before reaching here (see `execute_dump`).
+Writes `records` to `filepath` as JSON lines, one [`DumpRecord`](@ref) per line:
+
+```json
+{"_id":1,"schema_version":1,"doc_id":"d1","keywords":["gato"],"refs":[],"meta":{"year":2001},"deleted":false}
+```
+
+`meta` is copied as it is stored, without parsing it again. An empty `records` writes an empty
+file.
 """
-function write_dump_records(filepath::String, records::Vector{DumpRecord})
-    isempty(records) && invalid_option(:records, "write_dump_records: cannot write an Avro file with zero rows (nothing to infer a schema from)")
-    Avro.writetable(filepath, records)
+function write_dump_records(filepath::String, records)
+    open(filepath, "w") do io
+        for r in records
+            print(io, "{\"_id\":", r._id, ",\"schema_version\":", r.schema_version, ",\"doc_id\":")
+            JSON3.write(io, r.doc_id)
+            print(io, ",\"keywords\":")
+            JSON3.write(io, r.keywords)
+            print(io, ",\"refs\":")
+            JSON3.write(io, r.refs)
+            print(io, ",\"meta\":", r.meta === nothing ? "null" : r.meta, ",\"deleted\":", r.deleted, "}\n")
+        end
+    end
     return filepath
 end
+
+_dump_string(x) = x === nothing ? nothing : String(x)
 
 """
     read_dump_records(filepath::String) -> Vector{DumpRecord}
 
-Reads back an Avro file written by `write_dump_records`, reconstructing plain
-`DumpRecord`s (rather than handing back `Avro.jl`'s own row-view type) so callers don't
-need to depend on `Avro.jl`'s internals beyond this module.
+Reads the JSON lines that [`write_dump_records`](@ref) wrote, or that a person edited. A blank
+line is skipped. `meta` is returned as JSON text, written again from the object of the line.
+A line that is not a JSON object with `_id` raises [`InvalidOption`](@ref), with the number of
+the line.
 """
-_optional_string(x) = x === missing ? nothing : String(x)
-
 function read_dump_records(filepath::String)
-    return [
-        DumpRecord(
-            Int32(row._id),
-            Int(row.schema_version),
-            _optional_string(row.doc_id),
-            Vector{String}(row.keywords),
-            Vector{String}(row.refs),
-            _optional_string(row.meta_json),
-            Bool(row.tombstoned),
-        )
-        for row in Avro.readtable(filepath)
-    ]
+    records = DumpRecord[]
+    for (n, line) in enumerate(eachline(filepath))
+        isempty(strip(line)) && continue
+        o = try
+            JSON3.read(line)
+        catch e
+            e isa ArgumentError || rethrow()
+            invalid_option(:records, "line $n of $filepath is not JSON: ", sprint(showerror, e))
+        end
+        o isa JSON3.Object && haskey(o, :_id) || invalid_option(:records, "line $n of $filepath is not a JSON object with `_id`")
+        meta = get(o, :meta, nothing)
+        meta === nothing || meta isa JSON3.Object ||
+            invalid_option(:records, "line $n of $filepath: `meta` must be a JSON object or null")
+        push!(records, DumpRecord(
+            Int32(o._id),
+            Int(get(o, :schema_version, 1)),
+            _dump_string(get(o, :doc_id, nothing)),
+            String[String(k) for k in get(o, :keywords, String[])],
+            String[String(k) for k in get(o, :refs, String[])],
+            meta === nothing ? nothing : JSON3.write(meta),
+            get(o, :deleted, false) === true,
+        ))
+    end
+    return records
 end
 
 

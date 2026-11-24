@@ -923,6 +923,26 @@ A job's state is `queued`, `running`, `blocked`, `completed` or `failed`.
 `GET /api/v1/jobs/{job_id}/result` sends the file the job wrote, in parts, except for `dump`, whose
 result is a directory: for that one it answers `{"bundle_dir": ..., "manifest": {...}}`.
 
+A **bundle** of `dump` is a directory with `project/`, a copy of the project, `followers/`,
+`manifest.json`, and `dataset.jsonl`. `dataset.jsonl` holds the metadata of each item as one
+JSON line, in the order of `_id`:
+
+```json
+{"_id":1,"schema_version":1,"doc_id":"d1","keywords":["gato"],"refs":[],"meta":{"year":2001},"deleted":false}
+```
+
+A program in any language reads it with a JSON parser. It holds no vectors and no texts.
+`load` restores the dataset from `project/`. Then it writes the record and the `meta` of each
+line over the copy, so metadata edited in `dataset.jsonl` with a text editor or `jq` takes
+effect. `load` reads every line before it copies anything, and a line that is not a JSON
+object with `_id` stops it with exit code 2. A bundle without `dataset.jsonl` is loaded from
+`project/` alone, and a dataset without items gives an empty `dataset.jsonl`.
+
+Until 2026-11-23 the file was `dataset.avro`, written with Avro. It held the same fields, with
+`meta` as a JSON string, and a reader needed a library of Avro. `load` ignores the
+`dataset.avro` of an older bundle and writes a warning, because `project/` holds the same
+metadata.
+
 The result of `allknn` has one line per item: `{"id", "neighbors", "dists"}`. The result of
 `fft` is one object with `centers`, `assign`, `dists`, `covering`, `separation`, `costdists`
 and `costblocks`. The result of `neardup` has `centers`, `assign`, `dists`, `duplicate_count`,

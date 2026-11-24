@@ -1666,7 +1666,7 @@ function build_heavy_job_command(kind::String, data::AbstractDict, output_path::
         # `dataset` here is the source dataset being exported. `output_path` (computed by
         # the caller, guaranteed not to already exist) doubles as the bundle *directory*
         # `execute_dump` creates -- unlike every other HEAVY_JOB_KINDS result, this one is
-        # a directory holding `dataset.avro`, `manifest.json` and a copy of the project
+        # a directory holding `dataset.jsonl`, `manifest.json` and a copy of the project
         # directory, not a single file (see `handle_get_job_result`'s `isdir` branch).
         return ["dump", "--dataset", dataset, "--workdir", workdir, "--output", output_path]
     elseif kind == "load"
@@ -1790,7 +1790,7 @@ gzip when the request accepts it (`file_response`, PLAN.md §5.16) (see `handle_
 `409` if the job hasn't reached `completed` yet, `404` if there's no `result_ref` at all
 (e.g. a job submitted via the raw `"command"` escape hatch, which doesn't set one).
 
-A `dump` job's `result_ref` is a bundle *directory* (`dataset.avro`, `manifest.json` and a
+A `dump` job's `result_ref` is a bundle *directory* (`dataset.jsonl`, `manifest.json` and a
 copy of the project directory), not a single file -- unlike every other
 `HEAVY_JOB_KINDS` result, it can't be streamed back as one HTTP body (and the bundle is
 meant to stay on the shared local filesystem the `LocalCLIExecutor`/operator already has

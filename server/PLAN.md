@@ -634,8 +634,8 @@ of it exist.
     format of results is postponed. The user reviewed Avro on 2026-11-23: phase 9c replaces
     the Avro file of `dump` with JSON lines written with JSON3, and Avro leaves both packages.
 
-    Phases 9a (the server and the clients) and 9b (the documentation) done on 2026-11-23
-    (§5.16, "As built"). Next: phase 9c, JSON lines in place of Avro.
+    Phases 9a (the server and the clients) and 9b (the documentation) done on 2026-11-23, and
+    phase 9c (JSON lines in place of Avro) on the same date (§5.16, "As built").
 
 The stemmer registry of §5.3 and §9's phase 5 is not on this list: it was discarded. Stemming
 was the way this specification proposed to make a query match a word it does not equal. That
@@ -2636,8 +2636,8 @@ event of its leader.
 
 ### 5.16. Responses without Cursors (design, 2026-11-23)
 
-Status: designed on 2026-11-23, item 18 of §0, with the decisions of the user. Phases 9a and
-9b were built on the same date ("As built"). It replaces the result cursors of §5.4. The
+Status: designed on 2026-11-23, item 18 of §0, with the decisions of the user. Phases 9a, 9b
+and 9c were built on the same date ("As built"). It replaces the result cursors of §5.4. The
 listings of §5.4 keep their `offset` and `limit`.
 
 #### What exists
@@ -2857,6 +2857,23 @@ Phases 9a and 9b were built as this section says, with these details:
   search, followers, jobs, configuration and tests, step 4 of the server tutorial, section 6
   of the page of the Julia client, the index of the manual, the README, and the reference,
   which no longer has the module `Cursors`.
+
+Phase 9c was built as "JSON lines in place of Avro" says, with these details:
+
+- `write_dump_records` writes each line by hand around the `meta` that RocksDB holds, so it
+  does not parse `meta`. `read_dump_records` skips a blank line, takes 1 for a missing
+  `schema_version`, and raises `InvalidOption` with the number of the line for a line that is
+  not a JSON object with `_id`, or whose `meta` is not an object or `null`.
+- `load` reads every line before it copies the project, so a line that cannot be read stops it
+  with exit code 2 and leaves no dataset. Its message reports how many lines it wrote over the
+  metadata.
+- Avro and the nine packages that only it used left both packages. `using Avro` took 0.27 s.
+- Tests: a testset of `test/persistence.jl` (the lines, an edited line, an empty file, three
+  lines that cannot be read), and `cli/04`: 724 lines for 724 items, an edited `meta` restored
+  by `load`, a bundle without `dataset.jsonl`, a bundle with only `dataset.avro`, a line that
+  cannot be read, and a dataset without items.
+- Documentation: the bundle in the section on jobs of the server manual, and the architecture
+  page.
 
 ## 6. Hybrid Search Readiness (Suggestions & Specifications)
 

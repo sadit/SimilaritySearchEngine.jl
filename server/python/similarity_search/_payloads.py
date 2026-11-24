@@ -4,8 +4,8 @@ No HTTP calls happen here -- each function just returns
 ``(method, path, json_body_or_None, query_params_or_None)`` for one endpoint, built from
 plain keyword arguments matching the real wire shapes in ``src/server.jl``'s route table
 (read directly against a running implementation, not against PLAN.md's original
-aspirational text -- see the package README for what that means in practice, e.g. no Avro
-binary mode, no long-query 429 fallback: neither exists server-side today).
+aspirational text -- see the package README for what that means in practice, e.g. no
+long-query 429 fallback: it does not exist server-side today).
 
 Both ``client.py`` (sync) and ``async_client.py`` (async) call these same functions, so the
 two clients can never drift apart on what a request actually looks like.

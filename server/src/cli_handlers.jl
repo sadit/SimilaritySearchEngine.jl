@@ -713,11 +713,13 @@ _dense_index_kind_name(::SimilaritySearch.ParallelExhaustiveSearch) = "parallel_
     execute_dump(cmd_args::Dict) -> Int
 
 `dump` (PLAN.md §4.4/§1): exports a dataset as a portable bundle directory --
-`dataset.avro` (every metadata record, deleted or not, via `Persistence.DumpRecord`),
-`project/` (a copy of the project directory, which is the index: `load` restores it as it
-is and never rebuilds it from the Avro rows, so the bundle comes back with the same graph
-topology and posting lists it had when it was written), and `manifest.json` (index_kind/distance/
-edit_correction -- everything `load` needs to recreate a descriptor.json at the target).
+`dataset.jsonl` (the metadata of every item, deleted or not, one `Persistence.DumpRecord` per
+line, PLAN.md §5.16), `project/` (a copy of the project directory, which is the index: `load`
+restores it as it is and never rebuilds it from the lines, so the bundle comes back with the
+same graph topology and posting lists it had when it was written), `followers/`, and
+`manifest.json` (index_kind/distance/edit_correction/max_k -- everything `load` needs to
+recreate a descriptor.json at the target). A dataset without items writes an empty
+`dataset.jsonl`.
 It opens the dataset read-only so it can run concurrently with a live server serving the
 same dataset (see `describe`'s identical `read_only=true` reasoning).
 """
@@ -738,20 +740,11 @@ function execute_dump(cmd_args::Dict)
     engine = handle.engine
 
     records = Persistence.DumpRecord[]
+    # The keys of `cf_records` are big-endian `_id`s, so the lines come in the order of `_id`.
     for (_, v) in RocksDB.DBIterator(ds.db; cf=ds.cf_records)
         record = JSON3.read(v, Schema.MetadataRecord)
-        meta_json = Project.get_raw_meta(ds, record._id)
-        push!(records, Persistence.DumpRecord(
-            record,
-            meta_json,
-            record._id in engine.deleted_ids,
-        ))
-    end
-
-    if isempty(records)
-        println("Error: dataset '$project_id' has no records to dump")
-        SSE.close_project!(handle; compact=false)
-        return 1
+        push!(records, Persistence.DumpRecord(record, Project.get_raw_meta(ds, record._id),
+                                              record._id in engine.deleted_ids))
     end
 
     descriptor_file = joinpath(dir, "descriptor.json")
@@ -772,7 +765,7 @@ function execute_dump(cmd_args::Dict)
     SSE.close_project!(handle; compact=false)
 
     mkpath(output_dir)
-    Persistence.write_dump_records(joinpath(output_dir, "dataset.avro"), records)
+    Persistence.write_dump_records(joinpath(output_dir, "dataset.jsonl"), records)
 
     # The followers are copied before the project (PLAN.md §5.12). A server can append to the
     # dataset while this runs. A follower copied first has processed at most the items of the
@@ -785,8 +778,8 @@ function execute_dump(cmd_args::Dict)
 
     # The project directory, copied whole: it is the index (posting lists, document vectors,
     # the adjacency of the graph, the dense vector file). A bundle therefore restores only into
-    # an engine that reads this on-disk layout, and `dataset.avro` beside it remains the
-    # portable half, independent of the engine.
+    # an engine that reads this on-disk layout, and `dataset.jsonl` beside it is the part that
+    # any program reads, with a JSON parser.
     project_copy = joinpath(output_dir, "project")
     ispath(project_copy) && rm(project_copy; recursive=true)
     cp(dir, project_copy)
@@ -867,10 +860,13 @@ directory (`<workdir>/datasets/{id}/`), so a subsequently-(re)started `serve` pi
 via `Server.reload_datasets!` with no extra step, regardless of which layout the original
 dump came from. Refuses to overwrite an existing target (`--dataset` must be a fresh id).
 Copies `project/` back as it is (see `execute_dump` for why this is a copy and not a
-reconstruction from the rows) and replays every `dataset.avro` row into
-fresh `Schema.MetadataRecord`s under its original `doc_id` -- both `declared_json` and
-`extra_json` were captured separately at dump time (not pre-merged), so this reconstructs
-the exact original `MetadataRecord`, not a re-derived approximation of one.
+reconstruction from the lines). When the bundle has `dataset.jsonl`, it then writes the
+record and the `meta` of each line over the copy, so that metadata edited in the bundle with a
+text editor or `jq` takes effect (PLAN.md §5.16). The lines are read before anything is
+copied, so a line that cannot be read leaves no dataset behind. The deleted items come from the
+copy of the project, not from `deleted`. A bundle without `dataset.jsonl` is loaded from
+`project/` alone. A bundle written before 2026-11-23 has `dataset.avro` instead, which is
+ignored, with a warning: the copy of the project holds the same metadata.
 """
 function execute_load(cmd_args::Dict)
     bundle_dir = cmd_args["bundle"]
@@ -879,11 +875,16 @@ function execute_load(cmd_args::Dict)
 
     manifest_path = joinpath(bundle_dir, "manifest.json")
     project_src = joinpath(bundle_dir, "project")
-    avro_src = joinpath(bundle_dir, "dataset.avro")
+    lines_src = joinpath(bundle_dir, "dataset.jsonl")
     isfile(manifest_path) || (println("Error: bundle '$bundle_dir' is missing manifest.json"); return 1)
-    isfile(avro_src) || (println("Error: bundle '$bundle_dir' is missing dataset.avro"); return 1)
     isdir(project_src) || (println("Error: bundle '$bundle_dir' is missing project/"); return 1)
     manifest = JSON3.read(read(manifest_path), Dict{String, Any})
+    records = isfile(lines_src) ? (@cli_engine_call Persistence.read_dump_records(lines_src)) : Persistence.DumpRecord[]
+    records isa Cint && return records
+    if !isfile(lines_src) && isfile(joinpath(bundle_dir, "dataset.avro"))
+        println("Warning: bundle '$bundle_dir' has dataset.avro, written before 2026-11-23; it is ignored, ",
+                "and the metadata come from project/")
+    end
 
     target_path = joinpath(workdir, "datasets", target_id)
     if ispath(target_path)
@@ -896,9 +897,8 @@ function execute_load(cmd_args::Dict)
         println("Error: $followers_dst exists. It holds the followers of an earlier dataset '$target_id'; remove it first")
         return 1
     end
-    # The project comes back whole, then the Avro records are replayed over it: the copy
-    # carries the index, and the replay is what makes a hand-edited `dataset.avro` (the
-    # documented way to fix metadata in a bundle) take effect.
+    # The project comes back whole, then the lines are written over it: the copy carries the
+    # index, and the lines are what makes metadata edited in `dataset.jsonl` take effect.
     mkpath(dirname(target_path))   # `cp` creates the project directory itself, not its parent
     cp(project_src, target_path)
     isdir(followers_src) && cp(followers_src, followers_dst)
@@ -908,9 +908,9 @@ function execute_load(cmd_args::Dict)
     # column family the directory holds.
     handle = SSE.open_project(joinpath(workdir, "datasets"), target_id)
     restored = 0
-    for rec in Persistence.read_dump_records(avro_src)
+    for rec in records
         meta_record = Schema.MetadataRecord(rec._id, rec.schema_version, rec.doc_id, rec.keywords, rec.refs)
-        meta = rec.meta_json === nothing ? nothing : JSON3.read(codeunits(rec.meta_json), Dict{String, Any})
+        meta = rec.meta === nothing ? nothing : JSON3.read(codeunits(rec.meta), Dict{String, Any})
         Project.put_metadata!(handle.project, meta_record, meta)
         restored += 1
     end
@@ -937,7 +937,8 @@ function execute_load(cmd_args::Dict)
     )
     write(joinpath(target_path, "descriptor.json"), JSON3.write(descriptor))
 
-    println("Load completed: $restored record(s) restored into '$target_id' from bundle '$bundle_dir'. Saved to $target_path")
+    println("Load completed: '$target_id' restored from bundle '$bundle_dir', with $restored line(s) of dataset.jsonl ",
+            "written over its metadata. Saved to $target_path")
     _report_followers(target_id, statuses)
     return code
 end

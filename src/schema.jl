@@ -163,11 +163,9 @@ payload(item::TextItem) = item.text
 Fixed-shape record every indexed object carries, independent of whatever `meta` a
 caller attaches to it (see [`metadata_record`](@ref)/`Project`'s own dedicated `meta`
 column family) -- there is no per-project typed-field schema to declare or validate
-against anymore: every record has exactly these fields, always. All-concrete field
-types, so `Vector{MetadataRecord}` writes/reads directly through `Avro.writetable`/
-`readtable` (confirmed empirically -- unlike a `meta`/`Dict{String,Any}` field, which
-`Avro.jl` schema inference rejects outright since `Any` isn't a concrete value type;
-that's why `meta` is a separate JSON blob, never a field on this struct).
+against anymore: every record has exactly these fields, always. `meta` is a separate JSON
+blob in its own column family, never a field on this struct, so the struct has the same
+concrete type in every project.
 
 # Fields
 - `_id::Int32`: internal sequential id, 1..n -- the same key the engine's own raw

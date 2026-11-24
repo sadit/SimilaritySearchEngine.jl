@@ -5,7 +5,6 @@ authors = ["Eric S. Tellez <donsadit@gmail.com>"]
 
 [deps]
 ArgParse = "c7e460c6-2fb9-53a9-8c5b-16f535851c63"
-Avro = "65fc3dcb-49af-4f0c-a340-607eef534a14"
 CodecZlib = "944b1d66-785c-5afd-91f1-9de20f533193"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 Downloads = "f43a241f-c20a-4ad4-852c-f6b1247861c6"
@@ -24,7 +23,6 @@ TextSearch = "7f6f6c8a-3b03-11e9-223d-e7d88259bd6c"
 
 [compat]
 ArgParse = "1.2.0"
-Avro = "1.1.2"
 CodecZlib = "0.7"
 Dates = "1"
 Downloads = "1.7.0"

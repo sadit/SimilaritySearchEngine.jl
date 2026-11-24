@@ -1,6 +1,5 @@
 module SimilaritySearchEngine
 
-using Avro
 using JSON3
 using SimilaritySearch
 # Not exported by SimilaritySearch, and re-exported by this package below. Until 2026-11-20 it

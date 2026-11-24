@@ -1,5 +1,6 @@
 using Test
 using JSON3
+using SimilaritySearchEngine
 
 @testset "CLI Dump/Load Tests" begin
     workdir = mktempdir()
@@ -16,7 +17,7 @@ using JSON3
     bundle_dense = joinpath(workdir, "bundle_dense")
     cmd_dump = `julia --project=$proj $cli_script dump --dataset dump_dense --workdir $workdir --output $bundle_dense`
     @test success(cmd_dump)
-    @test isfile(joinpath(bundle_dense, "dataset.avro"))
+    @test isfile(joinpath(bundle_dense, "dataset.jsonl"))
     @test isdir(joinpath(bundle_dense, "project"))
     @test isfile(joinpath(bundle_dense, "manifest.json"))
     manifest = JSON3.read(read(joinpath(bundle_dense, "manifest.json"), String))
@@ -45,6 +46,63 @@ using JSON3
     @test d1.distance_stats.nn_dist_min == d2.distance_stats.nn_dist_min
     @test d1.distance_stats.nn_dist_mean == d2.distance_stats.nn_dist_mean
     @test d1.distance_stats.nn_dist_max == d2.distance_stats.nn_dist_max
+
+    # --- The metadata of a bundle are JSON lines (PLAN.md §5.16, phase 9c) -----------
+
+    lines = readlines(joinpath(bundle_dense, "dataset.jsonl"))
+    @test length(lines) == 724 && !isfile(joinpath(bundle_dense, "dataset.avro"))
+    first_item = JSON3.read(lines[1])
+    @test first_item._id == 1 && haskey(first_item, :meta) && first_item.deleted == false
+    first_restored_item(id) = begin
+        h = SimilaritySearchEngine.open_project(joinpath(workdir, "datasets"), id; read_only=true)
+        it = only(SimilaritySearchEngine.fetch_items(h, [1]))
+        SimilaritySearchEngine.close_project!(h)
+        it
+    end
+
+    # A line edited with a new `meta` is restored by `load`.
+    edited_bundle = joinpath(workdir, "bundle_edited")
+    cp(bundle_dense, edited_bundle)
+    edited = JSON3.read(lines[1], Dict{String,Any})
+    edited["meta"] = Dict("note" => "edited")
+    write(joinpath(edited_bundle, "dataset.jsonl"), join(vcat(JSON3.write(edited), lines[2:end]), "\n") * "\n")
+    code, out = _run_cli(["load", "--bundle", edited_bundle, "--dataset", "dump_edited", "--workdir", workdir])
+    @test code == 0 && occursin("724 line(s)", out)
+    @test first_restored_item("dump_edited").meta == Dict("note" => "edited")
+
+    # A bundle without `dataset.jsonl`, and a bundle with only `dataset.avro` (written before
+    # 2026-11-23), are loaded from `project/`, which holds the same metadata.
+    no_lines = joinpath(workdir, "bundle_no_lines")
+    cp(bundle_dense, no_lines)
+    rm(joinpath(no_lines, "dataset.jsonl"))
+    code, out = _run_cli(["load", "--bundle", no_lines, "--dataset", "dump_no_lines", "--workdir", workdir])
+    @test code == 0 && occursin("0 line(s)", out)
+    @test first_restored_item("dump_no_lines").doc_id == first_item.doc_id
+    old_bundle = joinpath(workdir, "bundle_old")
+    cp(no_lines, old_bundle)
+    write(joinpath(old_bundle, "dataset.avro"), "Obj")
+    code, out = _run_cli(["load", "--bundle", old_bundle, "--dataset", "dump_old", "--workdir", workdir])
+    @test code == 0 && occursin("dataset.avro", out) && occursin("ignored", out)
+    @test first_restored_item("dump_old").doc_id == first_item.doc_id
+
+    # A line that cannot be read stops `load` before anything is copied.
+    bad_bundle = joinpath(workdir, "bundle_bad")
+    cp(no_lines, bad_bundle)
+    write(joinpath(bad_bundle, "dataset.jsonl"), "not json\n")
+    code, out = _run_cli(["load", "--bundle", bad_bundle, "--dataset", "dump_bad", "--workdir", workdir])
+    @test code == 2 && occursin("line 1", out) && !ispath(joinpath(workdir, "datasets", "dump_bad"))
+
+    # A dataset without items is dumped and loaded: its `dataset.jsonl` is empty.
+    empty_input = joinpath(workdir, "empty.jsonl")
+    touch(empty_input)
+    @test first(_run_cli(["build", "--dataset", "dump_empty", "--input", empty_input, "--index-kind", "exhaustive_search",
+                          "--workdir", workdir])) == 0
+    bundle_empty = joinpath(workdir, "bundle_empty")
+    @test first(_run_cli(["dump", "--dataset", "dump_empty", "--workdir", workdir, "--output", bundle_empty])) == 0
+    @test filesize(joinpath(bundle_empty, "dataset.jsonl")) == 0
+    @test JSON3.read(read(joinpath(bundle_empty, "manifest.json"), String)).record_count == 0
+    @test first(_run_cli(["load", "--bundle", bundle_empty, "--dataset", "dump_empty_restored", "--workdir", workdir])) == 0
+    @test isdir(joinpath(workdir, "datasets", "dump_empty_restored"))
 
     out_search = tempname()
     @test success(`julia --project=$proj $cli_script searchbatch --dataset dump_dense_restored --queries $data_path --output $out_search --k 5 --workdir $workdir`)
@@ -83,7 +141,7 @@ using JSON3
 
     incomplete_bundle = joinpath(workdir, "incomplete_bundle")
     mkpath(incomplete_bundle)
-    write(joinpath(incomplete_bundle, "manifest.json"), "{}") # missing dataset.avro / index.snapshot.jld2
+    write(joinpath(incomplete_bundle, "manifest.json"), "{}") # missing project/
     @test !success(`julia --project=$proj $cli_script load --bundle $incomplete_bundle --dataset from_incomplete --workdir $workdir`)
 
     rm(workdir, force=true, recursive=true)
