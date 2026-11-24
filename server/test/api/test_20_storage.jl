@@ -3,7 +3,7 @@ using HTTP
 using JSON3
 import SimilaritySearchClient as C
 
-# The storage of a dense dataset over HTTP (PLAN.md §5.14, phase 7b): `storage` of
+# The storage of a dense dataset over HTTP (CHANGELOG.md §5.14, phase 7b): `storage` of
 # `POST /api/v1/datasets`, `storage` and `encoder` of `GET /api/v1/datasets/{id}`, and the
 # `storage` keyword of the Julia client.
 @testset "20. Storage of dense datasets" begin

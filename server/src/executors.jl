@@ -146,7 +146,7 @@ end
     job_thread_budget(total_threads::Int, batch_pct::Real; max_jobs::Int=4) -> (max_concurrent, threads_per_job)
 
 How much of the machine job execution may use, from the share of threads reserved for it
-(`[resources] batch_threads_pct`, PLAN.md §2).
+(`[resources] batch_threads_pct`, CHANGELOG.md §2).
 
 A job runs as its own process, so what bounds it is a number of processes and a number of
 threads each. The reserved share is the product: at most `max_concurrent` jobs at once, each
@@ -193,7 +193,7 @@ end
     run_dispatcher!(job_mgr::Jobs.JobManager, executor::AbstractJobExecutor; max_concurrent::Int=4, threads_per_job::Int=1, poll_interval::Real=0.5)
 
 Background loop (meant to be run inside `@async`) that owns every `queued/` -> `running/`
--> `completed/|failed/` job transition (PLAN.md §5.5). The HTTP layer only ever calls
+-> `completed/|failed/` job transition (CHANGELOG.md §5.5). The HTTP layer only ever calls
 `Jobs.create_job!` to enqueue; this loop is what actually dispatches and finishes jobs.
 Crash recovery for jobs orphaned in `running/` by a previous process must be done by the
 caller (via `Jobs.requeue_stale_running!`) before starting this loop.

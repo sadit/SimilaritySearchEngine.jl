@@ -15,7 +15,7 @@ import SimilaritySearchEngine as SSE
 
 # Schema/Persistence/Dataset/IndexEngine used to be defined locally here (include'd from
 # schema.jl/persistence.jl/dataset.jl/index_engine.jl) -- extracted verbatim into the new
-# SimilaritySearchEngine.jl package (PLAN.md §8.5, chunk 22), since none of the four ever
+# SimilaritySearchEngine.jl package (CHANGELOG.md §8.5, chunk 22), since none of the four ever
 # depended on anything else in this package (Jobs/Tokens/Telemetry/Executors/Server
 # are HTTP/CLI-specific glue that stayed behind). The bare `using SimilaritySearchEngine.X`
 # form below reproduces the exact same bare-name availability the old `include`d-then-
@@ -53,7 +53,7 @@ using .Executors
     resolve_batch_threads_pct(resources_cfg::AbstractDict) -> Float64
 
 The share of threads reserved for job execution, from the `[resources]` section of the
-configuration file (PLAN.md §2). `batch_threads_pct` states it directly;
+configuration file (CHANGELOG.md §2). `batch_threads_pct` states it directly;
 `query_threads_pct` states its complement, and is used when the first is absent. When both
 are present and they do not add up to 100, `batch_threads_pct` is the one that applies, and
 the discrepancy is reported rather than resolved silently.
@@ -79,7 +79,7 @@ end
 
 The actual "start serving" body -- extracted out of `main`'s `serve` branch so both the
 plain non-interactive CLI path and `run_interactive_serve`'s confirm-then-run step
-(`interactive.jl`, PLAN.md §1) call the exact same function, the same "one command-name ->
+(`interactive.jl`, CHANGELOG.md §1) call the exact same function, the same "one command-name ->
 handler mapping regardless of how the arguments were collected" principle
 `dispatch_command`/`dispatch_ctl_command` already apply to their own binaries.
 """
@@ -123,15 +123,15 @@ function run_serve(host::String, port::Int, workdir::String;
     reloaded = Server.reload_datasets!(app)
     isempty(reloaded) || println("Reloaded $(length(reloaded)) existing dataset(s) from $workdir: ", reloaded)
     # The followers with a periodic policy are processed by a task of this process, not by a job:
-    # a job cannot write to a dataset that this process holds open (PLAN.md §5.12).
+    # a job cannot write to a dataset that this process holds open (CHANGELOG.md §5.12).
     Server.start_follower_task!(app)
 
     # Crash recovery: anything left in running/ from a previous serve process
-    # (killed mid-dispatch) gets requeued before the dispatcher starts (PLAN.md §5.5).
+    # (killed mid-dispatch) gets requeued before the dispatcher starts (CHANGELOG.md §5.5).
     requeued = Jobs.requeue_stale_running!(job_mgr)
     isempty(requeued) || println("Requeued $(length(requeued)) job(s) orphaned by a previous run: ", requeued)
 
-    # What job execution may use, from the share reserved for it (PLAN.md §2). A job runs as
+    # What job execution may use, from the share reserved for it (CHANGELOG.md §2). A job runs as
     # its own process, so the share is spent as a number of processes and a number of threads
     # each; `Base.julia_cmd()` does not carry this process's `--threads`, so without this every
     # job would run on one thread whatever the machine has.
@@ -154,7 +154,7 @@ end
     resolve_gzip(server_cfg::AbstractDict) -> (gzip::Bool, gzip_min_bytes::Int)
 
 The compression of the responses, from the `[server]` section of the configuration file
-(PLAN.md §5.16). `gzip` is true unless the file sets it to `false`. A `gzip_min_bytes` that is
+(CHANGELOG.md §5.16). `gzip` is true unless the file sets it to `false`. A `gzip_min_bytes` that is
 not a non-negative integer is replaced by the default.
 """
 function resolve_gzip(server_cfg::AbstractDict)
@@ -167,7 +167,7 @@ end
 """
     main(args::Vector{String}) -> Cint
 
-Entry point for `similarity-search` (PLAN.md §1's data-operations CLI): the eleven
+Entry point for `similarity-search` (CHANGELOG.md §1's data-operations CLI): the eleven
 `build`-through-`load` subcommands plus its own `interactive` guided form. Only ever
 reached for this one binary -- `similarity-search-ctl.jl`/`similarity-search-server.jl`
 call `main_ctl`/`main_serve` directly instead of this function (each wrapper statically
@@ -175,7 +175,7 @@ knows which binary it is, so there's no env-var sniffing needed to pick an entry
 unlike the `SIMSEARCH_CLI_BIN`-based dispatch a previous chunk used here). `serve` used to
 still be reachable through this same parser/function too, sharing it with the data-ops
 binary; it now has a genuinely separate `ArgParseSettings` (`build_serve_settings`,
-`cli.jl`) and its own `main_serve` below, matching PLAN.md's "thin, single-purpose serve
+`cli.jl`) and its own `main_serve` below, matching CHANGELOG.md's "thin, single-purpose serve
 binary" framing in full, not just for its own fields (chunk 21).
 """
 function main(args::Vector{String})::Cint
@@ -196,7 +196,7 @@ end
 """
     main_ctl(args::Vector{String}) -> Cint
 
-Entry point for `similarity-search-ctl` (PLAN.md §1's admin/control CLI): parses against
+Entry point for `similarity-search-ctl` (CHANGELOG.md §1's admin/control CLI): parses against
 `build_ctl_settings` (a completely separate `ArgParseSettings` from the data-operations
 one -- see `ctl.jl`'s header note) and dispatches through `dispatch_ctl_command`, except
 for `interactive` (chunk 16), which routes to `run_interactive_ctl` instead. No
@@ -213,7 +213,7 @@ end
 """
     main_serve(args::Vector{String}) -> Cint
 
-Entry point for `similarity-search-server` (PLAN.md §1): parses against its own
+Entry point for `similarity-search-server` (CHANGELOG.md §1): parses against its own
 `build_serve_settings` (chunk 21 -- genuinely separate from the data-operations
 `build_settings`, not shared) and handles exactly its two commands, `serve` and
 `interactive` -- nothing else is reachable through this binary at all.
@@ -257,7 +257,7 @@ function main_serve(args::Vector{String})::Cint
 
     # The plugins are loaded before any dataset is opened, because a follower of a plugin is
     # opened with its leader. A plugin that the configuration declares and that cannot be
-    # loaded stops the start (PLAN.md §5.13).
+    # loaded stops the start (CHANGELOG.md §5.13).
     try
         loaded = Server.load_plugins!(config; base_dir=dirname(abspath(config_path)))
         isempty(loaded) || println("Loaded plugin(s): ", join(loaded, ", "))

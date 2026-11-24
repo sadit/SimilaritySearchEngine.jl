@@ -1,5 +1,5 @@
 # similarity-search-ctl command implementations -- thin HTTP calls against a running
-# similarity-search-serve instance (PLAN.md §1: "admin is a control-plane client, not a
+# similarity-search-serve instance (CHANGELOG.md §1: "admin is a control-plane client, not a
 # second process touching the same RocksDB files"). Every function here takes the base
 # API URL plus that subcommand's own parsed args, makes one HTTP call, and prints the
 # response -- there is deliberately no business logic duplicated from `server.jl` here.
@@ -9,7 +9,7 @@
 
 Shared error handling for every `-ctl` command: a non-2xx response prints the server's own
 JSON error body and returns `nothing` (so the caller can just check for that and return 1);
-a connection failure prints PLAN.md §1's own "server not reachable" wording rather than a
+a connection failure prints CHANGELOG.md §1's own "server not reachable" wording rather than a
 raw stacktrace, also returning `nothing`.
 """
 function _ctl_request(method::Symbol, url::String; body=nothing)
@@ -51,7 +51,7 @@ end
 """
     ctl_stats(base_url::String, cmd_args::Dict) -> Int
 
-`similarity-search-ctl stats --dataset <id>` -> `GET /api/v1/datasets/{id}`. PLAN.md's
+`similarity-search-ctl stats --dataset <id>` -> `GET /api/v1/datasets/{id}`. CHANGELOG.md's
 `stats` ("extract and compute statistics usage and costs") maps directly onto this
 endpoint's existing doc_count/tombstone_ratio/calibrated-beamsearch-baseline payload --
 there is no separate, more detailed stats endpoint to call instead.
@@ -67,7 +67,7 @@ end
     ctl_log(base_url::String, cmd_args::Dict) -> Int
 
 `similarity-search-ctl log --dataset <id> [--offset] [--limit]` -> `GET
-/api/v1/datasets/{id}/log?offset=&limit=` (PLAN.md §1's admin `log` command, chunk 17).
+/api/v1/datasets/{id}/log?offset=&limit=` (CHANGELOG.md §1's admin `log` command, chunk 17).
 """
 function ctl_log(base_url::String, cmd_args::Dict)
     params = String["offset=$(cmd_args["offset"])"]
@@ -198,7 +198,7 @@ end
 """
     ctl_log_tokens(base_url::String) -> Int
 
-`similarity-search-ctl log-tokens` -> `GET /api/v1/admin/tokens` (PLAN.md §1's admin
+`similarity-search-ctl log-tokens` -> `GET /api/v1/admin/tokens` (CHANGELOG.md §1's admin
 surface: an audit listing of every token, expired or not).
 """
 function ctl_log_tokens(base_url::String)
@@ -288,7 +288,7 @@ function ctl_load(base_url::String, cmd_args::Dict)
     return status == "completed" ? 0 : 1
 end
 
-# --- Followers (PLAN.md §5.12, issue #5, phase 5b) ----------------------------------------
+# --- Followers (CHANGELOG.md §5.12, issue #5, phase 5b) ----------------------------------------
 
 _ctl_follower_url(base_url::String, cmd_args::AbstractDict) =
     "$base_url/datasets/$(cmd_args["dataset"])/followers/$(HTTP.URIs.escapeuri(cmd_args["name"]))"
@@ -312,7 +312,7 @@ ctl_followers(base_url::String, cmd_args::AbstractDict) =
     ctl_plugins(base_url::String) -> Int
 
 `similarity-search-ctl plugins` -> `GET /api/v1/plugins`: the plugins that the server loaded
-(PLAN.md §5.13).
+(CHANGELOG.md §5.13).
 """
 ctl_plugins(base_url::String) = _ctl_print(_ctl_request(:get, "$base_url/plugins"))
 

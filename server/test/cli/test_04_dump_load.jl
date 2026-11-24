@@ -24,7 +24,7 @@ using SimilaritySearchEngine
     @test manifest.project_id == "dump_dense"
     @test manifest.index_kind == "searchgraph"
     @test manifest.record_count == 724
-    # `max_k` (PLAN.md §5.16) goes from `build` to the bundle, and from the bundle to the server.
+    # `max_k` (CHANGELOG.md §5.16) goes from `build` to the bundle, and from the bundle to the server.
     @test manifest.max_k == 250
 
     cmd_load = `julia --project=$proj $cli_script load --bundle $bundle_dense --dataset dump_dense_restored --workdir $workdir`
@@ -47,7 +47,7 @@ using SimilaritySearchEngine
     @test d1.distance_stats.nn_dist_mean == d2.distance_stats.nn_dist_mean
     @test d1.distance_stats.nn_dist_max == d2.distance_stats.nn_dist_max
 
-    # --- The metadata of a bundle are JSON lines (PLAN.md §5.16, phase 9c) -----------
+    # --- The metadata of a bundle are JSON lines (CHANGELOG.md §5.16, phase 9c) -----------
 
     lines = readlines(joinpath(bundle_dense, "dataset.jsonl"))
     @test length(lines) == 724 && !isfile(joinpath(bundle_dense, "dataset.avro"))

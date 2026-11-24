@@ -1,4 +1,4 @@
-# A plugin of the server's tests (PLAN.md §5.13): a key source and a kind of follower, declared
+# A plugin of the server's tests (CHANGELOG.md §5.13): a key source and a kind of follower, declared
 # with the wire names that the server reads. It depends on the engine only.
 module SSETestPlugin
 

@@ -28,7 +28,7 @@ using ..Telemetry
 # `append_items!` are exported by SimilaritySearch too, and a bare import would make every
 # one of them ambiguous here. Qualifying also keeps the boundary visible -- everything this
 # module calls through `SSE.` is API the engine promises, while the `..IndexEngine`/`..Project`
-# imports above are internals it still reaches for (see DEVELOPMENT_STRATEGY.md; that list
+# imports above are internals it still reaches for (see PLAN.md, "The Users of the Engine"; that list
 # should only ever shrink).
 import SimilaritySearchEngine as SSE
 using SparseArrays: SparseArrays
@@ -42,7 +42,7 @@ json_response(status::Int, body; extra_headers=[]) = HTTP.Response(status, vcat(
 
 """
 `id` values are interpolated directly into filesystem paths (dataset directories,
-descriptor sidecar files) — PLAN.md §4.6 flags exactly this class of risk. Whitelist
+descriptor sidecar files) — CHANGELOG.md §4.6 flags exactly this class of risk. Whitelist
 before it ever touches a path.
 """
 const DATASET_ID_PATTERN = r"^[A-Za-z0-9_-]{1,128}$"
@@ -55,7 +55,7 @@ The §3 Core execution barrier's safety multiplier: a per-request `beamsearch_ov
 (§3/§7) may not exceed this factor times the index's own calibrated baseline (or
 `IndexEngine.DEFAULT_BEAMSEARCH` if `calibrate!`/`POST .../calibrate` was never called) —
 anchored to a real, per-index baseline rather than the arbitrary global constants
-(`bsize<=20`, `Δ<1.7`) PLAN.md's own §3 warning flags as unjustified.
+(`bsize<=20`, `Δ<1.7`) CHANGELOG.md's own §3 warning flags as unjustified.
 """
 const BEAMSEARCH_SAFETY_MULTIPLIER = 3.0
 
@@ -63,12 +63,12 @@ const BEAMSEARCH_SAFETY_MULTIPLIER = 3.0
     _resolve_beamsearch_override(engine, overrides) -> (bs_or_nothing, warn_or_errmsg)
 
 Validates a caller-supplied `beamsearch_overrides` dict against `BEAMSEARCH_SAFETY_MULTIPLIER`
-times the index's current baseline (PLAN.md §3). Unspecified fields default to the
+times the index's current baseline (CHANGELOG.md §3). Unspecified fields default to the
 baseline's own value, so a caller only needs to name the field(s) it actually wants to
 raise. Returns:
 - `(bs::BeamSearch, exceeds_baseline::Bool)` on success — `exceeds_baseline` is `true`
   when the (still-allowed, sub-cap) override asks for more than the baseline itself, the
-  signal `handle_search` uses to attach a `WARN`/response-header (PLAN.md §3's "log a WARN
+  signal `handle_search` uses to attach a `WARN`/response-header (CHANGELOG.md §3's "log a WARN
   event and return an HTTP warning header" for elevated-but-allowed parameters).
 - `(nothing, error_message::String)` if the override exceeds the hard safety cap, or if
   `engine`'s index has no `BeamSearch` to override at all (text/exact indices).
@@ -97,9 +97,9 @@ end
 """
     _parse_offset_limit(params, total) -> (offset, limit)
 
-Plain, stateless `offset`/`limit` pagination (PLAN.md §5.4) for listing endpoints cheap
+Plain, stateless `offset`/`limit` pagination (CHANGELOG.md §5.4) for listing endpoints cheap
 enough to recompute per request (`GET /api/v1/datasets`, `GET /api/v1/jobs`). A search has
-no pagination: it answers its `k` results in one response (PLAN.md §5.16). `offset` clamps
+no pagination: it answers its `k` results in one response (CHANGELOG.md §5.16). `offset` clamps
 to `0`; `limit` defaults to `total` (i.e. "no limit") when absent or unparseable.
 """
 function _parse_offset_limit(params::AbstractDict, total::Int)
@@ -153,7 +153,7 @@ struct AppState
 
     lock::ReentrantLock
 
-    # Whether every /api/v1 endpoint requires a valid token (PLAN.md §4.1, `[auth] enabled` in
+    # Whether every /api/v1 endpoint requires a valid token (CHANGELOG.md §4.1, `[auth] enabled` in
     # config.toml). False keeps the behavior of a server that has never had authentication.
     #
     # A `Ref` rather than a plain `Bool` because `AppState` is immutable and the test suite
@@ -164,7 +164,7 @@ struct AppState
     # What `/metrics` reports, accumulated as requests are recorded in the operation log.
     metrics::Telemetry.MetricsRegistry
 
-    # How many searches may run at once (PLAN.md §2), and how many are waiting for a slot.
+    # How many searches may run at once (CHANGELOG.md §2), and how many are waiting for a slot.
     # See `_with_query_slot`.
     query_slots::Base.Semaphore
     queries_running::Threads.Atomic{Int}
@@ -174,10 +174,10 @@ struct AppState
     # batch count of the engine's contexts. See `inprocess_batch_cap`.
     batch_cap::Int
 
-    # The errors and the periodic processing of the followers of the datasets (PLAN.md §5.12).
+    # The errors and the periodic processing of the followers of the datasets (CHANGELOG.md §5.12).
     followers::FollowerRegistry
 
-    # The `max_k` of each loaded dataset (PLAN.md §5.16), read from its `descriptor.json` when
+    # The `max_k` of each loaded dataset (CHANGELOG.md §5.16), read from its `descriptor.json` when
     # the dataset is created or opened. A dataset that is not here has `DEFAULT_MAX_K`.
     max_k::Dict{String,Int}
 end
@@ -198,7 +198,7 @@ AppState(workdir, job_mgr, executor, token_mgr, handles, lock) =
     DEFAULT_MAX_K
 
 The `max_k` of a dataset created without one, and of a dataset whose `descriptor.json` has
-none (PLAN.md §5.16). `max_k` is the largest `k` that a search of the dataset can ask for: a
+none (CHANGELOG.md §5.16). `max_k` is the largest `k` that a search of the dataset can ask for: a
 search answers its `k` results in one response. A dataset that needs more sets `max_k` when
 it is created (`"max_k"` of `POST /api/v1/datasets`, or `build --max-k`), or changes it with
 `POST /api/v1/admin/datasets/{id}/reload` and the body `{"max_k": n}`.
@@ -208,7 +208,7 @@ const DEFAULT_MAX_K = 100
 """
     dataset_max_k(app, id) -> Int
 
-The `max_k` of the dataset `id` (PLAN.md §5.16), or [`DEFAULT_MAX_K`](@ref) for a dataset that
+The `max_k` of the dataset `id` (CHANGELOG.md §5.16), or [`DEFAULT_MAX_K`](@ref) for a dataset that
 the server has not opened.
 """
 dataset_max_k(app::AppState, id::AbstractString) = get(app.max_k, String(id), DEFAULT_MAX_K)
@@ -222,7 +222,7 @@ _descriptor_max_k(descriptor::AbstractDict) = something(_parse_max_k(get(descrip
 """
     check_search_k(app, ids, data) -> Union{Nothing, HTTP.Response}
 
-Checks the `k` of a search request against the `max_k` of each dataset in `ids` (PLAN.md
+Checks the `k` of a search request against the `max_k` of each dataset in `ids` (CHANGELOG.md
 §5.16). Returns `nothing` when the request can run, or the `400` response with the kind
 `InvalidOption`: for a `k` that is not a positive integer, for a `k` larger than `max_k`, and for
 `page_size`, which was removed with the result cursors on 2026-11-23.
@@ -247,7 +247,7 @@ end
 """
     query_slot_count(total_threads, batch_pct, configured) -> Int
 
-How many searches this server runs at once (PLAN.md §2).
+How many searches this server runs at once (CHANGELOG.md §2).
 
 `configured` is `[resources] max_concurrent_queries`, and any positive value is used as
 given. Zero derives it from the thread split: the threads not reserved for job execution,
@@ -339,7 +339,7 @@ behavior of a server that has never had authentication.
   what to ask for.
 
 The handler runs with `Base.invokelatest`. A task of the HTTP server keeps the world of the code
-that started the server, and the methods of a plugin (PLAN.md §5.13) loaded later are not
+that started the server, and the methods of a plugin (CHANGELOG.md §5.13) loaded later are not
 visible in it. `serve` loads its plugins before it starts the server, so this matters for a
 process that loads a plugin while the server runs, such as the test suite.
 """
@@ -382,7 +382,7 @@ end
 """
     handle_healthz(req) -> HTTP.Response
 
-Liveness (PLAN.md §5.8): the process is up and able to answer HTTP at all. Deliberately
+Liveness (CHANGELOG.md §5.8): the process is up and able to answer HTTP at all. Deliberately
 checks nothing else — that's what `/readyz` is for.
 """
 handle_healthz(req::HTTP.Request) = json_response(200, Dict("status" => "ok"))
@@ -390,7 +390,7 @@ handle_healthz(req::HTTP.Request) = json_response(200, Dict("status" => "ok"))
 """
     handle_readyz(req, app) -> HTTP.Response
 
-Readiness (PLAN.md §5.8): the working directory is accessible and the job/token
+Readiness (CHANGELOG.md §5.8): the working directory is accessible and the job/token
 managers this process depends on for every request were actually constructed. Crash
 recovery (`Jobs.requeue_stale_running!`) already runs synchronously in `main` before
 `run_server` is ever called, so there's no separate "WAL replay pending" state to check
@@ -404,7 +404,7 @@ end
 """
     handle_metrics(req, app) -> HTTP.Response
 
-Prometheus text-format metrics (PLAN.md §5.8), limited to what's actually measurable
+Prometheus text-format metrics (CHANGELOG.md §5.8), limited to what's actually measurable
 today: dataset/job counts and per-loaded-dataset doc/tombstone counts. `op_log`-derived
 counters (`distance_evaluations_total`, `query_latency_seconds`) are still omitted here —
 `Telemetry.log_operation` is now wired into `search`/`ftsearch`/`append`/`delete` (see
@@ -454,7 +454,7 @@ function handle_metrics(req::HTTP.Request, app::AppState)
     end
 
     # The counters the operation log's own records feed, accumulated in memory as each request
-    # is recorded (PLAN.md §5.8). Reading them from the log itself would make a poll every few
+    # is recorded (CHANGELOG.md §5.8). Reading them from the log itself would make a poll every few
     # seconds more expensive than the requests it measures, and the log grows with every one.
     append!(lines, Telemetry.prometheus_lines(app.metrics))
 
@@ -470,7 +470,7 @@ end
     parse_meta_schema(data::AbstractDict) -> Schema.MetaSchema
 
 The optional `"meta_schema"` of a `POST /api/v1/datasets` body, as the engine's own
-declaration (PLAN.md §4.5). The wire form is an array of `{"name": ..., "type": ...}`, with
+declaration (CHANGELOG.md §4.5). The wire form is an array of `{"name": ..., "type": ...}`, with
 the type one of `string`, `int64`, `float64`, `bool` or `timestamp`:
 
 ```json
@@ -527,7 +527,7 @@ from the project.
 descriptor_path(app::AppState, id::String) = joinpath(app.workdir, "datasets", id, "descriptor.json")
 
 """
-The dataset fields of the join groups, removed on 2026-11-10 (PLAN.md §0, item 11).
+The dataset fields of the join groups, removed on 2026-11-10 (CHANGELOG.md §0, item 11).
 `handle_create_dataset` refuses a request that sends one of them. `dataset_descriptor` drops
 them from a descriptor written before the removal, and `load` ignores them in a dump.
 """
@@ -540,7 +540,7 @@ function handle_create_dataset(req::HTTP.Request, app::AppState)
     id = get(data, "id", Project.generate_id())
     valid_project_id(id) || return json_response(400, Dict("error" => "invalid dataset id"))
 
-    # Removed on 2026-11-10 (PLAN.md §0, item 11). A request that still sends them is refused
+    # Removed on 2026-11-10 (CHANGELOG.md §0, item 11). A request that still sends them is refused
     # instead of creating a dataset that silently lacks what the caller asked for.
     removed = filter(f -> haskey(data, f), REMOVED_DATASET_FIELDS)
     isempty(removed) || return json_response(400, Dict("error" => """
@@ -555,15 +555,15 @@ function handle_create_dataset(req::HTTP.Request, app::AppState)
     edit_correction = get(data, "edit_correction", false)
     edit_correction isa Bool ||
         return json_response(400, Dict("error" => "'edit_correction' must be true or false"))
-    # PLAN.md §5.16: the largest `k` that a search of the dataset can ask for.
+    # CHANGELOG.md §5.16: the largest `k` that a search of the dataset can ask for.
     max_k = _parse_max_k(get(data, "max_k", DEFAULT_MAX_K))
     max_k === nothing && return json_response(400, Dict("error" => "'max_k' must be a positive integer"))
-    # Stored by the engine inside the project (PLAN.md §5.9), so it is not written to
+    # Stored by the engine inside the project (CHANGELOG.md §5.9), so it is not written to
     # `descriptor.json`: reopening the project restores it.
     partition_by = get(data, "partition_by", nothing)
     partition_by === nothing || partition_by isa AbstractString ||
         return json_response(400, Dict("error" => "'partition_by' must be the name of a meta field"))
-    # PLAN.md §5.10: the size from which a partition of a dense dataset has its own graph. The
+    # CHANGELOG.md §5.10: the size from which a partition of a dense dataset has its own graph. The
     # engine refuses it on a dataset that is not dense or has no `partition_by`.
     partition_graph_min = get(data, "partition_graph_min", nothing)
     partition_graph_min === nothing || partition_graph_min isa Integer ||
@@ -662,7 +662,7 @@ Skips any id already present in `app.handles` (a no-op in the normal
 "cold start with empty dicts" case, but this guard also makes the function safe to call
 against an already-populated `AppState`, e.g. from a test that only unloaded one dataset).
 To force-refresh a dataset that's already loaded, see `handle_reload_dataset` instead
-(PLAN.md §5.7's "hot-reload a single dataset" note) -- this function deliberately never
+(CHANGELOG.md §5.7's "hot-reload a single dataset" note) -- this function deliberately never
 overwrites an already-loaded entry on its own.
 
 A dataset created with `POST /api/v1/datasets` and never appended to reopens as an empty
@@ -678,7 +678,7 @@ function reload_datasets!(app::AppState)
     for id in sort(readdir(base))
         isdir(joinpath(base, id)) || continue
         # A name that is not a dataset id is not a dataset: `<leader>.followers` holds the
-        # followers of a leader (PLAN.md §5.11).
+        # followers of a leader (CHANGELOG.md §5.11).
         valid_project_id(id) || continue
         haskey(app.handles, id) && continue
         _reload_one_dataset!(app, id) && push!(reloaded, id)
@@ -694,7 +694,7 @@ caches, and removes its on-disk directory.
 """
 function handle_delete_dataset(req::HTTP.Request, app::AppState, id::String)
     valid_project_id(id) || return json_response(400, Dict("error" => "invalid dataset id"))
-    # A leader with followers is not deleted (PLAN.md §5.12): its followers are deleted first.
+    # A leader with followers is not deleted (CHANGELOG.md §5.12): its followers are deleted first.
     names = haskey(app.handles, id) ? [s.name for s in SSE.followers(app.handles[id])] :
             (d = joinpath(datasets_root(app), id * ".followers"); isdir(d) ? ["$id/$n" for n in readdir(d)] : String[])
     isempty(names) || return engine_error_response(SSE.HasFollowers(id, names,
@@ -723,7 +723,7 @@ end
 """
     handle_unload_dataset(req, app, id) -> HTTP.Response
 
-`POST /api/v1/admin/datasets/{id}/unload` (PLAN.md §5.7's "hot-reload a single dataset"
+`POST /api/v1/admin/datasets/{id}/unload` (CHANGELOG.md §5.7's "hot-reload a single dataset"
 open issue): closes this dataset's handle with `close_project!` and drops it from `app.handles`, so an external process -- concretely, the CLI `rebuild` (§1) -- can safely
 open it for exclusive writing without hitting RocksDB's per-process write lock. The
 intended flow for refreshing a live server's view of a dataset after an out-of-band CLI
@@ -742,7 +742,7 @@ end
 """
     handle_reload_dataset(req, app, id) -> HTTP.Response
 
-`POST /api/v1/admin/datasets/{id}/reload` (PLAN.md §5.7): (re)opens `id` from disk into
+`POST /api/v1/admin/datasets/{id}/reload` (CHANGELOG.md §5.7): (re)opens `id` from disk into
 `app.handles` via `_reload_one_dataset!`, replacing any existing entry --
 the deliberate counterpart to `reload_datasets!`'s cold-start skip-if-already-loaded
 guard. Closes the current in-memory handle first if `id` happens to still be loaded (so
@@ -753,7 +753,7 @@ The body is optional. `{"edit_correction": true}` or `false` changes that settin
 dataset: it is written to `descriptor.json` and the dataset is reopened with it. A value
 that is not a boolean, or `true` for a dataset that does not hold text, is a `400`, and the
 dataset stays loaded as it was. `{"max_k": n}` changes the largest `k` that a search of the
-dataset can ask for (PLAN.md §5.16) in the same way; `n` is a positive integer.
+dataset can ask for (CHANGELOG.md §5.16) in the same way; `n` is a positive integer.
 """
 function handle_reload_dataset(req::HTTP.Request, app::AppState, id::String)
     valid_project_id(id) || return json_response(400, Dict("error" => "invalid dataset id"))
@@ -841,7 +841,7 @@ function dataset_descriptor(app::AppState, id::String)
         base["meta_schema"] = isempty(declared) ? nothing : serialize_meta_schema(declared)
         base["partition_by"] = SSE.partition_field(handle)
         base["partition_graph_min"] = SSE.partition_graph_min(handle)
-        # The storage and its encoder live in the project too (PLAN.md §5.14).
+        # The storage and its encoder live in the project too (CHANGELOG.md §5.14).
         spec = SSE.project_spec(handle)
         base["storage"] = spec isa SSE.DenseVectors ? storage_dict(spec.storage) : nothing
         base["encoder"] = encoder_dict(handle)
@@ -866,7 +866,7 @@ end
 """
     handle_list_datasets(req, app) -> HTTP.Response
 
-`GET /api/v1/datasets?offset=&limit=` (PLAN.md §5.7/§5.4): lists every dataset directory
+`GET /api/v1/datasets?offset=&limit=` (CHANGELOG.md §5.7/§5.4): lists every dataset directory
 found under `<workdir>/datasets/`, not just the ones currently cached in
 `app.handles` — this listing works purely off each dataset's `descriptor.json`
 sidecar and doesn't need `reload_datasets!` to have run first (see `dataset_descriptor`'s
@@ -887,14 +887,14 @@ end
 """
     handle_get_dataset(req, app, id) -> HTTP.Response
 
-`GET /api/v1/datasets/{id}` (PLAN.md §5.7): single-dataset detail (see
+`GET /api/v1/datasets/{id}` (CHANGELOG.md §5.7): single-dataset detail (see
 `dataset_descriptor`).
 """
 function handle_get_dataset(req::HTTP.Request, app::AppState, id::String)
     valid_project_id(id) || return json_response(400, Dict("error" => "invalid dataset id"))
     desc = dataset_descriptor(app, id)
     desc === nothing && return json_response(404, Dict("error" => "dataset_not_found"))
-    # The status of each follower of a loaded leader (PLAN.md §5.12).
+    # The status of each follower of a loaded leader (CHANGELOG.md §5.12).
     handle = lock(() -> get(app.handles, id, nothing), app.lock)
     handle === nothing || (desc = merge(desc, Dict{String,Any}("followers" => dataset_follower_statuses(app, handle))))
     return json_response(200, desc)
@@ -903,7 +903,7 @@ end
 """
     handle_get_vocab(req, app, id) -> HTTP.Response
 
-`GET /api/v1/datasets/{id}/vocab?scan=` (PLAN.md §5.8): what a text dataset's vocabulary
+`GET /api/v1/datasets/{id}/vocab?scan=` (CHANGELOG.md §5.8): what a text dataset's vocabulary
 covers and what it does not.
 
 Reports the size of the vocabulary, the documents it was fitted from, its most frequent
@@ -940,7 +940,7 @@ end
 """
     handle_get_partitions(req, app, id) -> HTTP.Response
 
-`GET /api/v1/datasets/{id}/partitions` (PLAN.md §5.9 and §5.10): the partition field of a
+`GET /api/v1/datasets/{id}/partitions` (CHANGELOG.md §5.9 and §5.10): the partition field of a
 text or dense dataset and its partitions, sorted by name, each with the number of items
 appended to it (deleted and not yet indexed items included) and `graph`, whether the partition
 has its own graph. `graph` is `true` only for a partition of a dense `searchgraph` dataset with
@@ -966,7 +966,7 @@ end
 """
     handle_get_op_log(req, app, id) -> HTTP.Response
 
-`GET /api/v1/datasets/{id}/log?offset=&limit=` (PLAN.md §1's admin `log` command --
+`GET /api/v1/datasets/{id}/log?offset=&limit=` (CHANGELOG.md §1's admin `log` command --
 backs `similarity-search-ctl log`, the one command from that section's enumeration left
 unimplemented until now, see chunk 15's note): a paginated, newest-first dump of `id`'s
 `op_log` column family. Real content as of this chunk -- `Telemetry.log_operation` is now
@@ -995,7 +995,7 @@ end
 """
     handle_exists(req, app, index) -> HTTP.Response
 
-`GET /api/v1/datasets/{id}/exists?ids=a,b,c` (PLAN.md §5.1): lightweight
+`GET /api/v1/datasets/{id}/exists?ids=a,b,c` (CHANGELOG.md §5.1): lightweight
 existence/tombstone check by id, without paying for a full `fetch`'s metadata decode.
 Accepts either internal `doc_id`s or original ids, same resolution as `handle_fetch`.
 """
@@ -1114,7 +1114,7 @@ end
     _format_results(hits, k) -> (results, insufficient_results)
 
 Turns the engine's hits into the wire's shape, and flags `insufficient_results` when fewer
-than `k` came back (PLAN.md §5.4's explicit signal, rather than silently returning a short
+than `k` came back (CHANGELOG.md §5.4's explicit signal, rather than silently returning a short
 page).
 
 Soft-deleted hits are dropped here rather than hidden by the engine: `SSE.search` reports
@@ -1169,7 +1169,7 @@ Best-effort extraction of the caller-presented token from an `Authorization` hea
 (`Bearer <token>` or the bare token string), for `op_log` telemetry purposes only --
 `nothing` if the header is absent. **Not authentication**: no request handler in this
 codebase currently validates a presented token against `Tokens.get_token` at all (identity
-enforcement per PLAN.md §4.1 isn't wired up yet, a separate, larger prerequisite) -- this
+enforcement per CHANGELOG.md §4.1 isn't wired up yet, a separate, larger prerequisite) -- this
 just records whatever the caller happened to send, unverified, so a future telemetry query
 already has the field populated once real auth enforcement lands.
 """
@@ -1218,7 +1218,7 @@ end
     _engine_distance_name(engine::AbstractSearchEngine) -> Union{Nothing, String}
 
 The index's distance function name (e.g. `"SqL2"`), for `op_log`'s `distance_name` field
-(PLAN.md §4.3) -- the same `string(nameof(typeof(SimilaritySearch.distance(engine.backend.index))))`
+(CHANGELOG.md §4.3) -- the same `string(nameof(typeof(SimilaritySearch.distance(engine.backend.index))))`
 pattern `execute_dump`/`execute_describe` already use. `nothing` for a text index (BM25/
 weighted-inverted-file scoring isn't a `SimilaritySearch.distance` metric in this sense) or
 an untrained/empty one.
@@ -1268,7 +1268,7 @@ end
 
 Shared search call site for `handle_search` (dense, optionally post-filtered) and
 `handle_ftsearch` (single-index text): runs the search and logs exactly one `op_log`
-"search" record around it (PLAN.md §4.3), so cost accounting lives in one place instead of
+"search" record around it (CHANGELOG.md §4.3), so cost accounting lives in one place instead of
 at every search-shaped handler. Not used by `handle_hybrid_search`, which spans two
 datasets' `op_log` -- attributing one combined operation across several projects needs its
 own decision.
@@ -1321,7 +1321,7 @@ function handle_search(req::HTTP.Request, app::AppState, index::String)
     k = Int(get(data, "k", 10))
     query = convert(Vector{Float32}, data["vector"])
     filter_spec = get(data, "filter", nothing)
-    # PLAN.md §5.10: one partition of a dense dataset.
+    # CHANGELOG.md §5.10: one partition of a dense dataset.
     partition = get(data, "partition", nothing)
     partition === nothing || partition isa AbstractString ||
         return json_response(400, Dict("error" => "'partition' must be a partition name (a string)"))
@@ -1388,7 +1388,7 @@ end
 """
     handle_calibrate(req, app, index) -> HTTP.Response
 
-`POST /api/v1/datasets/{id}/calibrate` (PLAN.md §5.6): runs `IndexEngine.calibrate!`'s
+`POST /api/v1/datasets/{id}/calibrate` (CHANGELOG.md §5.6): runs `IndexEngine.calibrate!`'s
 real `SearchModels`-driven hyperparameter sweep against `index`'s already-indexed data (or
 an explicit `queries` ground-truth set, if given), installs the best-found `BeamSearch` as
 the index's new default, and persists it into the dataset's descriptor. Only applies to a
@@ -1404,7 +1404,7 @@ the mean over the validation queries, the interval `recall_lo`-`recall_hi` at `c
 number of queries, the mean distance evaluations per query, and `heldout`, whether those queries
 took no part in the tuning. Both are written to the descriptor.
 
-`"partition": "name"` calibrates the graph of one partition of a dense dataset (PLAN.md
+`"partition": "name"` calibrates the graph of one partition of a dense dataset (CHANGELOG.md
 §5.10). Its levels are kept in the project, apart from the global ones, and the descriptor is
 not changed: `beamsearch_baseline` describes the global graph. A partition without its own
 graph is the engine's `InvalidOption`, a `400`, and an unknown name its `UnknownPartition`, a
@@ -1487,7 +1487,7 @@ end
 """
     handle_delete_item(req, app, index)
 
-Soft-deletes a document (PLAN.md §1): marks its `doc_id` in the engine's tombstone set
+Soft-deletes a document (CHANGELOG.md §1): marks its `doc_id` in the engine's tombstone set
 so future searches exclude it, without removing it from the underlying index.
 
 The engine writes the deletion mark to storage as part of the call, which is what makes it
@@ -1523,7 +1523,7 @@ end
 """
     handle_fetch(req, app, index)
 
-Batch metadata retrieval by id (PLAN.md §5.1). Accepts either the internal integer
+Batch metadata retrieval by id (CHANGELOG.md §5.1). Accepts either the internal integer
 `doc_id` or the caller-supplied original `id` (resolved via a linear scan — see
 `Project.find_by_doc_id`; there is no secondary index from external id to `doc_id`
 in this pass).
@@ -1563,7 +1563,7 @@ end
 """
     rrf_fuse(rank_lists; k=60) -> (ids, scores)
 
-Reciprocal Rank Fusion (PLAN.md §6): combines several already-ranked (best-first) id
+Reciprocal Rank Fusion (CHANGELOG.md §6): combines several already-ranked (best-first) id
 lists into one score per id, `sum(1 / (rank + k))` across the lists it appears in.
 """
 function rrf_fuse(rank_lists::Vector; k::Int=60)
@@ -1581,7 +1581,7 @@ end
     handle_hybrid_search(req, app)
 
 Fuses a dense (`dense_index`) and lexical (`lexical_index`) search over the same shared
-`doc_id` space via RRF (PLAN.md §6), hydrating metadata once at the end from whichever of
+`doc_id` space via RRF (CHANGELOG.md §6), hydrating metadata once at the end from whichever of
 the two datasets actually has it for a given id.
 """
 function handle_hybrid_search(req::HTTP.Request, app::AppState)
@@ -1633,7 +1633,7 @@ end
 Job kinds this pass actually implements as real CLI subcommands (`src/cli_handlers.jl`'s
 `execute_allknn`/`execute_fft`/`execute_neardup`/`execute_hsp`/`execute_dump`/
 `execute_load`), as opposed to arbitrary kinds only reachable via an explicit `"command"`
-array (see `handle_submit_job`). `dump`/`load` complete PLAN.md §5.5's job-kind enum --
+array (see `handle_submit_job`). `dump`/`load` complete CHANGELOG.md §5.5's job-kind enum --
 chunk 10 shipped them as CLI-only; this pass adds the `POST /api/v1/jobs/dump|load`
 surface on top of the same `execute_dump`/`execute_load` CLI functions, unchanged.
 """
@@ -1685,7 +1685,7 @@ end
 """
     handle_submit_job(req, app, kind)
 
-Enqueues a job (PLAN.md §5.5). Actual dispatch (`queued/` -> `running/` ->
+Enqueues a job (CHANGELOG.md §5.5). Actual dispatch (`queued/` -> `running/` ->
 `completed/`/`failed/`) is owned exclusively by the background loop started alongside the
 server (`Executors.run_dispatcher!`), never by this handler.
 
@@ -1743,9 +1743,9 @@ const JOB_STATE_BY_NAME = Dict(lowercase(string(s)) => s for s in instances(Jobs
 """
     handle_list_jobs(req, app) -> HTTP.Response
 
-`GET /api/v1/jobs?status=&kind=&offset=&limit=` (PLAN.md §5.4/§5.5): lists jobs across
+`GET /api/v1/jobs?status=&kind=&offset=&limit=` (CHANGELOG.md §5.4/§5.5): lists jobs across
 every spool state, optionally filtered to one `status` and/or one `kind`, paginated with
-plain `offset`/`limit` (§5.4), which is cheap enough to recompute per request. Doesn't support PLAN.md's `index_uuid` filter: job records in this pass
+plain `offset`/`limit` (§5.4), which is cheap enough to recompute per request. Doesn't support CHANGELOG.md's `index_uuid` filter: job records in this pass
 don't track which dataset/index they targeted as a queryable field, and adding that is
 its own separate bookkeeping change, not part of this endpoint.
 """
@@ -1785,9 +1785,9 @@ end
 """
     handle_get_job_result(req, app, job_id)
 
-`GET /api/v1/jobs/{job_id}/result` (PLAN.md §5.5): sends back the raw file a completed
+`GET /api/v1/jobs/{job_id}/result` (CHANGELOG.md §5.5): sends back the raw file a completed
 heavy job's CLI subprocess wrote, in parts and without reading it into memory, compressed with
-gzip when the request accepts it (`file_response`, PLAN.md §5.16) (see `handle_submit_job`'s `result_ref` bookkeeping).
+gzip when the request accepts it (`file_response`, CHANGELOG.md §5.16) (see `handle_submit_job`'s `result_ref` bookkeeping).
 `409` if the job hasn't reached `completed` yet, `404` if there's no `result_ref` at all
 (e.g. a job submitted via the raw `"command"` escape hatch, which doesn't set one).
 
@@ -1814,7 +1814,7 @@ function handle_get_job_result(req::HTTP.Request, app::AppState, job_id::String)
         return json_response(200, Dict("bundle_dir" => result_ref, "manifest" => manifest))
     end
 
-    # In parts, compressed while it is read when the request accepts gzip (PLAN.md §5.16): the
+    # In parts, compressed while it is read when the request accepts gzip (CHANGELOG.md §5.16): the
     # result of a job can be larger than the memory a request should take.
     return file_response(req, result_ref)
 end
@@ -1822,7 +1822,7 @@ end
 """
     handle_block_job(req, app, job_id) -> HTTP.Response
 
-`POST /api/v1/jobs/{job_id}/block` (PLAN.md §5.5, admin-only: `similarity-search-ctl
+`POST /api/v1/jobs/{job_id}/block` (CHANGELOG.md §5.5, admin-only: `similarity-search-ctl
 jobs block`): moves a *queued* job to `blocked/`, where the dispatcher never scans for
 work -- distinct from `kill` (stops something already running) and the best-effort
 `DELETE`. `404` if the job doesn't exist; `409` if it's not currently `queued` (e.g.
@@ -1840,7 +1840,7 @@ end
 """
     handle_resume_job(req, app, job_id) -> HTTP.Response
 
-`POST /api/v1/jobs/{job_id}/resume` (PLAN.md §5.5): the inverse of `handle_block_job` --
+`POST /api/v1/jobs/{job_id}/resume` (CHANGELOG.md §5.5): the inverse of `handle_block_job` --
 moves a `blocked` job back to `queued/`. `409` if it isn't currently `blocked`.
 """
 function handle_resume_job(req::HTTP.Request, app::AppState, job_id::String)
@@ -1854,7 +1854,7 @@ end
 """
     handle_kill_job(req, app, job_id) -> HTTP.Response
 
-`POST /api/v1/jobs/{job_id}/kill` (PLAN.md §5.5, admin-only): forcibly terminates a
+`POST /api/v1/jobs/{job_id}/kill` (CHANGELOG.md §5.5, admin-only): forcibly terminates a
 *running* job via the `JobExecutor`'s `kill_job!(executor, handle)` (§5.5's `kill(handle)`
 abstraction) and marks it `failed` with `error: "killed by operator"`. Unlike `DELETE`
 (best-effort, only for a not-yet-started job), this is the explicit, always-available
@@ -1882,11 +1882,11 @@ end
 """
     handle_delete_job(req, app, job_id) -> HTTP.Response
 
-`DELETE /api/v1/jobs/{job_id}` (PLAN.md §5.5): best-effort cancellation of a job that
+`DELETE /api/v1/jobs/{job_id}` (CHANGELOG.md §5.5): best-effort cancellation of a job that
 hasn't started running yet -- moves it straight to `failed/` with `error: "cancelled by
 operator"` via `Jobs.cancel_job!`. Distinct from `kill` (`POST .../kill`), the only way to
 stop an already-`running` job: `DELETE` against a running or already-finished job is a
-`409`, not a silent no-op and not a fallback to killing it (PLAN.md §1's own note
+`409`, not a silent no-op and not a fallback to killing it (CHANGELOG.md §1's own note
 explicitly separates the two). Guards the same dispatcher race `handle_kill_job` already
 does above (the job transitions `queued/` -> `running/` in the same instant this request
 lands) with a `try`/`catch`, reported as the same `409` rather than a `500`.
@@ -1905,7 +1905,7 @@ end
 """
     handle_jobs_gc(req, app) -> HTTP.Response
 
-`POST /api/v1/admin/jobs/gc` (PLAN.md §5.5/§1's `similarity-search-ctl jobs gc`): purges
+`POST /api/v1/admin/jobs/gc` (CHANGELOG.md §5.5/§1's `similarity-search-ctl jobs gc`): purges
 every `completed`/`failed` job record older than `retention_seconds` (`Jobs.purge_finished!`, default 24h, overridable in the body --
 `{"retention_seconds": 3600}` -- since a fixed default would make this awkward to exercise
 in a hardened test without actually waiting a day).
@@ -1952,11 +1952,11 @@ end
 """
     handle_list_tokens(req, app) -> HTTP.Response
 
-`GET /api/v1/admin/tokens` (backs `similarity-search-ctl log-tokens`, PLAN.md §1's admin
+`GET /api/v1/admin/tokens` (backs `similarity-search-ctl log-tokens`, CHANGELOG.md §1's admin
 command surface): an audit listing of every token currently stored, expired or not --
 `token`/`user`/`permissions`/`created_at`/`expires_at` for each, same fields `add-token`'s
 own response already exposes in plaintext (this is a local admin/control-plane surface,
-not a public API -- see PLAN.md §1's note on how `-ctl` reaches it).
+not a public API -- see CHANGELOG.md §1's note on how `-ctl` reaches it).
 """
 function handle_list_tokens(req::HTTP.Request, app::AppState)
     tokens = [Dict(
@@ -1993,7 +1993,7 @@ Registers all HTTP routes and starts the Oxygen.jl server.
 - `app::AppState`: The global application state.
 - `async::Bool`: If `true`, returns immediately instead of blocking (used by tests).
 - `gzip::Bool`: whether a response is compressed with gzip when the request accepts it
-  (`[server] gzip`, PLAN.md §5.16). See [`gzip_middleware`](@ref).
+  (`[server] gzip`, CHANGELOG.md §5.16). See [`gzip_middleware`](@ref).
 - `gzip_min_bytes::Integer`: the size from which a response body is compressed
   (`[server] gzip_min_bytes`).
 """
@@ -2046,7 +2046,7 @@ function run_server(host::String, port::Int, app::AppState; async::Bool=false, g
     @post "/api/v1/admin/datasets/{id}/unload" (req, id) -> _guard(() -> handle_unload_dataset(req, app, id), req, app, :admin, id)
     @post "/api/v1/admin/datasets/{id}/reload" (req, id) -> _guard(() -> handle_reload_dataset(req, app, id), req, app, :admin, id)
 
-    # Followers (PLAN.md §5.12), with the permissions of their leader. `{f}` is a follower name,
+    # Followers (CHANGELOG.md §5.12), with the permissions of their leader. `{f}` is a follower name,
     # or `name=value` for one partition.
     @post "/api/v1/datasets/{id}/followers" (req, id) -> _guard(() -> handle_create_follower(req, app, id), req, app, :admin, id)
     @get "/api/v1/datasets/{id}/followers" (req, id) -> _guard(() -> handle_list_followers(req, app, id), req, app, :read, id)
@@ -2062,7 +2062,7 @@ function run_server(host::String, port::Int, app::AppState; async::Bool=false, g
     @get "/api/v1/datasets/{id}/postings" (req, id) -> _guard(() -> handle_postings(req, app, id), req, app, :read, id)
     @post "/api/v1/datasets/{id}/migrate-partitions" (req, id) -> _guard(() -> handle_migrate_partitions(req, app, id), req, app, :admin, id)
     @get "/api/v1/datasets/{id}/group" (req, id) -> _guard(() -> handle_get_group(req, app, id), req, app, :read, id)
-    # The plugins of this process (PLAN.md §5.13): the configuration of the server, not data.
+    # The plugins of this process (CHANGELOG.md §5.13): the configuration of the server, not data.
     @get "/api/v1/plugins" req -> _guard(() -> handle_list_plugins(req, app), req, app, :read, "*")
 
     println("Starting SimilaritySearchServer at http://$host:$port")
@@ -2135,7 +2135,7 @@ function dataset_spec(kind::AbstractString, distance, dimension, storage)
     return SSE.DenseVectors(something(dist, SimilaritySearch.Dist.SqL2()); index, storage=parse_storage(storage))
 end
 
-# --- The storage of a dense dataset (PLAN.md §5.14) ---------------------------------------
+# --- The storage of a dense dataset (CHANGELOG.md §5.14) ---------------------------------------
 
 # The fields of each kind of storage on the wire, besides `kind`.
 const STORAGE_FIELDS = Dict{String,Vector{String}}(
@@ -2306,7 +2306,7 @@ default distance of the dataset kind. Another name raises [`SSE.InvalidOption`](
 
 `jaccard` was listed here until 2026-11-23, and it named a type that SimilaritySearch does not
 have, so a dataset created with it failed with a 500. The Jaccard distance of SimilaritySearch
-is between sets, and the keyword followers have it (PLAN.md §5.12).
+is between sets, and the keyword followers have it (CHANGELOG.md §5.12).
 """
 function parse_distance(dist::Union{AbstractString,Nothing})
     dist === nothing && return nothing

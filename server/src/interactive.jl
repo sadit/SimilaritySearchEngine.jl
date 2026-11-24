@@ -1,13 +1,13 @@
-# Interactive Mode (PLAN.md §1 "Interactive Mode (Term.jl-guided CLI, new)")
+# Interactive Mode (CHANGELOG.md §1 "Interactive Mode (Term.jl-guided CLI, new)")
 #
 # !!! note "All three binaries now have a real guided form (chunk 18 completes it)"
-#     PLAN.md's original vision covers `similarity-search` (`run_interactive`, the
+#     CHANGELOG.md's original vision covers `similarity-search` (`run_interactive`, the
 #     command-menu form for its eleven data-operation subcommands), `similarity-search-ctl`
 #     (`run_interactive_ctl`, chunk 16), and `similarity-search-serve` (`run_interactive_serve`
 #     below, chunk 18 -- gated on `serve` finally having real `--host`/`--port`/`--workdir`
 #     `ArgParseField`s to introspect at all, `cli.jl`, which is also this chunk's work).
 #     `serve`'s form has no command menu at all, unlike the other two -- it's a
-#     single-purpose binary with exactly one thing to configure, matching PLAN.md's own "the
+#     single-purpose binary with exactly one thing to configure, matching CHANGELOG.md's own "the
 #     menu degenerates to that one guided form directly" wording -- and its three fields are
 #     pre-filled from whatever `--config`'s TOML file (or a hardcoded literal, absent that)
 #     already resolves to, not a static `ArgParseField` default, since `serve`'s real
@@ -18,7 +18,7 @@
 # !!! note "Chunk 21: `serve` gets its own `ArgParseSettings` entirely, not just its own fields"
 #     Chunk 18 above gave `serve` real `--host`/`--port`/`--workdir` fields, but it still
 #     shared `build_settings()`/`main` with the data-ops binary (`similarity-search-server
-#     build ...` was technically still reachable). Chunk 21 finished the split PLAN.md's
+#     build ...` was technically still reachable). Chunk 21 finished the split CHANGELOG.md's
 #     "thin, single-purpose serve binary" framing always described: `build_serve_settings`
 #     (`cli.jl`) is a genuinely separate `ArgParseSettings` with exactly `serve`/`interactive`,
 #     and `main_serve` (`SimilaritySearchServer.jl`) is its own entry point, called directly
@@ -26,7 +26,7 @@
 #     `run_interactive_serve` below didn't need to change at all -- it already took
 #     `config_path` as a plain argument, not anything tied to the shared settings object.
 # !!! note "Term.jl is not used -- REPL.TerminalMenus (stdlib) only"
-#     PLAN.md's own warning already found that the locally available `Term.jl` v1.2.0 has
+#     CHANGELOG.md's own warning already found that the locally available `Term.jl` v1.2.0 has
 #     no prompt/menu capability at all (only rendering) and recommended pairing it with
 #     `REPL.TerminalMenus` for the actual interaction loop. This implementation goes one
 #     step further: `Term` isn't even a declared dependency of this project (verified --
@@ -92,7 +92,7 @@ _is_new_id_field(cmd_name::String, dest_name::String) = dest_name == "dataset" &
 
 Scans both on-disk dataset layouts this app has (see `_load_engine_for_job`'s docstring in
 `cli_handlers.jl`): `<workdir>/datasets/*` (HTTP-created) and `<workdir>/*` with a sibling
-`CURRENT` (a RocksDB project directory). This is the dynamic-pre-fill piece PLAN.md's Interactive
+`CURRENT` (a RocksDB project directory). This is the dynamic-pre-fill piece CHANGELOG.md's Interactive
 Mode section requires -- offering real, currently-valid ids instead of a blank field the
 operator has to remember or `describe`/`list` separately first.
 """
@@ -162,7 +162,7 @@ Prompts for one argument, choosing among four presentations, in this priority or
    or for every command (`field_choices`).
 3. A Yes/No menu for a boolean (`:store_true` action) field.
 4. Free text via `readline`, pre-filled *as a shown default*, not an editable inline field
-   -- accepted on a bare Enter, exactly PLAN.md's "shows and accepts its default" wording;
+   -- accepted on a bare Enter, exactly CHANGELOG.md's "shows and accepts its default" wording;
    `REPL.TerminalMenus`/the stdlib have no portable "editable pre-filled text field"
    primitive, so this is the honest, simplest thing that satisfies the actual requirement.
 """
@@ -220,8 +220,8 @@ end
 """
     run_interactive() -> Int
 
-Entry point for the `interactive` subcommand (PLAN.md §1). Gated on a real TTY (the
-PLAN.md-mandated defense-in-depth against a malformed `LocalCLIExecutor`-spawned Job
+Entry point for the `interactive` subcommand (CHANGELOG.md §1). Gated on a real TTY (the
+CHANGELOG.md-mandated defense-in-depth against a malformed `LocalCLIExecutor`-spawned Job
 subprocess deadlocking on `readline`/`request` with no human on the other end, §5.5).
 Command menu → per-argument prompts (in `_command_fields`'s declared order, `--workdir`
 first so dataset-discovery prompts after it can use the workdir the operator actually
@@ -291,7 +291,7 @@ end
 """
     run_interactive_ctl(base_url::String) -> Int
 
-Entry point for `similarity-search-ctl interactive` (PLAN.md §1) -- the `-ctl` counterpart
+Entry point for `similarity-search-ctl interactive` (CHANGELOG.md §1) -- the `-ctl` counterpart
 of `run_interactive()`, gated on the same real-TTY check. `base_url` is already resolved
 by `main_ctl` from `--host`/`--port` (global flags parsed *before* this ever runs, unlike
 `similarity-search`'s per-command `--workdir`), so there is no prompt for it here.
@@ -382,10 +382,10 @@ end
 """
     run_interactive_serve(config_path::String) -> Int
 
-Entry point for `similarity-search-server interactive` (PLAN.md §1) -- the guided form
+Entry point for `similarity-search-server interactive` (CHANGELOG.md §1) -- the guided form
 for `serve`'s own settings. No command menu (unlike `run_interactive`/`run_interactive_ctl`)
 since `serve` is a single-purpose binary with exactly one thing to configure, matching
-PLAN.md's own "the menu degenerates to that one guided form directly" wording. Prompts for
+CHANGELOG.md's own "the menu degenerates to that one guided form directly" wording. Prompts for
 `host`/`port`/`workdir`, each pre-filled with whatever `--config`'s TOML file already
 resolves to (or the hardcoded literal, absent that) -- the same layering `main`'s
 non-interactive `serve` branch applies, so the shown default is honest about what would

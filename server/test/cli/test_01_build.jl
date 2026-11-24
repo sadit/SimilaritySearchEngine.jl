@@ -15,7 +15,7 @@ using JSON3
     @test isfile(joinpath(workdir, "frank_dense", "CURRENT"))   # the project persists itself
 
     # 2. Build Lexical Index (BM25 indexing works; only BM25 *search* is broken
-    # upstream in TextSearch.jl, see PLAN.md checkpoint notes)
+    # upstream in TextSearch.jl, see CHANGELOG.md checkpoint notes)
     cmd_lex = `julia --project=$proj $cli_script build --dataset frank_lex --input $data_path --index-kind bm25_invfile --workdir $workdir`
     @test success(cmd_lex)
     @test isdir(joinpath(workdir, "frank_lex"))

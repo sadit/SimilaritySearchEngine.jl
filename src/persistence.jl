@@ -463,7 +463,7 @@ caller wants `vcat(load_staged_text_blocks(store)...)` for the flat, restore-rea
 load_staged_text_blocks(store::StagedTextStore) = [texts for (_, texts) in store.dict]
 
 # ---------------------------------------------------------
-# The metadata of a dump bundle, as JSON lines (PLAN.md §5.16, phase 9c)
+# The metadata of a dump bundle, as JSON lines (CHANGELOG.md §5.16, phase 9c)
 # ---------------------------------------------------------
 #
 # Until 2026-11-23 this file was `dataset.avro`, written with Avro.jl. It held the same fields,
@@ -474,7 +474,7 @@ load_staged_text_blocks(store::StagedTextStore) = [texts for (_, texts) in store
 """
     DumpRecord
 
-The metadata of one item in the `dataset.jsonl` of a `dump` bundle (PLAN.md §5.16): one JSON
+The metadata of one item in the `dataset.jsonl` of a `dump` bundle (CHANGELOG.md §5.16): one JSON
 line per item, in the order of `_id`. It holds the fields of [`Schema.MetadataRecord`](@ref),
 the `meta` of the item and whether the item is deleted. It does not hold the vector or the text
 of the item: the bundle carries the project itself for that, in `project/`.
@@ -827,7 +827,7 @@ function load_invfile_docvecs(store::InvertedIndexStore)
 end
 
 # ---------------------------------------------------------
-# Partitions of a text project (PLAN.md §5.9)
+# Partitions of a text project (CHANGELOG.md §5.9)
 # ---------------------------------------------------------
 
 """
@@ -835,7 +835,7 @@ end
     PARTITION_MEMBERS_CF
     PARTITION_POSTINGS_CF
 
-The three column families of a partitioned text project (PLAN.md §5.9). A *partition* is the
+The three column families of a partitioned text project (CHANGELOG.md §5.9). A *partition* is the
 set of items whose partition field (one `meta` field, declared per project) holds a given
 value. They are opened with every project, partitioned or not, for the same reason as the
 others: every column family that exists on disk must be listed on every open.
@@ -860,7 +860,7 @@ const PARTITION_POSTINGS_CF = "partition_postings"
 """
     PARTITION_GRAPH_CF
 
-The direct neighbors of the graphs of the partitions of a dense project (PLAN.md §5.10). The
+The direct neighbors of the graphs of the partitions of a dense project (CHANGELOG.md §5.10). The
 key is `[partition number][local id]`, both big-endian, and the value is the ids of the direct
 neighbors, local to the partition, encoded as in [`PARTITION_POSTINGS_CF`](@ref). The reverse
 links are not stored, as for the global graph ([`ADJACENCY_CF`](@ref)).
@@ -1106,7 +1106,7 @@ end
 
 [`assign_partitions!`](@ref) for the items that have no entry in [`PARTITION_MEMBERS_CF`](@ref)
 yet. An item that has one keeps it, its count is not added again, and its numbers are returned
-as they are stored. A partition follower repeats a block after an interruption (PLAN.md §5.11),
+as they are stored. A partition follower repeats a block after an interruption (CHANGELOG.md §5.11),
 and this makes the repetition leave the table and the counts as they were.
 """
 function assign_new_partitions!(store::PartitionStore, first_id::Integer, values::AbstractVector)
@@ -1227,7 +1227,7 @@ can be built around in place of its global lists. It reads `[number][token]` fro
 
 A search over it evaluates only the documents of the partition. Each document gets the score
 the global index gives it, because the index built around these lists keeps the global
-vocabulary, scorer and document vectors (PLAN.md §5.9).
+vocabulary, scorer and document vectors (CHANGELOG.md §5.9).
 """
 struct PartitionPostings <: SimilaritySearch.AbstractAdjList{UInt32}
     store::PartitionStore

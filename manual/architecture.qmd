@@ -437,7 +437,7 @@ A dense project created with `storage=Quantized(SQ(bits))` stores the codes of a
 ### Sketched Dense Indexes
 
 A dense project created with `storage=Sketched(hyperplanes; bits)` stores a sketch of each
-vector instead of the vector (PLAN.md §5.14). The sketch is built by
+vector instead of the vector (CHANGELOG.md §5.14). The sketch is built by
 `SimilaritySearch.Projections`:
 
 - An `AnchoredDistantHyperplanes` model selects `hyperplanes` pairs of vectors of a sample, the
@@ -579,7 +579,7 @@ Before 2026-11-18, neither was saved. A reopened graph searched with the default
 
 ## Leader and Follower Datasets
 
-A **follower** is a dataset that organizes the items of another dataset, its **leader** (issue #5, `server/PLAN.md` §5.11). It reads the items of the leader and does not copy them. It stores its own structure, expressed with the `_id`s of the leader. A leader can have several followers, and each one is created, rebuilt and deleted without a change to the items of the leader.
+A **follower** is a dataset that organizes the items of another dataset, its **leader** (issue #5, `CHANGELOG.md` §5.11). It reads the items of the leader and does not copy them. It stores its own structure, expressed with the `_id`s of the leader. A leader can have several followers, and each one is created, rebuilt and deleted without a change to the items of the leader.
 
 The engine includes the framework of followers and two kinds, the partition follower and the keyword follower, since 2026-11-22.
 
@@ -657,7 +657,7 @@ Processing a block again gives the same structures. The members of an item that 
 
 ## Events of a Project
 
-An **event** is a change of a project that a consumer can need to act on (`server/PLAN.md` §5.15). An **observer** is a consumer of the events of a project. The engine reports events since 2026-11-23, and the followers are observers of their leader.
+An **event** is a change of a project that a consumer can need to act on (`CHANGELOG.md` §5.15). An **observer** is a consumer of the events of a project. The engine reports events since 2026-11-23, and the followers are observers of their leader.
 
 There is one kind of event, `ItemsIndexed(sp, ep)`: the items with `_id` from `sp` to `ep` became searchable.
 

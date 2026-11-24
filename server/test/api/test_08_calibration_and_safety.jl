@@ -15,7 +15,7 @@ using JSON3
 
         # 1. Before any calibrate call, the baseline reported is the library's own
         # BeamSearch() default -- construction no longer autotunes on its own
-        # (PLAN.md §5.6's warning about the two mechanisms fighting), so this is the real
+        # (CHANGELOG.md §5.6's warning about the two mechanisms fighting), so this is the real
         # bootstrap value, not a placeholder.
         resp = HTTP.get("$base_url/datasets/calib_test_ds")
         @test resp.status == 200
@@ -67,7 +67,7 @@ using JSON3
         @test !any(h -> h.first == "X-Beamsearch-Warning", resp.headers)
 
         # 6. An override ABOVE baseline but within the 3x safety multiplier -> allowed,
-        # with a warning header (PLAN.md §3's "log WARN + return an HTTP warning header").
+        # with a warning header (CHANGELOG.md §3's "log WARN + return an HTTP warning header").
         resp = HTTP.post("$base_url/datasets/calib_test_ds/search", [], JSON3.write(Dict(
             "vector" => docs[1].vector, "k" => 5,
             "beamsearch_overrides" => Dict("bsize" => baseline.bsize * 2),

@@ -1,4 +1,4 @@
-# Partition followers (PLAN.md §5.11, issue #5, phase 3).
+# Partition followers (CHANGELOG.md §5.11, issue #5, phase 3).
 #
 # A partition follower holds the structures that the partitions of §5.9 and §5.10 hold inside a
 # project: the partition table, the members of each partition, and either the posting lists of
@@ -11,7 +11,7 @@
     PartitionFollower(source::KeySource; disjoint=true, graph_min=nothing)
 
 A follower that divides the items of its leader into partitions, one per key of `source`
-(PLAN.md §5.11). For example `PartitionFollower(MetaValue("repo"))` makes one partition per value
+(CHANGELOG.md §5.11). For example `PartitionFollower(MetaValue("repo"))` makes one partition per value
 of `meta["repo"]`. An item without a key belongs to no partition.
 
 - `disjoint=true`: an item has at most one key, and an item with several keys raises
@@ -183,7 +183,7 @@ end
     search(v::FollowerView, vector, k=10; filter=nothing, minrecall=nothing, candidates=2k, stats=nothing)
         -> Vector{SearchResult}
 
-Searches the partition `v.value` of a partition follower of a dense leader (PLAN.md §5.11). The
+Searches the partition `v.value` of a partition follower of a dense leader (CHANGELOG.md §5.11). The
 results are items of the leader, with the distances of the global search. A partition with fewer
 than `graph_min` members, and every partition of an exact leader, is scanned. A larger one uses
 its own graph, and `minrecall` uses its calibrated levels (see [`calibrate!`](@ref)). `filter`,
@@ -198,7 +198,7 @@ function search(v::FollowerView, vector, k::Int=10; filter=nothing, minrecall=no
         "search takes a vector; the leader '", leader.dataset, "' holds text, so search its partitions with ftsearch")
     query = _search_query(engine, vector)
     # A sketched leader with a second evaluation scores `rerank * k` candidates again with its
-    # own distance, as its `search` does (PLAN.md §5.14).
+    # own distance, as its `search` does (CHANGELOG.md §5.14).
     r = _rerank_factor(engine)
     kk = r == 0 ? k : r * k
     n = filter === nothing ? kk : max(candidates, kk)
@@ -213,7 +213,7 @@ end
     ftsearch(v::FollowerView, query, k=10; policy=QueryPolicy(), filter=nothing, candidates=2k, stats=nothing,
              minrecall=nothing) -> Vector{SearchResult}
 
-Searches the partition `v.value` of a partition follower of a text leader (PLAN.md §5.11). Only
+Searches the partition `v.value` of a partition follower of a text leader (CHANGELOG.md §5.11). Only
 the documents of the partition are evaluated, and each gets the score that the global search
 gives it, because the search uses the vocabulary, the scorer and the document vectors of the
 leader. The arguments work as in the `ftsearch` of the leader.
@@ -290,7 +290,7 @@ end
     migrate_partitions!(leader::EmbeddedEngine, name; disjoint::Bool) -> Follower
 
 Moves the partitions inside a project, declared with `PartitionBy` or `declare_partition!`, to a
-[`PartitionFollower`](@ref) named `name` (PLAN.md §5.11). It is an explicit step: no other
+[`PartitionFollower`](@ref) named `name` (CHANGELOG.md §5.11). It is an explicit step: no other
 function migrates a project.
 
 The follower is `PartitionFollower(MetaValue(field); disjoint, graph_min)`, with the field and,

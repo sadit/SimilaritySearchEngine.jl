@@ -86,7 +86,7 @@ using Dates
     @test resp.status == 200
     body = JSON3.read(String(resp.body))
     @test isempty(body.jobs_purged)
-    # The server has no result cursors since 2026-11-23 (PLAN.md §5.16), so gc reports none.
+    # The server has no result cursors since 2026-11-23 (CHANGELOG.md §5.16), so gc reports none.
     @test !haskey(body, :cursors_expired) && !haskey(body, :cursors_purged)
     @test first(Jobs.get_job(job_mgr, ok_job)) == Jobs.Completed
     @test first(Jobs.get_job(job_mgr, failed_job)) == Jobs.Failed
@@ -100,7 +100,7 @@ using Dates
     @test first(Jobs.get_job(job_mgr, ok_job)) === nothing
     @test first(Jobs.get_job(job_mgr, failed_job)) === nothing
 
-    # --- single-dataset unload / reload (PLAN.md §5.7's flagged open issue) ------
+    # --- single-dataset unload / reload (CHANGELOG.md §5.7's flagged open issue) ------
 
     with_test_server() do base_url, workdir
         resp = HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "admin_reload_ds", "index_type" => "searchgraph", "distance" => "L2")))

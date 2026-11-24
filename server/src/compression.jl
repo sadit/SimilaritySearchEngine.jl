@@ -1,4 +1,4 @@
-# Compression of the responses (PLAN.md §5.16). Included in `module Server`.
+# Compression of the responses (CHANGELOG.md §5.16). Included in `module Server`.
 #
 # A middleware compresses a response body with gzip when the request accepts it and the body
 # has at least `[server] gzip_min_bytes` bytes. The handlers do not change. The result of a job
@@ -48,7 +48,7 @@ _headers_without_length(res::HTTP.Response) =
 """
     gzip_middleware(min_bytes::Integer) -> Function
 
-The middleware of `serve` that compresses a response with gzip (PLAN.md §5.16). It compresses
+The middleware of `serve` that compresses a response with gzip (CHANGELOG.md §5.16). It compresses
 when the request accepts gzip, the response has no `Content-Encoding`, and its body is held
 in memory and has at least `min_bytes` bytes. It sets `Content-Encoding: gzip` and
 `Vary: Accept-Encoding`. It runs after the handlers and their authorization, so it also

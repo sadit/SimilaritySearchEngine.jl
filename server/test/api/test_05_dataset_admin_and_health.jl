@@ -6,7 +6,7 @@ using JSON3
     with_test_server() do base_url, workdir
         root_url = replace(base_url, "/api/v1" => "")
 
-        # 1. Health/readiness/metrics don't live under /api/v1 (PLAN.md §5.8).
+        # 1. Health/readiness/metrics don't live under /api/v1 (CHANGELOG.md §5.8).
         @test HTTP.get("$root_url/healthz").status == 200
         @test HTTP.get("$root_url/readyz").status == 200
 
@@ -28,7 +28,7 @@ using JSON3
         resp = HTTP.post("$base_url/datasets/admin_test_ds/delete", [], JSON3.write(Dict("_id" => 1)))
         @test resp.status == 200
 
-        # 2b. /metrics now carries the counters the operation log feeds (PLAN.md §5.8): the
+        # 2b. /metrics now carries the counters the operation log feeds (CHANGELOG.md §5.8): the
         # append and the delete above are in it, with their dataset and their operation.
         metrics_body = String(HTTP.get("$root_url/metrics").body)
         @test occursin("simsearch_requests_total{dataset=\"admin_test_ds\",operation=\"append\"} 1", metrics_body)
@@ -56,7 +56,7 @@ using JSON3
         @test detail.tombstone_ratio ≈ 0.2
         @test !haskey(detail, :join_group)
 
-        # 5. Unknown dataset -> 404; path-unsafe id -> 400 (PLAN.md §4.6's path-safety warning).
+        # 5. Unknown dataset -> 404; path-unsafe id -> 400 (CHANGELOG.md §4.6's path-safety warning).
         resp = try
             HTTP.get("$base_url/datasets/does_not_exist")
         catch e
@@ -81,7 +81,7 @@ using JSON3
         @test by_id["999"].exists == false
         @test by_id["frankenstein_2"].exists == true && by_id["frankenstein_2"].deleted == false
 
-        # 7. GET .../log (PLAN.md §1's admin `log` command, backs `similarity-search-ctl
+        # 7. GET .../log (CHANGELOG.md §1's admin `log` command, backs `similarity-search-ctl
         # log`): Telemetry.log_operation is now wired into search/append/ftsearch/delete,
         # so this dataset's append+delete above (plus a search here) already left real
         # op_log entries -- newest first, real distance-evaluation/timing/token fields.

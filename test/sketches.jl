@@ -1,4 +1,4 @@
-# Sketched dense projects (PLAN.md §5.14): a dense project that stores the sketches of an
+# Sketched dense projects (CHANGELOG.md §5.14): a dense project that stores the sketches of an
 # AnchoredDistantHyperplanes model, encoded by a QuantSketch at 1, 2, 4 or 8 bits per hyperplane.
 
 import SimilaritySearch

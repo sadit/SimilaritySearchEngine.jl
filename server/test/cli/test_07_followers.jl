@@ -1,7 +1,7 @@
 using Test
 using JSON3
 
-# The follower commands of `similarity-search` (PLAN.md §5.12, issue #5, phase 5b), run in this
+# The follower commands of `similarity-search` (CHANGELOG.md §5.12, issue #5, phase 5b), run in this
 # process: `follower-create`, `follower-list`, `follower-sync`, `follower-rebuild`,
 # `follower-delete`, `migrate-partitions`, `postings` and `searchbatch --follower`, and
 # `describe`, `rebuild`, `dump` and `load` of a dataset with followers.
@@ -159,7 +159,7 @@ using JSON3
     # The partitions are no longer in the dataset.
     @test first(cli("searchbatch", "--dataset", "dn", "--queries", vq, "--output", tempname(), "--partition", "odd", w...)) != 0
 
-    # --- plugins (PLAN.md §5.13) ---------------------------------------------------------
+    # --- plugins (CHANGELOG.md §5.13) ---------------------------------------------------------
     # `--config` names the file whose `[plugins]` the commands that open a follower load.
     cfg = joinpath(workdir, "config.toml")
     plugin_file = joinpath(@__DIR__, "..", "plugins", "sse_test_plugin.jl")

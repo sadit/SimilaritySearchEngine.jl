@@ -1,4 +1,246 @@
-# Technical Specification: SimilaritySearchServer API
+# Changelog
+
+This file records how the three packages of this repository changed, and why.
+[`PLAN.md`](PLAN.md) describes the state of the packages at one date and the planned work. When
+a cleanup of `PLAN.md` removes text, the text moves to this file without changes. Nothing is
+removed from this file.
+
+## How This File Is Organized
+
+- "Commits by Date" lists every commit of the repository. A cleanup of `PLAN.md` adds the
+  commits since the previous cleanup.
+- "PLAN.md until 2026-11-24" is the text of `server/PLAN.md` before the first cleanup. It holds
+  the first specification of the server (§1 to §9, written from 2026-08), the status of its
+  implementation and the list of work items (§0), and the designs §5.9 to §5.16, written from
+  2026-11-09 to 2026-11-23. Each design has its phases and its "As built" part.
+- "DEVELOPMENT_STRATEGY.md until 2026-11-24" is the text of that file before the first cleanup.
+- "server/test/TEST_PLAN.md until 2026-11-24" is the text of that file before the first cleanup.
+- A later cleanup adds a part with the text that it removes from `PLAN.md`.
+
+The text of each part is kept as it was written. Many passages describe a design that a later
+section replaced: §0 and the "As built" part of each design say what was built. Some paths in
+the text no longer exist. `server/PLAN.md` became this file and `PLAN.md`.
+`DEVELOPMENT_STRATEGY.md` became a section of `PLAN.md`. `server/test/TEST_PLAN.md` became a
+part of this file. `docs/manual.md` became the manual in `manual/`.
+
+## How to Cite a Section
+
+- The code, the tests and the manual cite a section as `CHANGELOG.md §5.16`. The heading of
+  that section starts with `§5.16.`.
+- An item of the list of work of §0 is cited as `CHANGELOG.md §0, item 11`.
+- A section number never changes, and it is never used again. A design that a cleanup moves to
+  this file keeps the number that it had in `PLAN.md`.
+
+## Commits by Date
+
+The newest date is first. Within a date, the newest commit is first. The subjects are as they
+were written: a reference `PLAN.md §N` in a subject is the section §N of this file.
+
+### 2026-11-24
+
+- The first cleanup of `PLAN.md`, without a commit yet when it was written: `PLAN.md` and
+  `CHANGELOG.md` at the root of the repository, in place of `server/PLAN.md`.
+  `DEVELOPMENT_STRATEGY.md` became the section "Development Strategy" of `PLAN.md`. The
+  references `PLAN.md §N` of the code, the tests and the manual became `CHANGELOG.md §N`.
+  `server/test/TEST_PLAN.md` became a part of this file. `server/docs/README.md` was
+  removed: `README.md` has the same links to the manual of the server.
+- `2aa0be7` Mark item 2 of PLAN.md done, and fix the docstring of descriptor_path
+- `8ad5079` Write the metadata of a dump bundle as JSON lines in place of Avro (PLAN.md §5.16, phase 9c)
+
+### 2026-11-23
+
+- `342bc1b` Answer each search in one response, limited by max_k, and compress responses (PLAN.md §5.16, phases 9a and 9b)
+- `3b16ef6` Design responses without cursors and JSON lines in place of Avro (PLAN.md §5.16)
+- `c77ce65` Update the README: test counts, test files, followers and events
+- `ba79a63` Add the events of a project, with the followers as observers (PLAN.md §5.15, phases 8a and 8c)
+- `da98bf9` Design the events of a project in PLAN.md §5.15 (the event dispatcher of issue #5)
+- `0160086` Document the storage of dense vectors and sketched projects (PLAN.md §5.14, phase 7c)
+- `58b54f4` Expose the storage of dense datasets in the server and the clients (PLAN.md §5.14, phase 7b)
+- `2030ada` Add sketched dense projects to the engine (PLAN.md §5.14, phase 7a)
+- `2917cec` Update the test counts of the server manual after phase 6
+- `e450722` Add plugins to the command lines, the clients and the manual (issue #5, phase 6b)
+- `5e088e5` Queue binary sketches after phase 6 of issue #5 in PLAN.md
+- `718105c` Load plugins in serve, and log a follower that stops (issue #5, phase 6a)
+- `f7dc285` Design plugins in the server in PLAN.md §5.13 (issue #5, phase 6)
+- `78808b5` Document followers in the server manual and tutorial (issue #5, phase 5d)
+- `905d8c4` Add followers to the Julia and Python clients (issue #5, phase 5c)
+- `d0dce18` Add follower commands to both command lines (issue #5, phase 5b)
+- `fb665c5` Expose followers in the server (issue #5, phase 5a)
+
+### 2026-11-22
+
+- `4d2944d` Design followers in the server in PLAN.md §5.12 (issue #5, phase 5)
+- `7f145a2` Add the keyword follower and posting_list (issue #5, phase 4)
+- `1630d15` Add the partition follower (issue #5, phase 3)
+- `42f835e` Add the framework of follower datasets (issue #5, phase 2)
+- `395d42f` Design leader and follower datasets in PLAN.md §5.11 (issue #5)
+- `ead817e` Stop indexing keywords: they are metadata (issue #5, phase 1)
+- `ad55809` Store the vectors of an exact Float32 project in its vector file (issue #3)
+- `5d569bd` Raise ProjectClosed on a closed project handle (issue #4)
+
+### 2026-11-21
+
+- `cab1389` Make the getting-started tutorial run as written; describe specs in the manuals
+- `9f0b1ce` Describe a project with a composed spec instead of keywords (issue #2)
+
+### 2026-11-20
+
+- `1dc5e62` Store dense vectors as scalar-quantized codes (issue #1, engine)
+- `2116d27` Move the GitHub Actions to their Node 24 versions
+- `02be6ff` Install Julia before running CompatHelper, for all three packages
+- `1a0801b` Add jobs and cursors to the Julia client; select test files by name or tag
+
+### 2026-11-19
+
+- `dfe681d` Add SimilaritySearchClient, a Julia client of the HTTP API
+- `2cd5635` Expose dense partitions in the server, the CLI and the Python client
+
+### 2026-11-18
+
+- `6f0c706` Add partitions to dense projects
+- `30e260c` Keep a graph's beam search and hints across a reopen; plan dense partitions
+
+### 2026-11-10
+
+- `cc5e336` Accept a filter, a candidate budget and a token list in ftsearch
+- `ea86f59` Remove join groups and add ftsearch_fields to the Python client
+- `fd68e8a` Measure partition search over the ReposMx corpus
+- `837583b` Add partitioned text indexes
+
+### 2026-11-09
+
+- `138087c` Plan partitioned text indexes and the removal of join-group keys
+- `e2ab437` Require SimilaritySearch 1.6.11
+
+### 2026-10-24
+
+- `a2f881b` Refit the tutorial profiles and render paragraph-search again
+- `76a2cd7` Require SimilaritySearch 1.6.8
+
+### 2026-10-13
+
+- `4dde132` Refuse a negative or NaN neardup radius with InvalidOption
+- `1ab069a` Report the recall that calibrate! reaches, with a bootstrap interval
+- `77c9e5f` Require SimilaritySearch 1.6.5
+- `dabdc76` Store an item that has no doc_id
+
+### 2026-09-28
+
+- `c9b0d7d` Require TextSearch 1.3
+
+### 2026-09-24
+
+- `7312b74` Hand JSON3.read bytes, never a String it may open as a file
+- `2b195f7` Give searchbatch an --edit-correction flag
+- `eb5a39c` Let a text dataset turn on edit correction through the server
+- `b7577bb` Move to SimilaritySearch 1.5.1 and TextSearch 1.2.1, and offer edit correction
+
+### 2026-09-16
+
+- `8bae7f9` Tell Documenter where the repository is, not just how to link into it
+
+### 2026-09-15
+
+- `1f4e88b` Name the package a type comes from, in the server's own words
+- `67cc642` Drop JSON.jl: the server uses JSON3 and always did
+- `7c2dd4b` Give every server dependency a version bound
+- `5b064ee` Say :dynamic, now that saying it is allowed
+- `7443c66` Let the reference show constants and macros, not only types and functions
+- `075502f` Stop asking Julia for a schedule it refuses to give twice
+- `9eb0153` Size a context for the work it does
+- `f4b5252` Bound how many searches run at once
+
+### 2026-09-14
+
+- `684decb` Resolve the docs environment before building the reference
+- `562ade2` Record who made a request, not what they presented
+- `871bb4b` Name an item the same way everywhere on the wire
+- `2449d81` Bound the vocabulary scan, and document what every endpoint answers
+- `fa4f64f` Measure what a text project's vocabulary does not cover
+
+### 2026-09-13
+
+- `ee91116` Let a project declare what its metadata holds
+- `3078deb` Report the operation log's own numbers on /metrics
+- `db784bc` Give job execution the thread budget config.toml already promised
+- `13afb92` Enforce authentication, and move the routes under the dataset they act on
+- `0b8d670` Finish removing JLD2, and record the implementation status in PLAN.md
+- `0b1379e` Rebuild the tutorial corpora projects and render paragraph-search
+- `2a6ad28` Record the documentation's prose conventions in AGENTS.md
+- `10a0805` Rewrite the manual's prose for readers who do not read English natively
+
+### 2026-09-12
+
+- `e4af433` One site for the two packages: manual at the root, reference at /api/
+- `15b22c8` Turn the manual's @ref links into links that resolve
+- `55cf230` Document SearchStats across the manual, the tutorial and the READMEs
+- `cae8a9f` Fix the eight red tests in the server's full suite
+- `0e11060` Update the documentation for the monorepo, the typed errors, and the port
+- `f8cfa78` Test on Julia 1.12 only, and promise only that
+- `a6a50e2` Bring the server in as a subpackage, and port it onto the public API
+- `cb68bda` Type the engine's errors, and split its suite into light and full
+- `3d92b3c` Persist the text index instead of recomputing it on every open
+- `32c5b21` Compact on close, index doc_id, batch queries, and precompile the first call
+- `a0f00a9` Add the license, CI workflows and the compat the code actually needs
+
+### 2026-09-09
+
+- `77eff34` Rebuild InvertedFile/BM25InvertedFile/TextInvertedFile via batch append_items!
+- `712038f` Parallelize build_searchgraph's id-loading loop on restore
+- `c55366b` Resolve to SimilaritySearch 1.4.1, fix a real concurrency bug in the 6 bulk ops
+
+### 2026-08-26
+
+- `ff42298` Expose dnet and neardup selection operations and update TextSearch profile integrations
+
+### 2026-08-25
+
+- `60653d6` Rewrite manual and tutorials for formal clarity and accessible explanations
+- `7cb9d34` Say `engine` and `backend` in the docs that still said `index_type`
+- `3a9c83b` Rebuild the tutorial on English and Spanish, and re-render the manual
+- `9639464` Update the documentation for the engine/backend split
+- `ce3a403` Open the restructured engines through create_project
+- `268a09a` Restructure the engines by what they index, not by which index holds it
+- `614d3aa` Stop assembling queries here; the library's pipeline does it
+- `2d2b960` Add SparseItem, so sparse data has a door that is not text
+- `21d4b17` Record that package users are an audience, not just the server
+- `5e7e02d` Take every default off the internals, and enforce it with a test
+
+### 2026-08-24
+
+- `6e50d2c` Fix every unresolved doc reference, including the two the log adoption created
+- `dbfdca6` Flush the dense store explicitly, now that its durability is opt-in
+- `9292c81` Restate FFTResult over the library's CenterSelection
+- `1f5f039` Drop FileLog, CallbackLog and _engine_logger in favor of the two slots
+
+### 2026-08-23
+
+- `64ef804` Link the reference and the manual to each other
+- `20ff92e` Add publish-docs.sh, and say where the documentation lives
+- `84790dc` Commit the rendered manual, because no CI can render it
+- `77b2207` Delegate profile fitting to the library, and default to a refitted language profile
+- `99bb45f` Route queries through TextSearch's query pipeline instead of assembling one
+- `5736774` Add the paragraph-search tutorial: four real corpora, three languages
+- `31b2793` Take typed values in and hand typed values back
+- `40a9fa1` Move the engine onto TextSearch 1.1's text model, and make the choice explicit
+
+### 2026-08-19
+
+- `bf9162e` Sync manual/index.qmd with the staging/indexing and whole-dataset-ops redesign
+- `1e7ef58` Decouple SearchGraph staging from indexing; redesign Schema/Project; sync docs
+
+### 2026-08-18
+
+- `80eab85` Fix broken mermaid sequence diagram in architecture.qmd
+- `be9b8c6` Refactor engine architecture, incremental persistence, and add docs
+- `3d763b4` Initial commit: SimilaritySearchEngine.jl (PLAN.md §8.5)
+
+## PLAN.md until 2026-11-24
+
+The text of `server/PLAN.md` at commit `2aa0be7`. Only the levels of the headings changed, and a
+§ before each section number.
+
+**Technical Specification: SimilaritySearchServer API**
 
 !!! warning "Read this as a specification with a date on it (2026-09-12)"
     This document is the design record of the HTTP API, the job model, tokens, cursors and
@@ -24,7 +266,7 @@
     disagree, that one is right.
     Treat this as the standing default for "what's next" until told otherwise.
 
-## 0. Implementation status (read on 2026-09-13)
+### §0. Implementation status (read on 2026-09-13)
 
 What follows was obtained by reading the code on that date, not by reading this document.
 Section 9 below is the roadmap this specification proposed; this section reports which parts
@@ -42,7 +284,7 @@ of it exist.
 | 6. Scripting packages | two of three | The Python client exists (`client`, `async_client`, `jobs.run_job`, `cursors`, `stress_client.py`). The Julia client (§8.3) exists since 2026-11-19 in `julia/`, as `SimilaritySearchClient`, with jobs and cursors and without the administration routes. §8.5, access without HTTP, is provided by the engine itself. The Node package (§8.4) was never started. |
 | §3. Long-lived search policy | not implemented | `long_query_policy = "deny"` is in `config.toml` and no code reads it. No request is answered with 429, and no search is converted into a job. |
 
-### Pending work, in the order it is being addressed
+#### Pending work, in the order it is being addressed
 
 1. ~~**Authentication (§4.1).**~~ Done on 2026-09-13. `[auth] enabled` in `config.toml`,
    false by default. With it enabled, every `/api/v1` endpoint requires a token and
@@ -648,7 +890,7 @@ and the policy applies orthographic correction and expansion to each query. Pass
 that describe `StemmerRegistry`, a `stemmer` field of `TextConfig`, or `Snowball` as a
 dependency describe a design that was not built and will not be.
 
-## 1. System Overview & Application Architecture
+### §1. System Overview & Application Architecture
 
 `SimilaritySearchServer` is a high-performance, vector and full-text search engine built on top of `SimilaritySearch.jl` (v1.2.0) and `TextSearch.jl` (v1.1.0). The system is designed to provide both standard vector database integration and advanced topological graph operations through a robust CLI and HTTP REST API. Both interfaces are almost equivalent and can do almost the same operations, but going coherent with their medium design; one important difference is that cli don't need tokens to access indexes and datasets.
 
@@ -750,7 +992,7 @@ Use local packages to provide faster access and development connection
     **Scoped down, on purpose**: `log` (no HTTP endpoint proxies the `*_log` RocksDB column families at all yet), `dump`/`load` (chunk 10 shipped these as `similarity-search` CLI-only commands, not as Jobs/HTTP endpoints `-ctl` could call — see §4.4's own resolved note), and `prune-tokens`/`log-tokens` (no HTTP endpoints exist for either) are not implemented — each needs its own prerequisite server-side work first, not just a `-ctl` subcommand.
 * We need a simple stress-client to test most of the features automatically (cli that access/stresses the WEB API)
 
-### Interactive Mode (Term.jl-guided CLI, new)
+#### Interactive Mode (Term.jl-guided CLI, new)
 
 Both `similarity-search` and `similarity-search-serve` must offer an **interactive mode** alongside their normal flag-driven invocation: a guided session where every command the binary supports is reachable from a menu, and every argument/option of the chosen command is presented as a prompt **pre-filled with a sensible default** rather than a blank field the operator has to fill from memory.
 
@@ -787,7 +1029,7 @@ Both `similarity-search` and `similarity-search-serve` must offer an **interacti
 
     **Testing note:** the actual `RadioMenu`/`request` keypress loop cannot be driven from a non-interactive test harness (no real TTY available), and both `run_interactive`/`run_interactive_ctl`'s own gates deliberately refuse to even try under one — this is by design, not a coverage gap to close later. Everything *up to* that loop (`_command_menu_names`, `_command_fields`, `_discover_dataset_ids`, `_convert_value`, `_format_invocation`/`_format_ctl_invocation`, the `CLI_CHOICES`/`range_tester` validation, the TTY gate itself, and — for `-ctl` — `dispatch_ctl_command` fed the exact reconstructed `{"%COMMAND%" => ..., ...}` shape the interactive path would build) is unit-tested directly; the loop's manual verification is necessarily the limit of what can be automated here.
 
-### Data architecture
+#### Data architecture
 
 - It works on a working directory, all datasets, indexes, logs, etc are under this working directory, by default the directory where it was launched
 - It works on foreground mode, sending log outputs to console, yet also saving them in RocksDB.jl datasets
@@ -809,7 +1051,7 @@ Both `similarity-search` and `similarity-search-serve` must offer an **interacti
 
 - Since each dataset now backs exactly one index, operations that used to need disambiguation ("which index on this dataset?") no longer do; the only remaining disambiguation is at the *fetch/join* layer above — the operator must specify which dataset in a join group is the metadata-holding one when it isn't the obvious default.
 
-## 2. Concurrency & Resource Management
+### §2. Concurrency & Resource Management
 
 The system is built to maximize hardware utilization while preventing resource exhaustion during heavy analytical queries.
 
@@ -826,7 +1068,7 @@ The system is built to maximize hardware utilization while preventing resource e
 
 **Resolved design:** `serve` starts with a fixed core/thread split, configurable but defaulting to **80% for standard query traffic / 20% reserved for Job execution** (`--query-threads-pct 80`). The 80% pool is the in-process `:dynamic` scheduler described above, serving `search`/`ftsearch`/`upsert` etc. directly. The 20% pool is *not* used to run heavy library calls in-process — it bounds how many concurrent Job executions (§5.5) may run at once, each one dispatched as its own CLI subprocess capped to that thread budget (`JULIA_NUM_THREADS=<reserved_threads>`). This turns "pause everything" into a hard, sized ceiling instead of an all-or-nothing stall, and — because Job execution is just "run the CLI command" — the exact same split and executor abstraction is what allows migrating heavy Job execution off-box to Slurm (`sbatch`/`srun`) later without changing the Job registry, the HTTP surface, or the CLI commands themselves. See §5.5 for the executor design.
 
-## 3. Core Engine & Distance Resolution
+### §3. Core Engine & Distance Resolution
 
 * **Distance Registry Module:** Distance function resolution must be isolated in a dedicated internal module (e.g., `DistanceRegistry`).
 * String-to-distance resolution must be executed safely via `getproperty(DistanceRegistry, Symbol(distance_name))`.
@@ -850,18 +1092,18 @@ The system is built to maximize hardware utilization while preventing resource e
 
 * **Long-Lived Search Policy:** Independently of the per-request `bsize`/`maxvisits` multiplier barrier above, the server must support a configurable policy for *denying* searches whose estimated cost (in distance evaluations, derived from the same calibrated baseline) exceeds an operator-set threshold, rather than only warning about them. Default behavior: **deny with HTTP `429`** before execution, with a response body pointing the client at `POST /api/v1/jobs/search` (see §5.5) to resubmit the same query as an async Job instead of a blocking call. This applies to any endpoint that triggers a synchronous index traversal (`/simsearch/{index}/search`, `/simsearch/ftsearch`, hybrid search) — the policy lives here, at the Core execution barrier, so it isn't duplicated per endpoint. The policy mode itself (`deny | warn_only`) should be a workdir-level config, not hardcoded, since a trusted internal deployment may prefer `warn_only`.
 
-## 4. Telemetry, and Persistence
+### §4. Telemetry, and Persistence
 
 The system tracks resource usage comprehensively for billing and performance monitoring, utilizing `RocksDB.jl` for persistence.
 
-### 4.1. Identity Model
+#### §4.1. Identity Model
 
 The system is limited to resources given as running input; we can use julia and linux tools for this. Access control to operations and indexes are driven by tokens, and handled by CLI and WEB interface for admin.
 
 * **Index Entity:** Contains `index_uuid`.
 * **Identity is handled via tokens:**, a token comprises user and index access; a token is a validated dataset of keys and ACL (operations and index permisions); it must be managed via a dedicated RocksDB table; global for the running server (workdir).
 
-### 4.2. Database Design (`RocksDB.jl`)
+#### §4.2. Database Design (`RocksDB.jl`)
 
 Data is isolated using distinct Column Families in RocksDB, one per index/dataset; one directory in the working dir (pattern workingdir/data/{uuid-of-the-project-as-rocksdb-dbname})
 
@@ -887,7 +1129,7 @@ Data is isolated using distinct Column Families in RocksDB, one per index/datase
     - **`property(db, name; cf=...)`** — cheap per-CF introspection (e.g. `"rocksdb.estimate-num-keys"`, `"rocksdb.stats"`) usable by `describe`/`stats` without a full scan.
     - **Known gap to plan around: `ColumnFamily` handles are never explicitly destroyed** (no caller of `rocksdb_column_family_handle_destroy`) — a native-handle leak on every CF open/close cycle. This spec's design creates CFs dynamically and somewhat often (`meta_idx_<field>` per newly-declared-and-indexed metadata field, per-dataset CFs on every `POST /api/v1/datasets`, deleted on every `DELETE /api/v1/datasets/{uuid}`) — a long-running `serve` process that sees a lot of dataset/schema churn should be assumed to leak native memory until this is fixed upstream or worked around; track it as an operational risk, not just a code-quality nit.
 
-### 4.3. Callback-Driven Logging & Accounting
+#### §4.3. Callback-Driven Logging & Accounting
 
 * **Event Handling:** Telemetry and graph persistence are strictly implemented via the native `LOG` callback handler provided by `SimilaritySearch.jl` v1.0.0.
 * **Usage Accounting (`op_log`):**
@@ -903,7 +1145,7 @@ Data is isolated using distinct Column Families in RocksDB, one per index/datase
 !!! warning "The `LOG` callback is coarser than a per-edge topology diff stream"
     Verified against `SimilaritySearch.jl` source (`src/log.jl`, `src/searchgraph/log.jl`): `LOG(log, event, index, ctx, sp, ep)` fires on graph-growth operations with a *range* `sp:ep` of affected ids — it's a throttled progress/telemetry hook (used by the built-in `InformativeLog` to print memory/size summaries, and by a `SearchGraph`-specialized override to additionally report neighborhood-size quantiles), not a structured per-edge "edge (i,j) added" event stream. The `:add!` event symbol is confirmed to fire this way; whether `:push_item!`/`:append_items!` fire their own distinct `LOG` events (versus `:add!` being the one event name used internally for both) wasn't confirmed at the call site and should be spot-checked against `src/searchgraph/insertions.jl` during implementation rather than assumed from this spec. Either way, treat `LOG` as the trigger point at which *this application* reads the current state of `index.adj[sp:ep]` and writes those neighbor arrays to `searchgraph_log` itself — the library doesn't hand you a topology diff, you compute it by reading the affected range at each callback invocation.
 
-### 4.4. Persistence Layer (JLD2 for index snapshots, Avro for datasets & wire format)
+#### §4.4. Persistence Layer (JLD2 for index snapshots, Avro for datasets & wire format)
 
 !!! warning "Replaced on 2026-11-23 by §5.16, phase 9c"
     `dump` writes the metadata of the items as JSON lines, `dataset.jsonl`, and Avro is not a
@@ -946,7 +1188,7 @@ Data is isolated using distinct Column Families in RocksDB, one per index/datase
     - **`manifest.json`** carries `index_kind`/`distance`/`meta_schema`/`edit_correction`/`record_count`/`dumped_at` — read from the source's `descriptor.json` when one exists (HTTP-created datasets), or best-effort derived from the live engine object when it doesn't (CLI-built datasets, which never write a `descriptor.json` at all — the same two-layout gap the CLI's `describe`/`rebuild` already work around). `load` always targets the HTTP layout (`<workdir>/datasets/{id}/`) and always writes a fresh `descriptor.json` from the manifest, so a loaded dataset is immediately visible to `Server.reload_datasets!`/`GET /api/v1/datasets` with no extra step, regardless of which layout the original dump came from.
     - **Resolved: wired as a Job/HTTP surface** — `POST /api/v1/jobs/dump` (`{"dataset": "<source-id>"}`) and `POST /api/v1/jobs/load` (`{"bundle": "<bundle-dir>", "dataset": "<new-target-id>"}`) join `HEAVY_JOB_KINDS` alongside `allknn`/`fft`/`neardup`/`hsp`, dispatching to the exact same `execute_dump`/`execute_load` CLI functions above via `Executors.submit` — no new CLI code, just the friendly-params-body translation `build_heavy_job_command` already does for the other four kinds. `dump`'s result is a bundle *directory*, not a single file like every other `HEAVY_JOB_KINDS` result — `GET /api/v1/jobs/{id}/result` special-cases a directory `result_ref` and returns `{"bundle_dir": ..., "manifest": {...}}` (the parsed `manifest.json`) instead of streaming raw bytes; `load`'s `result_ref` points at the new dataset's `descriptor.json`, which *is* a plain file and streams normally. Composes with the existing `POST /api/v1/admin/datasets/{id}/reload` (§5.7) to bring a job-loaded dataset live with no `serve` restart — the same flow `test/api/test_12_dump_load_via_admin.jl` already exercises for the CLI-subprocess version of `load`.
 
-### 4.5. Metadata Schema Design (suggestion — answers the open "free-form via Avro" question)
+#### §4.5. Metadata Schema Design (suggestion — answers the open "free-form via Avro" question)
 
 Today's design (§4.2, §4.4) states metadata is free-format, encoded via Avro, stored independently of the vector representation in the `meta` column family. That independence from the vector representation is correct and should stay — the open question is what "free-format... via Avro" should actually mean at the record level, since Avro itself is not schemaless: encoding *anything* with it requires *some* schema, and a single fully-generic recursive union schema (Avro's usual answer to "arbitrary JSON") throws away exactly the property that makes typed filtering (§5.4: equality/range/set-membership) cheap.
 
@@ -963,7 +1205,7 @@ Today's design (§4.2, §4.4) states metadata is free-format, encoded via Avro, 
 
 This is additive to the current design (nothing declared → today's fully-free-form behavior via `extra` alone, with correspondingly no pre-filter capability) and gives operators a deliberate, visible knob to trade a little upfront schema rigidity for query performance on the fields that actually matter for their workload.
 
-### 4.6. Filesystem Layout & Naming Conventions (new)
+#### §4.6. Filesystem Layout & Naming Conventions (new)
 
 !!! note "Resolved: every standalone artifact file is named `{owning-uuid(s)}.{function-suffix}.{format-extension}`, and lives under a path that includes its owning dataset/index uuid"
     Two related debugging requirements: (1) a file's **extension must denote its serialization format** (`.avro`, `.jld2`, `.json`), and its **suffix must denote its function** (`.snapshot`, `.dump`, `.job`, `.cursor`) — so `ls`/`find` output alone tells you what a file is without opening it; (2) a file's **path must include the dataset/index uuid(s) it belongs to** — so ownership is visible from the path alone, without cross-referencing RocksDB or a job's JSON content. This applies to every file *this application* creates directly — it explicitly does **not** apply to RocksDB's own internal SST/WAL files under `data/{dataset_uuid}/`, whose layout is owned and named by `RocksDB.jl`/upstream RocksDB itself, not by this application.
@@ -983,11 +1225,11 @@ This is additive to the current design (nothing declared → today's fully-free-
 !!! warning "`key` (and any other user-supplied string) must be validated before it ever touches a filesystem path — this is a path-traversal risk, not just a naming nicety"
     Once `key` is woven into snapshot filenames as shown above, an unvalidated `key` value like `"../../../etc"` or containing a `/` becomes a path-traversal vector the moment the server constructs `snapshots/{dataset_uuid}/{index_uuid}.{index_kind}.{key}.snapshot.jld2` and writes to it. `POST /api/v1/datasets`'s `key` field (§5.7) must be checked against a strict whitelist (e.g. `^[A-Za-z0-9_-]{1,64}$`, plus the separate business rule rejecting the literal reserved value `"*"`) at creation time, **and** the path-construction code itself should re-validate rather than trust that "it was already checked once at creation" — the same discipline the plan already expects for filter field names (§4.5, §5.4) and for any other value interpolated into a filesystem path.
 
-## 5. API Routing Specifications
+### §5. API Routing Specifications
 
 The API layer relies on `Oxygen.jl` for HTTP routing and OpenAPI spec generation, async dispatch but threaded computation.
 
-### 5.1. Core Data API (`/api/v1/simsearch/`)
+#### §5.1. Core Data API (`/api/v1/simsearch/`)
 
 !!! note "Resolved: dropped the separate Pinecone-shaped compatibility surface — one native API, addressed the way the rest of this spec already addresses everything else"
     An earlier draft carried a second, parallel `/api/v1/std/` surface modeled after Pinecone's request/response shapes, on the theory that it would be easier for experienced vector-DB users to adopt. Two problems with that, on inspection: (1) it never actually specified how a request picked *which* index/dataset to operate on — Pinecone answers that at the transport layer (each index gets its own dedicated host; the client binds to that host once), which doesn't fit this server's single-process, working-directory-based model, so copying Pinecone's request/response *shapes* without its connection model left the gap unfilled; (2) Pinecone's `upsert` name promises update-by-id semantics that `SimilaritySearch.jl`/`TextSearch.jl` don't actually have — both libraries are append-only (`push_item!`/`append_items!`, no in-place mutation), so calling the operation "upsert" was advertising a guarantee this system can't make. Rather than carry a second API surface whose main value proposition (superficial Pinecone familiarity) didn't survive contact with either the architecture or the underlying libraries, these operations are folded into the one native API below, addressed via the `{index}` path segment already used everywhere else in §5 (calibrate, describe, ftindex, ftsearch), and named for what they actually do.
@@ -999,7 +1241,7 @@ The API layer relies on `Oxygen.jl` for HTTP routing and OpenAPI spec generation
 * `GET /api/v1/simsearch/{index}/fetch?ids=...`: Retrieves stored vectors + metadata by id, without performing a similarity search. Useful for clients that already have an id and just need the payload back — including the join-dataset metadata-hydration pattern (§1, §6) and the multi-key `ftsearch` hydration step (§5.3).
 * `GET /api/v1/simsearch/{index}/exists?ids=...`: Lightweight existence/tombstone-status check by id, without paying for a full `fetch`.
 
-### 5.2. Index Administration & Calibration (`/api/v1/simsearch/`)
+#### §5.2. Index Administration & Calibration (`/api/v1/simsearch/`)
 
 Exposes the advanced/administrative capabilities of the underlying index — as opposed to §5.1's day-to-day data operations.
 
@@ -1009,7 +1251,7 @@ Exposes the advanced/administrative capabilities of the underlying index — as 
 !!! warning "Heavy/offline operations moved to the async Job model"
     The previous draft exposed `allknn`, `closestpair`, `neardup`, `fft`, `hsp` as synchronous `POST` endpoints directly under `/api/v1/simsearch/`, while §1 (CLI) calls these same operations "heavy offline" and §2 (Concurrency) says they consume the *entire* thread pool. A synchronous HTTP POST that can legitimately run for hours, on an endpoint that also starves all other traffic while running, is a availability and HTTP-timeout hazard. These operations are now exposed exclusively through the Job model (§5.5): `POST /api/v1/jobs/{kind}` where `kind ∈ {search, allknn, neardup, fft, closestpair, hsp}`, immediately returning `202 Accepted` + `job_id`, with progress/result retrieved via the `/api/v1/jobs/*` endpoints below. `searchbatch` remains CLI-only by design (it reads/writes local files on the same machine and isn't meant for network transfer of bulk inputs/outputs). `search` is included in the Job kind enum specifically as the resubmission target for the §3 Long-Lived Search Policy `429` response.
 
-### 5.3. Full-Text Search API (TextSearch.jl)
+#### §5.3. Full-Text Search API (TextSearch.jl)
 
 * `POST /api/v1/simsearch/ftindex`: Accepts raw text payloads. Handles full preprocessing, vectorization, and indexing.
 * **Requirement:** Accepts an optional `TextConfig` object to define custom preprocessing (tokenization, stemming, n-grams).
@@ -1058,7 +1300,7 @@ Exposes the advanced/administrative capabilities of the underlying index — as 
   !!! note "Confirmed: `TextSearch.jl`'s own attempt at multi-field support is dead code — the join-group-of-single-field-indices design above isn't reinventing something the library already provides"
       `src/multi.jl` (`joinmodel`, `update!`, `glue`) is not `include`d by `src/TextSearch.jl` at all, and references types (`IdFreq`, `WeightedVocabulary`, a zero-arg `Vocabulary()`) that don't exist in the current API — it's leftover/abandoned code, not a usable feature. `bagofwords!` does accept a list of texts for "a multi-field document," but flattens them into one undifferentiated bag of words, with no per-field weighting or separate posting lists. Neither is a substitute for the per-`key` join-group pattern above; this spec's design is the only real multi-field story for this library, not a redundant one.
 
-### 5.4. Metadata Filtering & Pagination (new)
+#### §5.4. Metadata Filtering & Pagination (new)
 
 !!! note "Resolved: `filter` is a restricted-Julia boolean expression string, not a JSON operator DSL"
     An earlier draft used a JSON filter DSL (`{"field": {"gte": ..., "in": [...]}}`). Replaced with a **string** containing a boolean expression, evaluated against the record as if it were a `Dict` — familiar to anyone who reads Julia, and more expressive than a fixed set of JSON operator keys:
@@ -1094,7 +1336,7 @@ Exposes the advanced/administrative capabilities of the underlying index — as 
 
 * `GET /api/v1/simsearch/{index}/vocab`: (TextSearch-only) vocabulary size, top-N tokens by document frequency, and current OOV rate — the operational signal for when a text `rebuild` is actually needed (see §1 warning on vocabulary drift). Backed directly by existing `Vocabulary` bookkeeping rather than anything bespoke: per-token `occs`/`ndocs` counters, `trainsize`/`numtokens` (and the derived `avgdoclen(voc)`), and a `table(voc, DataFrame)` dump of `token/ndocs/occs` for the top-N listing. `filter_tokens`/`filter_tokens!` (hapax/doc-frequency pruning) and `update_voc!`/`merge_voc` are existing vocabulary-maintenance utilities worth reusing for the `rebuild` mode-(a) full re-vocabulary pass (§1) rather than reimplementing vocabulary pruning from scratch.
 
-### 5.5. Async Job Model & Pluggable Execution Backends (new)
+#### §5.5. Async Job Model & Pluggable Execution Backends (new)
 
 Heavy/offline operations (`search` when denied by the §3 policy, `allknn`, `neardup`, `fft`, `closestpair`, `hsp`, and administratively, `rebuild`/`dump`/`load`) are modeled as Jobs rather than blocking HTTP calls, resolving the contradiction flagged above.
 
@@ -1152,7 +1394,7 @@ Heavy/offline operations (`search` when denied by the §3 policy, `allknn`, `nea
 !!! warning "Fully remote workers without a shared filesystem are a different, harder problem — deliberately out of scope for now"
     If a deployment ever needs Job execution on machines that do **not** share a filesystem with the origin server (e.g. untrusted or fully external compute, no Slurm/NFS available), `SlurmExecutor`'s free ride on shared storage disappears, and a real distributed worker protocol would be needed instead: workers authenticating with a dedicated `worker` token scope (§4.1), pulling the index's JLD2 snapshot plus its dataset's Avro export (§4.4) via a resumable `GET /api/v1/datasets/{uuid}/snapshot` range-request endpoint, an atomic claim/lease mechanism with heartbeats over the `jobs` registry to recover from a dead worker, and a `snapshot_watermark` field on the `JobRecord` so results computed against a snapshot can be correctly interpreted against subsequent inserts. None of this is needed for the local-pool-now/Slurm-later path above — note it here only so it isn't forgotten if the deployment target changes later.
 
-### 5.6. Hyperparameter Calibration (new)
+#### §5.6. Hyperparameter Calibration (new)
 
 * `POST /api/v1/simsearch/{index}/calibrate`: Runs a `BeamSearch` hyperparameter sweep (using `SearchModels`, already a direct dependency of `SimilaritySearch.jl`) against either a supplied ground-truth query/knn set or an internally sampled one, and persists the resulting calibrated `(bsize, Δ, maxvisits)` baseline as part of the index's metadata/header.
 * This baseline is what the §3 safety-multiplier barrier is anchored to (replacing the previously-arbitrary global `bsize <= 20` / `Δ < 1.7` constants), and it's also surfaced via `GET /api/v1/simsearch/{index}/describe`.
@@ -1167,7 +1409,7 @@ Heavy/offline operations (`search` when denied by the §3 policy, `allknn`, `nea
     2. **Search-time optimization**: `calibrate!` today only sweeps `BeamSearch` (`bsize`/`Δ`/`maxvisits`) via `MinRecall`. Confirm that this is the intended full scope of "optimization for search," as distinct from construction-time optimization above — e.g. should it also ever touch `SearchGraph`'s neighborhood/hint construction parameters, and should a `rebuild` (§1) be something `calibrate!` triggers as part of its own sweep, rather than only ever being invoked as the separate, manually-run `rebuild` CLI command?
     Until both are answered explicitly and the resulting behavior documented, treat "construction-time auto-tuning is disabled" as a placeholder that only closes half the original note above, not a settled design.
 
-### 5.7. Dataset & Index Management (new)
+#### §5.7. Dataset & Index Management (new)
 
 * `POST /api/v1/datasets`: Creates a new dataset (working-dir-relative RocksDB database + `meta` column family) with exactly one index kind (§1), returning its `index_uuid`. Accepts an optional `join_group` (existing or new) and `holds_metadata` flag for the multi-representation/hybrid use case (§1, §6), plus an optional `meta_schema` (§4.5) declaring typed/indexed metadata fields. For a text/lexical `index_kind` (`weighted_invfile | binary_invfile | bm25_invfile`), also accepts an optional `key` (§5.3) identifying which text field this dataset indexes within its join group — rejected with `400` if `key == "*"` (reserved for the `ftsearch` fan-out wildcard, §5.3) or if it fails the path-safety character whitelist (§4.6). A text dataset also accepts an optional boolean `edit_correction` (default `false`): its queries then correct a token absent from the vocabulary to the only vocabulary token at Damerau-Levenshtein distance 1 from it. The engine does not persist this value, so the server stores it in `descriptor.json` and passes it to `open_project` on every open; it is refused with `400` for a dataset without text.
 * `GET /api/v1/datasets`: Lists datasets in the current workdir (HTTP mirror of the CLI `list` command), paginated.
@@ -1182,17 +1424,17 @@ Heavy/offline operations (`search` when denied by the §3 policy, `allknn`, `nea
 !!! note "Resolved: single-dataset hot unload/reload"
     `POST /api/v1/admin/datasets/{id}/unload` closes just that one dataset's RocksDB handle and drops it from `app.datasets`/`app.engines`, releasing the exclusive write lock so an external process — concretely, the CLI `rebuild` (§1) — can safely open it for writing while `serve` stays up and keeps handling every other dataset. `POST /api/v1/admin/datasets/{id}/reload` reopens it afterward (via the same per-dataset logic `reload_datasets!` uses, but deliberately overwriting rather than skipping an existing entry), picking up whatever `rebuild` (or any other out-of-band CLI operation) changed on disk. The intended operator flow is `unload` → run `rebuild` → `reload`, with no `serve` restart and no downtime for any dataset other than the one being refreshed. `reload` accepts an optional body `{"edit_correction": true | false}`: the value is written to `descriptor.json` before the dataset is reopened with it. A non-boolean value, or `true` for a dataset without text, is a `400` that is answered before the loaded handle is closed.
 
-### 5.8. Health & Metrics (new)
+#### §5.8. Health & Metrics (new)
 
 * `GET /healthz`: Liveness — process is up and serving.
 * `GET /readyz`: Readiness — working directory RocksDB handles open, no crash-recovery WAL replay pending.
 * `GET /metrics`: Prometheus-format counters/gauges derived from `op_log` (`distance_evaluations_total`, `query_latency_seconds` histogram, `active_jobs`, `thread_pool_utilization`, per-index tombstone ratio).
 
-### 5.9. Partitioned Text Indexes (design, 2026-11-09)
+#### §5.9. Partitioned Text Indexes (design, 2026-11-09)
 
 Status: implemented on 2026-11-09. Item 10 of §0 lists what differs from this design.
 
-#### The use case
+##### The use case
 
 Many applications search inside a group of documents that is known before the query. Examples
 are one customer of a shared service, one institution, one language, one collection, or one
@@ -1204,7 +1446,7 @@ The sizes of the partitions can differ by a large factor. In ReposMx, 446,857
 documents are spread over 91 repositories. The largest has 139,605 documents and the smallest
 has 8, a factor of 17,450.
 
-#### What the engine offers today
+##### What the engine offers today
 
 There are two ways to restrict a search to a partition. Neither one works for a small
 partition.
@@ -1223,7 +1465,7 @@ ReposMx used the first way until 2026-11-09. It searched again with a window 4 t
 until the page was full. The mean time of a query with a repository filter was 1,801 ms, and
 2,515 ms for the repository with 8 documents.
 
-#### Why the scores do not change
+##### Why the scores do not change
 
 A text project fits its profile once (`train_profile` in `index!`). The profile fixes the
 vocabulary, the document frequency of each token, and the scoring parameters: `trainsize` and
@@ -1242,7 +1484,7 @@ commit `c71b52d` of ReposMx). Over 390 queries with a repository filter, the res
 identical to those of the filtered global index. The mean time went from 1,801 ms to 7.7 ms for
 documents and from 1,998 ms to 4.0 ms for authors. The database grew from 4.1 GB to 4.2 GB.
 
-#### Declaration
+##### Declaration
 
 - `create_project(...; partition_by="repo")` declares the partition field of a new text
   project. A project has at most one partition field.
@@ -1259,7 +1501,7 @@ documents and from 1,998 ms to 4.0 ms for authors. The database grew from 4.1 GB
 - An item is not modified after it is appended, so its partitions do not change. Deleting the
   item and appending it again is how a record changes partition.
 
-#### Storage
+##### Storage
 
 Three new column families, opened with the others in `Project.open_project`:
 
@@ -1276,7 +1518,7 @@ Three new column families, opened with the others in `Project.open_project`:
 The global lists in `invfile_postings` do not change. Each document id appears once in the
 global list of each of its tokens, and once more for each partition of the record.
 
-#### Writing
+##### Writing
 
 - `append!` resolves the partition names of each item to numbers, adds new names to
   `partition_table`, and writes `partition_members`.
@@ -1293,7 +1535,7 @@ global list of each of its tokens, and once more for each partition of the recor
   `partition_by` with the project configuration. `load` recomputes the partition lists from
   `meta`.
 
-#### Reading
+##### Reading
 
 - `ftsearch(handle, text, k; partition="unicach")` searches one partition. Without
   `partition` it searches the global index, as today.
@@ -1316,7 +1558,7 @@ global list of each of its tokens, and once more for each partition of the recor
 - In the server, `filter` (§5.4) is applied after the partition, to the results of the
   partition.
 
-#### Server
+##### Server
 
 - `ftsearch` accepts a `partition` field in the request body (`FtSearchRequest`, §7).
 - `GET /api/v1/datasets/{id}/partitions` returns what `partitions(handle)` returns.
@@ -1331,7 +1573,7 @@ global list of each of its tokens, and once more for each partition of the recor
   member. No member is searched without the partition, because the response would mix
   results from the partition with results from the whole member.
 
-#### Not in the first version
+##### Not in the first version
 
 - **Sparse projects.** Their index is rebuilt in memory from `InvertedFileObjectStore` on
   every open. Their partition lists would be built in memory at the same time, from
@@ -1341,7 +1583,7 @@ global list of each of its tokens, and once more for each partition of the recor
   (designed on 2026-11-18).
 - More than one partition field, or a search over the intersection of two partitions.
 
-#### Tests
+##### Tests
 
 - A partition search returns the same ids, order and scores as the global search filtered by
   partition, on a synthetic corpus with partitions of very different sizes. ReposMx has this
@@ -1352,25 +1594,25 @@ global list of each of its tokens, and once more for each partition of the recor
   creation.
 - Both text backends: `BM25InvertedFile` and `TextInvertedFile`.
 
-#### ReposMx
+##### ReposMx
 
 ReposMx moves to the engine following `docs/plan-motor.md` of ReposMx. With this feature, its
 `repo_postings` column family, `RepoPostingsAdjList` and `split-index` are replaced by
 `partition_by="repo"` on its documents project and on its authors project.
 
-### 5.10. Partitioned Dense Indexes (design, 2026-11-18)
+#### §5.10. Partitioned Dense Indexes (design, 2026-11-18)
 
 Status: designed on 2026-11-18. Phase 1 (the engine) implemented on 2026-11-18; item 14 of §0
 lists what differs from this design. The decisions in this section were made with
 the author on that date.
 
-#### The use case
+##### The use case
 
 The use case is the one of §5.9: a search inside a group of records known before the query,
 and a search over all of them, in one project. This section covers dense projects, with both
 backends: `SearchGraph` and the exact ones (`ExhaustiveSearch`, `ParallelExhaustiveSearch`).
 
-#### What the engine offers today
+##### What the engine offers today
 
 A dense project restricts a search with `search(...; filter, candidates)`: it searches the
 global graph and keeps the candidates that satisfy the predicate. The cost depends on the size
@@ -1392,7 +1634,7 @@ tuned, so the last column also includes its own recall. Building the own graph t
 for 200 members and 0.91 s for 60,000. The script is not in the repository. A measurement
 on real embeddings is part of phase 3.
 
-#### Design
+##### Design
 
 A partition shares the vectors with the global index. Only the structure that selects the
 candidates belongs to the partition. This is the principle of §5.9, where a partition shares
@@ -1414,7 +1656,7 @@ the vocabulary and the document vectors and has its own posting lists.
 On 2026-11-18 a `SearchGraph` over a `SubDatabase` was checked to grow: ids are appended to
 `map`, and `SimilaritySearch.index!` indexes the new ones.
 
-#### Declaration
+##### Declaration
 
 - `create_project(...; partition_by)` and `declare_partition!` accept a dense project. The
   rules of §5.9 apply unchanged: one field, a string or a list of strings, the field optional
@@ -1427,7 +1669,7 @@ On 2026-11-18 a `SearchGraph` over a `SubDatabase` was checked to grow: ids are 
   `partition_members`, and builds the graph of each partition that reaches the threshold. This
   inserts each member again, so it costs about as much as indexing the members once.
 
-#### Storage
+##### Storage
 
 - `partition_table` and `partition_members` (§5.9) are used unchanged.
 - A new column family, `partition_graph`: key `[partition number][local id]`, both big-endian
@@ -1441,7 +1683,7 @@ On 2026-11-18 a `SearchGraph` over a `SubDatabase` was checked to grow: ids are 
 - The `map` of each partition is not stored. `open_project` builds it by reading
   `partition_members` in `_id` order, so the local ids are the same at every open.
 
-#### Writing
+##### Writing
 
 - `append_items!` writes `partition_members`, as for a text project.
 - On a `SearchGraph` project, a partition holds only indexed items, as the global graph. After
@@ -1458,7 +1700,7 @@ On 2026-11-18 a `SearchGraph` over a `SubDatabase` was checked to grow: ids are 
 - An item is inserted in the global graph and once more in each of its partitions that has a
   graph. For a project with one partition per item, building takes about twice as long.
 
-#### Reading
+##### Reading
 
 - `search(handle, vector, k; partition, filter, candidates, minrecall, stats)` searches one
   partition. `filter` and `candidates` apply to the results of the partition, as in
@@ -1478,7 +1720,7 @@ On 2026-11-18 a `SearchGraph` over a `SubDatabase` was checked to grow: ids are 
 - `searchbatch`, `allknn`, `closestpairs` and the other operations over the whole collection
   do not take a partition in this version.
 
-#### Opening
+##### Opening
 
 - `open_project` rebuilds every partition graph after the global graph: it reads the direct
   neighbors from `partition_graph`, reconnects the reverse links, and sets the saved
@@ -1491,7 +1733,7 @@ On 2026-11-18 a `SearchGraph` over a `SubDatabase` was checked to grow: ids are 
   bytes per member for the `map`. No vector is duplicated. In the measurement above, the
   median number of direct neighbors was 10; the reverse links add more in memory.
 
-#### Server and clients
+##### Server and clients
 
 - The `search` route accepts `partition`.
 - Creating a dense dataset accepts `partition_by` and `partition_graph_min`.
@@ -1499,7 +1741,7 @@ On 2026-11-18 a `SearchGraph` over a `SubDatabase` was checked to grow: ids are 
 - `similarity-search search --partition` accepts a dense dataset.
 - The Python client: `search(..., partition)` and `calibrate(..., partition)`.
 
-#### Phases
+##### Phases
 
 0. §0, item 13: save and restore `index.algo[]` and `index.hints` of the global graph, with a
    test that compares the beam, the hints and the searches before and after a reopen. Done on
@@ -1511,7 +1753,7 @@ On 2026-11-18 a `SearchGraph` over a `SubDatabase` was checked to grow: ids are 
    measurement on real embeddings that sets `partition_graph_min`. There is no such
    collection yet.
 
-#### Tests
+##### Tests
 
 - On an exact project, a partition search returns the same ids, order and distances as the
   global search filtered by partition with an unlimited budget.
@@ -1531,7 +1773,7 @@ On 2026-11-18 a `SearchGraph` over a `SubDatabase` was checked to grow: ids are 
 - An index interrupted between the global graph and a partition graph is completed by the next
   `index!`.
 
-#### Not in this version
+##### Not in this version
 
 - Sparse projects. They follow §5.9: posting lists per partition.
 - Loading a partition graph at its first query.
@@ -1539,7 +1781,7 @@ On 2026-11-18 a `SearchGraph` over a `SubDatabase` was checked to grow: ids are 
   search, and its recall falls for small partitions, which is the case that matters here.
 - More than one partition field, and the intersection of two partitions.
 
-### 5.11. Leader and Follower Datasets (design, 2026-11-22)
+#### §5.11. Leader and Follower Datasets (design, 2026-11-22)
 
 Status: designed on 2026-11-22 with the author, in issue #5. Phase 1 of the issue was done on
 the same date (commit `ead817e`): the engine no longer writes keywords to `idx_keywords`, and
@@ -1547,7 +1789,7 @@ keywords are metadata. This section designs phase 2, the framework of followers.
 what phases 3 to 6 rely on: what a follower saves, the functions that create, open and update
 a follower, and the information that `describe` reports.
 
-#### The use case
+##### The use case
 
 An application organizes the items of one dataset in more than one way. The partitions of
 §5.9 and §5.10 are one way: one group per repository. A group per keyword, per value of a
@@ -1563,7 +1805,7 @@ A **follower** is a dataset that holds one organization of the items of another 
 **leader**. A leader can have several followers. A follower is created, rebuilt and deleted
 without a change to the items of its leader.
 
-#### Decisions
+##### Decisions
 
 These are the decisions of issue #5, as they apply to this design.
 
@@ -1590,7 +1832,7 @@ These are the decisions of issue #5, as they apply to this design.
    `open_project` or `open_follower`. An error that a migration solves names the function
    and the command.
 
-#### Names and directories
+##### Names and directories
 
 - A follower has a name with the pattern of a dataset id, `[A-Za-z0-9_-]{1,128}`.
 - The **canonical name** of a follower is `leader/follower`. The canonical name of a follower
@@ -1602,7 +1844,7 @@ These are the decisions of issue #5, as they apply to this design.
   datasets of the server (`reload_datasets!`) must skip it.
 - A follower is in the same working directory as its leader.
 
-#### Key sources
+##### Key sources
 
 ```julia
 abstract type KeySource end
@@ -1619,7 +1861,7 @@ needs_payload(source::KeySource) = false
 - `sync!` calls `keys_of` through a function specialized on the type of the key source. The
   type is resolved once per call to `sync!`, not once per item.
 
-#### Kinds of follower
+##### Kinds of follower
 
 A kind of follower is a subtype of `FollowerSpec`. The spec holds the key source and the
 options of the kind, for example `PartitionFollower(MetaValue("repo"); disjoint=true)` in
@@ -1642,7 +1884,7 @@ on that after an interruption (below).
 Phase 2 defines no kind for the user. Its tests define a kind in the test files, which also
 checks that a kind can be defined outside the engine.
 
-#### Storage
+##### Storage
 
 The follower has its own RocksDB database, with the column family `engine` of every project
 and the column families of its kind. It has no `records` and no `meta`, because it has no
@@ -1669,7 +1911,7 @@ New engine fields of the leader:
   `delete_follower!` write it. It is read by `followers(leader)` and by the deletion of a
   dataset in the server.
 
-#### Creating, opening, rebuilding and deleting
+##### Creating, opening, rebuilding and deleting
 
 ```julia
 f = create_follower(leader, "by_repo", PartitionFollower(MetaValue("repo")); policy=OnIndex())
@@ -1702,7 +1944,7 @@ close_follower!(f)
   that has followers, with `HasFollowers` (`ConflictingState`, HTTP 409). The message lists
   the followers and names `delete_follower!` and its command.
 
-#### Processing
+##### Processing
 
 `sync!(f)` processes the items of the leader from `position + 1` to `indexed_length(leader)`,
 and returns the number of items processed.
@@ -1735,7 +1977,7 @@ follower fails, the leader keeps its work, the other followers are still process
 call raises the first error afterwards. The message names the follower and says to call
 `sync!` on it.
 
-#### Reading
+##### Reading
 
 - A follower restricted to one value accepts the search operations of the leader for the kind
   of its payload, with the arguments of the leader (`filter`, `candidates`, `minrecall`,
@@ -1745,7 +1987,7 @@ call raises the first error afterwards. The message names the follower and says 
   `posting_list` for a keyword follower.
 - A follower that lags behind answers with the items it holds.
 
-#### Information for `describe`
+##### Information for `describe`
 
 - `follower_status(f)` returns: the canonical name, the leader, the kind and its key source,
   the plugin, the policy, the position, `indexed_length` of the leader, the lag (the
@@ -1756,7 +1998,7 @@ call raises the first error afterwards. The message names the follower and says 
 - The server has three views: a leader with the status of its followers, one follower, and the
   group (the leader and all its followers in one report).
 
-#### Errors
+##### Errors
 
 New error types, each with a type of the same name in the Julia client
 (`server/julia/src/errors.jl`):
@@ -1770,7 +2012,7 @@ New error types, each with a type of the same name in the Julia client
 
 A write to a follower raises `UnsupportedOperation`, with a message that names the leader.
 
-#### Plugins in the engine
+##### Plugins in the engine
 
 `register_plugin!(mod::Module)` registers a module whose types can be saved in a follower. The
 name of the plugin is `nameof(mod)`. A type of a spec or a key source must belong to the engine
@@ -1778,7 +2020,7 @@ or to a registered plugin. Otherwise `create_follower` raises `InvalidOption`, b
 a module that is not loaded at the next open cannot be read back. Phase 6 loads plugins in the
 server, from the `[plugins]` section of the TOML file.
 
-#### Server and clients
+##### Server and clients
 
 Phase 5 designs the routes and the jobs in detail. What this section fixes:
 
@@ -1790,7 +2032,7 @@ Phase 5 designs the routes and the jobs in detail. What this section fixes:
 - `rebuild` of a leader writes a new generation, and its followers become stale until
   `rebuild_follower!`. The response of `rebuild` lists them.
 
-#### Phases
+##### Phases
 
 2. The framework of this section in the engine: key sources, `FollowerSpec`, storage,
    `create_follower`, `open_follower`, `sync!`, the policies, `rebuild_follower!`,
@@ -1805,7 +2047,7 @@ Phase 5 designs the routes and the jobs in detail. What this section fixes:
 
 Each phase updates `manual/architecture.qmd`, the tutorial, and this section.
 
-#### Tests of phase 2
+##### Tests of phase 2
 
 - `create_follower` on a leader with indexed items processes all of them: the position equals
   `indexed_length` of the leader.
@@ -1824,7 +2066,7 @@ Each phase updates `manual/architecture.qmd`, the tutorial, and this section.
 - `delete_follower!` removes the directory and the name.
 - A follower opened from a read-only leader handle refuses `sync!`.
 
-#### Not in this version
+##### Not in this version
 
 - A follower of a follower.
 - A follower in another working directory than its leader.
@@ -1832,7 +2074,7 @@ Each phase updates `manual/architecture.qmd`, the tutorial, and this section.
 - A log of changes. With the position of a follower and the deletes marked by the leader,
   nothing needs one. An operation that changes the metadata of an item in place would need it.
 
-### 5.12. Followers in the Server (design, 2026-11-22)
+#### §5.12. Followers in the Server (design, 2026-11-22)
 
 Status: designed on 2026-11-22 for issue #5, phase 5. Phases 1 to 4 of the issue are done in
 the engine (§0, item 15): the framework of followers, the partition follower, the keyword
@@ -1841,7 +2083,7 @@ the two clients expose them. Phase 6, plugins in the server, has its own section
 Implemented on 2026-11-22 and 2026-11-23 in phases 5a to 5d. "As built", at the end of this
 section, lists what differs from the design.
 
-#### What the server does today
+##### What the server does today
 
 These facts of the current server decide the design:
 
@@ -1865,7 +2107,7 @@ These facts of the current server decide the design:
 - The Julia client creates a dataset with wire names (`index_type`, `distance`), not with the
   spec types of the engine. The nested spec over HTTP is the open part of issue #2.
 
-#### Decisions
+##### Decisions
 
 1. **A follower is processed in `serve`.** A job cannot do it: it cannot open the leader for
    writing while `serve` holds it, and a follower reads the index of its leader in memory.
@@ -1886,7 +2128,7 @@ These facts of the current server decide the design:
 6. **The wire names a spec with strings,** as `POST /api/v1/datasets` does: a kind, a source
    and options. Phase 6 adds the names that plugins register.
 
-#### Wire format of a follower
+##### Wire format of a follower
 
 `POST /api/v1/datasets/{leader}/followers` takes:
 
@@ -1908,7 +2150,7 @@ These facts of the current server decide the design:
 A value that the server does not know answers `400`. `FollowerStatus` is sent with the same
 names: `kind`, `source` and `policy` as text, and the other fields as numbers and booleans.
 
-#### Routes
+##### Routes
 
 | route | permission | what it does |
 |---|---|---|
@@ -1934,7 +2176,7 @@ not allowed in a path segment is URL-encoded. The engine errors keep their mappi
 `UnknownFollower` and `PluginNotLoaded` answer `404`, and `StaleFollower` and `HasFollowers`
 answer `409`.
 
-#### Lifecycle in `serve`
+##### Lifecycle in `serve`
 
 - **Load and reload.** After a leader is opened, `serve` opens each follower that the leader
   lists. A follower that cannot be opened (stale, a plugin not loaded, a missing directory) is
@@ -1949,7 +2191,7 @@ answer `409`.
   and for a follower that failed, its last error. `GET /datasets/{id}/followers/{f}` is the view
   of one follower, and `GET /datasets/{id}/group` the view of the group.
 
-#### Rebuild, dump and load
+##### Rebuild, dump and load
 
 A new engine function is needed:
 
@@ -1968,7 +2210,7 @@ How the commands use it:
   copies them to `<new id>.followers/` and attaches each one. The project and its followers
   come from the same copy, so their generations agree and the followers are not stale.
 
-#### Command lines
+##### Command lines
 
 `similarity-search`, which works on a working directory without a server:
 
@@ -1985,7 +2227,7 @@ How the commands use it:
 view), `follower-create`, `follower-delete`, `follower-sync`, `follower-rebuild` and
 `migrate-partitions`, with the arguments above.
 
-#### Clients
+##### Clients
 
 - **Python.** `create_follower(index, name, kind, source, ...)`, `list_followers`,
   `get_follower`, `delete_follower`, `sync_follower`, `rebuild_follower`, `follower_partitions`,
@@ -2000,7 +2242,7 @@ view), `follower-create`, `follower-delete`, `follower-sync`, `follower-rebuild`
   `migrate_partitions!`. It declares no engine type. The spec types (`PartitionFollower`,
   `KeywordFollower`) are not mirrored until the nested spec of issue #2 exists for datasets too.
 
-#### Phases
+##### Phases
 
 5a. The engine function `attach_follower!`; in `serve`, opening followers at load and reload,
     the routes, the `[followers] check_seconds` task for `Periodic`, and `HasFollowers` on
@@ -2010,7 +2252,7 @@ view), `follower-create`, `follower-delete`, `follower-sync`, `follower-rebuild`
 5c. The Python and Julia clients.
 5d. The server manual and tutorial, and this section with what differs.
 
-#### Tests
+##### Tests
 
 - Creating a partition follower and a keyword follower over HTTP, and the status of each.
 - A partition search over HTTP equals the global search restricted to the partition, for a
@@ -2026,7 +2268,7 @@ view), `follower-create`, `follower-delete`, `follower-sync`, `follower-rebuild`
 - The Julia client against a running server: the same operations, with the error types of the
   engine.
 
-#### Not in this version
+##### Not in this version
 
 - A job over a follower, such as `allknn` over one partition.
 - A follower of a dataset in another server or another working directory.
@@ -2034,7 +2276,7 @@ view), `follower-create`, `follower-delete`, `follower-sync`, `follower-rebuild`
   `OnWrite`. It would shorten the response of `append`, and it is worth adding if a
   measurement shows that the processing of a follower dominates the time of `append`.
 
-#### As built (2026-11-23)
+##### As built (2026-11-23)
 
 What differs from the design above, from phases 5a to 5d. §0, item 15, has the details of each
 phase.
@@ -2065,7 +2307,7 @@ phase.
   `server/test/api/test_18_followers.jl` tests that followers are open after `unload` and
   `reload`.
 
-#### Decided after phase 5 (2026-11-23)
+##### Decided after phase 5 (2026-11-23)
 
 1. **An event dispatcher instead of the policies, to design later.** The policies may become
    an event dispatcher like the two logs of SimilaritySearch: the information log (reporters)
@@ -2092,7 +2334,7 @@ phase.
    - One exception depends on how `_id` is assigned: the hybrid search combines two datasets
      by `_id`, so the client must append the same items in the same order to both.
 
-### 5.13. Plugins in the Server (design, 2026-11-23)
+#### §5.13. Plugins in the Server (design, 2026-11-23)
 
 Status: designed on 2026-11-23 for issue #5, phase 6. Phase 5 is done (§5.12): the server, the
 two command lines and the two clients expose the followers of the engine, with the kinds and
@@ -2101,7 +2343,7 @@ line `similarity-search` load plugins: Julia modules that add key sources and ki
 follower. Implemented on 2026-11-23 in phases 6a and 6b. "As built", at the end of this
 section, lists what differs from the design.
 
-#### What exists
+##### What exists
 
 - `register_plugin!(mod)` registers a module in the engine (§5.11). The name of the plugin is
   `nameof(mod)`. `create_follower` refuses a spec or a key source whose type belongs to a
@@ -2114,7 +2356,7 @@ section, lists what differs from the design.
 - `serve` reads `config.toml`. `similarity-search` has a `--config` argument that no data
   command reads. A job is a subprocess of `similarity-search`, and no job opens a follower.
 
-#### Decisions
+##### Decisions
 
 These follow the decisions of issue #5: a plugin is a Julia module, not necessarily a package;
 a plugin that needs a program outside Julia calls it with `run` from its own code; the
@@ -2134,7 +2376,7 @@ configuration is mixed, settings in TOML and code in `.jl` modules.
 5. **`similarity-search` loads the plugins of `--config` only for the commands that open a
    follower,** because loading a plugin compiles its code at each start.
 
-#### Configuration
+##### Configuration
 
 ```toml
 [plugins.Decades]
@@ -2155,7 +2397,7 @@ package = "ReposMxKeys"         # a package of the active environment, loaded wi
   `Dict{String,Any}`.
 - A module that is already loaded and registered in the process is not loaded again.
 
-#### A plugin module
+##### A plugin module
 
 ```julia
 module Decades
@@ -2187,7 +2429,7 @@ The server calls `setup`, then `SSE.register_plugin!`, then reads `KEY_SOURCES` 
 `FOLLOWER_KINDS`. A constructor that raises an `EngineError` answers `400` with its kind; an
 `ArgumentError` or a `KeyError` answers `400` with its message.
 
-#### Wire format
+##### Wire format
 
 A key source or a kind of a plugin is a string, or an object with `name` and its options:
 
@@ -2210,7 +2452,7 @@ A key source or a kind of a plugin is a string, or an object with `name` and its
   except `policy`, are not accepted with it: its options go in the object of `kind`.
 - The status reports the plugin in `plugin`, as it does now.
 
-#### Routes
+##### Routes
 
 - `GET /api/v1/plugins` (permission `read` over `*`): the loaded plugins, each one with its
   source (`path` or `package`), its key sources and its kinds by wire name. It is a list of the
@@ -2220,7 +2462,7 @@ A key source or a kind of a plugin is a string, or an object with `name` and its
   engine, which accept the kinds of the engine; a plugin kind answers them with
   `UnsupportedOperation`.
 
-#### Command lines
+##### Command lines
 
 - `similarity-search --config FILE` loads the plugins of `FILE` before `follower-create`,
   `follower-sync`, `follower-rebuild`, `rebuild --rebuild-followers`, `searchbatch --follower`
@@ -2232,19 +2474,19 @@ A key source or a kind of a plugin is a string, or an object with `name` and its
 - `similarity-search-ctl follower-create` takes the same arguments and sends them.
 - `similarity-search-ctl plugins` calls `GET /api/v1/plugins`.
 
-#### Clients
+##### Clients
 
 - Julia: `create_follower(h, name; kind, source, ...)` accepts a `Dict` for `kind` and
   `source`, and sends it as it is. `plugins(conn)` returns the list of `GET /api/v1/plugins`.
 - Python: `create_follower` accepts a dict for `kind` and `source`. `list_plugins()`.
 
-#### Phases
+##### Phases
 
 6a. The server: loading `[plugins]` at the start of `serve`, the wire names, `GET
     /api/v1/plugins`, and a test plugin in `server/test/plugins/`.
 6b. The command lines, the two clients, the manual and this section with what differs.
 
-#### Tests
+##### Tests
 
 - `serve` with a test plugin that defines a key source and a kind: a partition follower over
   the key source of the plugin, searched in one partition; a follower of the kind of the
@@ -2258,7 +2500,7 @@ A key source or a kind of a plugin is a string, or an object with `name` and its
 - `similarity-search --config` with a plugin: `follower-create`, `follower-sync` and
   `searchbatch --follower`.
 
-#### Not in this version
+##### Not in this version
 
 - A route of queries for a plugin kind. The search routes call the functions of the engine,
   which do not dispatch on a kind outside the engine. It needs a function of the engine that a
@@ -2266,7 +2508,7 @@ A key source or a kind of a plugin is a string, or an object with `name` and its
 - Loading or unloading a plugin while `serve` runs.
 - Plugins in a job. No job opens a follower.
 
-#### As built (2026-11-23)
+##### As built (2026-11-23)
 
 What differs from the design above, from phases 6a and 6b. §0, item 15, has the details of each
 phase.
@@ -2287,7 +2529,7 @@ phase.
   `create_follower` sends a `Dict` given as `kind` or `source` as it is. The Python client has
   `list_plugins()`; it was checked on 2026-11-23 against a server started with the test plugin.
 
-### 5.14. Sketched Dense Projects (design, 2026-11-23)
+#### §5.14. Sketched Dense Projects (design, 2026-11-23)
 
 Status: designed and implemented on 2026-11-23, item 16 of §0; see "As built" at the end of
 this section. Issue #1 listed binary sketches under "Later,
@@ -2295,7 +2537,7 @@ not required for a first version"; on 2026-11-23 they became required. This sect
 them in the engine and in the server. It also covers the part of issue #1 that the server does
 not have yet, scalar quantization on the wire, because both are a storage of a dense project.
 
-#### What exists
+##### What exists
 
 - **In the engine.** A dense project has a storage: `Float32Vectors()` or
   `Quantized(SQ(bits); rotation, keep_vectors)` (issue #1, commit 1dc5e62, 2026-11-20). A
@@ -2322,7 +2564,7 @@ not have yet, scalar quantization on the wire, because both are a storage of a d
   server stores `Float32` vectors. The nested specification of a dataset over HTTP is the open
   part of issue #2.
 
-#### Decisions (2026-11-23)
+##### Decisions (2026-11-23)
 
 1. **One model: `AnchoredDistantHyperplanes`.** Projections with signs (SimHash),
    `DistantHyperplanes`, `RandomHyperplanes` and RaBitQ are not part of this work.
@@ -2335,7 +2577,7 @@ not have yet, scalar quantization on the wire, because both are a storage of a d
    with that information. `Quantized` already has `rotation=NoRotation()` by default.
 5. **`QuantSketch` is part of this work** (decision 2), and RaBitQ is not.
 
-#### Proposal
+##### Proposal
 
 1. **A storage `Sketched` of `DenseVectors`, next to `Quantized`.**
 
@@ -2398,7 +2640,7 @@ not have yet, scalar quantization on the wire, because both are a storage of a d
    fit, the time per query and the memory in use, on the collections of issue #1. Taken on
    2026-11-23 on SISAP 2025 `ccnews`; the results are in item 16 of §0.
 
-#### Phases
+##### Phases
 
 7a. The engine: `Sketched`, fitting, persistence, search with and without the second
     evaluation, `sketch_info`, tests, and the measurements of item 7.
@@ -2406,7 +2648,7 @@ not have yet, scalar quantization on the wire, because both are a storage of a d
     --storage`, and the clients.
 7c. The manual, the tutorial, and this section with what differs.
 
-#### Tests
+##### Tests
 
 - A sketched project round-trips: create, append, index, close, reopen, search, with the same
   results before and after reopening, at each value of `bits`.
@@ -2419,7 +2661,7 @@ not have yet, scalar quantization on the wire, because both are a storage of a d
 - The server creates a quantized and a sketched dataset, and `dump`, `load` and `rebuild` keep
   their storage.
 
-#### As built (2026-11-23)
+##### As built (2026-11-23)
 
 Phases 7a (commit 2030ada), 7b (commit 58b54f4) and 7c are done. Item 16 of §0 lists what
 each phase implements and the measurements. What differs from this design:
@@ -2440,7 +2682,7 @@ each phase implements and the measurements. What differs from this design:
   the range, and the bytes per vector in memory and on disk. The options of the fitting are in
   the storage that it reports.
 
-### 5.15. Events of a Project (design, 2026-11-23)
+#### §5.15. Events of a Project (design, 2026-11-23)
 
 Status: proposed and decided on 2026-11-23, item 17 of §0. The decisions are in "Decided
 (2026-11-23)", and what phases 8a and 8c built is in "As built". Decision 1 of "Decided
@@ -2448,7 +2690,7 @@ after phase 5" (§5.12) asks for an event dispatcher in place of the policies of
 like the two logs of SimilaritySearch, and leaves open what an event is, so that the dispatch
 consumes few resources. This section proposes an answer and lists the decisions it needs.
 
-#### What exists
+##### What exists
 
 - **In SimilaritySearch.** A context has two lists of logs. `ctx.reporters` receive `INFORM`:
   messages for a person, throttled, whose text is built only when a reporter prints it.
@@ -2477,7 +2719,7 @@ consumes few resources. This section proposes an answer and lists the decisions 
   `append_items!`. In the server, `append` calls `index!` right after `append_items!`, so the
   two policies process the same items in the same request.
 
-#### What an event is
+##### What an event is
 
 Proposal: an event is a change of the leader that a consumer can need to act on. The engine
 reports it once per call that makes the change, after the change is saved. It carries the `_id`s
@@ -2507,7 +2749,7 @@ position. When it opens, it processes what the leader indexed after that positio
 lost when the process stops is therefore not a lost item: the event says that there is something
 new, and the position says what.
 
-#### Observers of a project
+##### Observers of a project
 
 ```julia
 abstract type ProjectObserver end
@@ -2531,7 +2773,7 @@ observers(h::EmbeddedEngine) -> Vector{ProjectObserver}
   the server, and the reporters of SimilaritySearch for the progress of an index. This design
   adds only the second channel, the events.
 
-#### Followers as observers
+##### Followers as observers
 
 An open follower is an observer of its leader. `create_follower` and `open_follower` add it,
 and `close_follower!` removes it. Its policy says what it does with an `ItemsIndexed`:
@@ -2547,7 +2789,7 @@ and `close_follower!` removes it. Its policy says what it does with an `ItemsInd
 The task of the server no longer reads the lag of every periodic follower every
 `check_seconds` to find the ones that reached `items`: the event says which one did.
 
-#### Other consumers
+##### Other consumers
 
 Each is a separate decision, and none needs a change in the engine once the events exist:
 - counters of the items staged, indexed and deleted in each dataset, for the telemetry, without
@@ -2556,7 +2798,7 @@ Each is a separate decision, and none needs a change in the engine once the even
 - a notification from the server to another system;
 - a kind of observer added by a plugin (§5.13), as a plugin adds kinds of follower.
 
-#### Decisions
+##### Decisions
 
 1. **Granularity.** One event per call of the engine, with its range of `_id`s (proposed). The
    alternatives are one event per block of `FOLLOWER_SYNC_BLOCK` items, or one per item.
@@ -2572,7 +2814,7 @@ Each is a separate decision, and none needs a change in the engine once the even
 6. **Public API.** `observe!` public in the first version, so that a user of the engine adds
    observers, or internal to the followers until a second consumer exists.
 
-#### Decided (2026-11-23)
+##### Decided (2026-11-23)
 
 The user accepted the recommendations:
 
@@ -2591,7 +2833,7 @@ The user accepted the recommendations:
 6. `observe!`, `unobserve!`, `observers`, `on_event`, `ProjectObserver`, `ProjectEvent` and
    `ItemsIndexed` are public from the first version, with no more than that.
 
-#### Phases
+##### Phases
 
 8a. The engine: the events, `observe!`, the followers as observers, the rule for errors, and
     the tests.
@@ -2599,7 +2841,7 @@ The user accepted the recommendations:
     the tests. The routes and the clients do not change.
 8c. The manual, the architecture page, and "As built".
 
-#### Tests
+##### Tests
 
 - An `append_items!` of `n` items emits one event with the range of their `_id`s. An `index!`
   emits one `ItemsIndexed` for the items it indexed. An exact leader emits `ItemsIndexed` in
@@ -2612,7 +2854,7 @@ The user accepted the recommendations:
 - A follower that was closed while its leader indexed items processes them when it opens.
 - `Periodic(items=n)` is processed when the lag reaches `n`, and not before.
 
-#### As built (2026-11-23)
+##### As built (2026-11-23)
 
 Phase 8a built the engine as this section says, with one difference. Opening a follower
 processes nothing. A follower that lags, because it was closed or because the process stopped,
@@ -2637,13 +2879,13 @@ when the lag reaches `items`. The user decided on 2026-11-23 to keep the check o
 task: it processes a follower that was opened with a lag of `items` or more, before the next
 event of its leader.
 
-### 5.16. Responses without Cursors (design, 2026-11-23)
+#### §5.16. Responses without Cursors (design, 2026-11-23)
 
 Status: designed on 2026-11-23, item 18 of §0, with the decisions of the user. Phases 9a, 9b
 and 9c were built on the same date ("As built"). It replaces the result cursors of §5.4. The
 listings of §5.4 keep their `offset` and `limit`.
 
-#### What exists
+##### What exists
 
 - **Cursors.** A dense or sparse `search`, and the `search` of a follower, accept `page_size`.
   With it, the server computes the `k` results, writes all of them to
@@ -2677,7 +2919,7 @@ server (`_id`, a `doc_id` such as `ccnews_123456`, `distance`, `deleted`):
 | 10,000 | 915 KiB | 163 KiB | 78 KiB |
 | 100,000 | 9.0 MiB | 1.5 MiB | 781 KiB |
 
-#### Decided (2026-11-23)
+##### Decided (2026-11-23)
 
 1. **No cursors.** A search answers its `k` results in one response, as `posting_list` does.
    There are no users of the server outside this repository and its clients. The cursors are
@@ -2698,7 +2940,7 @@ server (`_id`, a `doc_id` such as `ccnews_123456`, `distance`, `deleted`):
    with a larger `k` answers `400` with the kind `InvalidOption`. The message names `max_k`,
    its value, and how to change it.
 
-#### `max_k`
+##### `max_k`
 
 - `POST /api/v1/datasets` takes `max_k`, a positive integer, 100 when it is absent. The
   server saves it in `descriptor.json`. A dataset created before this change has no
@@ -2718,7 +2960,7 @@ server (`_id`, a `doc_id` such as `ccnews_123456`, `distance`, `deleted`):
   `max_k`. The Julia client raises `InvalidOption` for a `k` larger than `max_k`, because the
   server answers that kind.
 
-#### The middleware of compression
+##### The middleware of compression
 
 - `[server] gzip = true` and `[server] gzip_min_bytes = 1024`, the defaults. With
   `gzip = false`, the server answers every body as it is. A body smaller than
@@ -2733,7 +2975,7 @@ server (`_id`, a `doc_id` such as `ccnews_123456`, `distance`, `deleted`):
   the body in parts, the route reads the file and the middleware compresses it, and this
   section records the limit.
 
-#### JSON lines in place of Avro
+##### JSON lines in place of Avro
 
 Decided on 2026-11-23, after a review of what Avro gives the project.
 
@@ -2799,7 +3041,7 @@ The design:
 - Documentation: the architecture page, the manual of the server for `dump` and `load`, and
   §4.4 marked as replaced for the Avro file.
 
-#### Phases
+##### Phases
 
 9a. The server and the clients: the removal of the cursors, `max_k`, the middleware, the
     results of a job, and the tests. `api/07` tests the absence of cursors, `max_k` and the
@@ -2811,7 +3053,7 @@ The design:
 9c. JSON lines in place of Avro: the engine, `dump` and `load`, the tests, the architecture
     page and the manual of the server.
 
-#### Tests
+##### Tests
 
 - A `search` with `page_size` answers `400 InvalidOption`. The route of the cursors answers
   `404`.
@@ -2827,7 +3069,7 @@ The design:
   compressed.
 - The result of a `searchbatch` job is answered compressed, and it equals the file.
 
-#### As built (2026-11-23)
+##### As built (2026-11-23)
 
 Phases 9a and 9b were built as this section says, with these details:
 
@@ -2878,7 +3120,7 @@ Phase 9c was built as "JSON lines in place of Avro" says, with these details:
 - Documentation: the bundle in the section on jobs of the server manual, and the architecture
   page.
 
-## 6. Hybrid Search Readiness (Suggestions & Specifications)
+### §6. Hybrid Search Readiness (Suggestions & Specifications)
 
 The architecture must inherently support Hybrid Search (the fusion of dense semantic search and sparse lexical search).
 
@@ -2892,11 +3134,11 @@ The architecture must inherently support Hybrid Search (the fusion of dense sema
 * Expose an `alpha` scalar parameter in the API payload to allow users to perform a convex combination of normalized scores if they require explicit weighting between semantic and lexical relevance.
 * **Execution flow:** query the dense index and the lexical index independently (each returns `doc_id`s + its own score), fuse the two ranked lists by `doc_id` (RRF or the `alpha`-weighted combination), then batch-`fetch` the metadata-holding dataset once for the union of surviving `doc_id`s to hydrate the response — metadata hydration happens once, after fusion narrows the candidate set, not once per source index.
 
-## 7. Data Model Reference
+### §7. Data Model Reference
 
 Representative JSON payloads for the entities introduced above.
 
-### Dataset
+#### Dataset
 
 Strictly one index per dataset (§1) — `index_kind` is singular, not a list:
 
@@ -2904,7 +3146,7 @@ Strictly one index per dataset (§1) — `index_kind` is singular, not a list:
 { "index_uuid": "uuid", "created_at": "RFC3339", "index_kind": "searchgraph", "doc_count": 128000, "tombstone_ratio": 0.012, "join_group": "uuid | null", "meta_schema_version": 1 }
 ```
 
-### JoinGroup (new — backs the §1 join-dataset use case and §6 hybrid search)
+#### JoinGroup (new — backs the §1 join-dataset use case and §6 hybrid search)
 
 Superseded on 2026-11-09: see §0, item 11. This type was removed on 2026-11-10.
 
@@ -2914,19 +3156,19 @@ Datasets that share a `doc_id` space (e.g. one `searchgraph` dataset over dense 
 { "join_group": "uuid", "members": [ { "index_uuid": "uuid-a", "index_kind": "searchgraph", "holds_metadata": false, "key": null }, { "index_uuid": "uuid-b", "index_kind": "bm25_invfile", "holds_metadata": false, "key": "title" }, { "index_uuid": "uuid-d", "index_kind": "bm25_invfile", "holds_metadata": false, "key": "body" }, { "index_uuid": "uuid-c", "index_kind": "metadata_only", "holds_metadata": true, "key": null } ] }
 ```
 
-### IndexDescriptor
+#### IndexDescriptor
 
 ```json
 { "index_uuid": "uuid", "kind": "searchgraph", "distance": "L2", "dimension": 768, "beamsearch_baseline": { "bsize": 8, "delta": 1.05, "maxvisits": 250000 }, "transform": { "kind": "sq_u8", "rerank_with_original": true } }
 ```
 
-### Token
+#### Token
 
 ```json
 { "token": "opaque-secret", "index_uuid": "uuid", "permissions": ["search", "append", "allknn"], "created_at": "RFC3339", "expires_at": "RFC3339 | null" }
 ```
 
-### AppendRequest
+#### AppendRequest
 
 `POST /api/v1/simsearch/{index}/append` (§5.1) — always adds a new entry; "updating" `doc_id` is soft-delete + re-append, not an in-place field of this request:
 
@@ -2934,7 +3176,7 @@ Datasets that share a `doc_id` space (e.g. one `searchgraph` dataset over dense 
 { "items": [ { "doc_id": "optional-external-id", "vector": [0.1, 0.2, "..."], "metadata": { "lang": "es", "source": "..." } } ] }
 ```
 
-### SearchRequest
+#### SearchRequest
 
 `POST /api/v1/simsearch/{index}/search` (§5.1):
 
@@ -2942,7 +3184,7 @@ Datasets that share a `doc_id` space (e.g. one `searchgraph` dataset over dense 
 { "vector": [0.1, 0.2, "..."], "k": 10, "filter": "lang in (\"es\", \"en\") && within_radius(lat, lon, 19.4326, -99.1332, 5000)", "offset": 0, "limit": 10, "beamsearch_overrides": { "bsize": 12 } }
 ```
 
-### HybridSearchRequest
+#### HybridSearchRequest
 
 Two index references, per the §6 update — hybrid search spans two single-index datasets, not one dual-index dataset. `filter` is the §5.4 restricted-Julia expression string; omit or use `"true"` for no filtering:
 
@@ -2950,7 +3192,7 @@ Two index references, per the §6 update — hybrid search spans two single-inde
 { "dense_index_uuid": "uuid-a", "lexical_index_uuid": "uuid-b", "text": "raw query text", "vector": [0.1, 0.2, "..."], "alpha": 0.5, "k": 10, "filter": "true" }
 ```
 
-### FtIndexRequest
+#### FtIndexRequest
 
 Targets one specific key's dataset (§5.3) — one call per populated field of a multi-field document, same shared `doc_id` across calls:
 
@@ -2958,7 +3200,7 @@ Targets one specific key's dataset (§5.3) — one call per populated field of a
 { "doc_id": "doc-123", "text": "raw text for this field only" }
 ```
 
-### FtSearchRequest / FtSearchResponse
+#### FtSearchRequest / FtSearchResponse
 
 `key` selects one join-group member, or `"*"` to fan out to all of them (§5.3). Single-key response is a flat ranked list; `"*"` response is grouped by key, not fused. `filter` is the §5.4 restricted-Julia expression string:
 
@@ -2970,7 +3212,7 @@ Targets one specific key's dataset (§5.3) — one call per populated field of a
 { "title": [ { "doc_id": "doc-123", "score": 8.41 } ], "body": [ { "doc_id": "doc-123", "score": 3.02 }, { "doc_id": "doc-456", "score": 2.87 } ] }
 ```
 
-#### TextConfig (passthrough)
+##### TextConfig (passthrough)
 
 Mirrors `TextConfig`'s current nested shape (§5.3's warning) — `normalization`/`tokenization` sub-objects, plus a `stemmer` field the server resolves into the `transformation` value:
 
@@ -2985,7 +3227,7 @@ Mirrors `TextConfig`'s current nested shape (§5.3's warning) — `normalization
 
 No `qlist`/`slist`/`collocations` fields — those preprocessing knobs no longer exist in `TextSearch.jl` (§5.3's warning); a custom `AbstractTokenGenerator` would be needed to bring back char q-grams/skip-grams/collocations, and isn't part of this pass. `stopwords`+`stemmer` both resolve, via the `StemmerRegistry` (§5.3), into the single concrete `AbstractTokenTransformation` that becomes `TextConfig.transformation` — omit or pass `stemmer: null` to keep today's default (`IdentityTokenTransformation`, no stemming). If both stopword-removal and stemming are requested together, see §5.3's caveat on whether `AbstractTokenTransformation` composition needs its own wrapper, since `transformation` only ever holds one value.
 
-## 8. Scripting Packages (new — Python, Julia & Node.js/JS scripting against the remote API, plus §8.5's embedded no-HTTP alternative)
+### §8. Scripting Packages (new — Python, Julia & Node.js/JS scripting against the remote API, plus §8.5's embedded no-HTTP alternative)
 
 !!! note "These are scripting libraries, not client SDKs — the distinction matters for how much ceremony belongs here"
     The goal is narrower than a general-purpose SDK product: give someone a set of plain, importable functions over `similarity-search-serve`'s HTTP API (§5) so they can write a script — batch-load a dataset, poll a long `allknn` Job, run a hybrid query, drive the §1 stress-client — without hand-rolling token auth, Avro encode/decode, or a Job-polling loop each time. No class hierarchy of request/response models, no client/server version-lockstep policy, no contract-testing pipeline — just functions a script calls. Both packages wrap the same server 1:1: no reimplementing server behavior client-side (RRF fusion for hybrid search, §6, stays server-side; the script just calls the endpoint).
@@ -2996,7 +3238,7 @@ No `qlist`/`slist`/`collocations` fields — those preprocessing knobs no longer
 !!! warning "Nothing in this section is verified against a live implementation — these are proposed shapes, not confirmed names/dependencies"
     Unlike most of this document's warnings (grounded in reading `SimilaritySearch.jl`/`TextSearch.jl`/`RocksDB.jl` source), this section has no existing code to check against — both packages are net-new. Treat names, dependency choices, and the function list below as a starting proposal to react to, not a locked decision.
 
-### 8.1. Shared shape, independent of language
+#### §8.1. Shared shape, independent of language
 
 * **Connection:** a small config value (`host`, `port`, `token`, §4.1) threaded through every call — either passed explicitly per call or held in one lightweight session object a script creates once at the top and reuses; either way, it's plain state, not a class hierarchy. No local workdir access, unlike the CLI (§1) — a script only ever talks HTTP.
 * **Wire format:** JSON by default; an opt-in binary mode using the Avro encoding already defined for bulk endpoints (§4.4) for `append`/`search_batch`/`fetch`, for scripts moving enough data that JSON overhead actually matters. Check the response's `schema_version` (§4.4, §4.5) before decoding binary rather than assuming it matches what the package was built against — server and script are upgraded independently.
@@ -3004,7 +3246,7 @@ No `qlist`/`slist`/`collocations` fields — those preprocessing knobs no longer
 * **Long-Lived Search Policy (§3):** a synchronous `search` call can come back `429` pointing at `POST /api/v1/jobs/search`. Expose an explicit opt-in argument (`fallback_to_job=True`/`fallback_to_job=true`) rather than silently retrying as a Job — that turns a call from "fast or an error" into "possibly blocks for minutes," which a script should ask for, not get by default.
 * **Cursors (§5.4):** a plain iterator (Python generator; Julia iterator) over pages, hiding `cursor` bookkeeping.
 
-### 8.2. Python package (Suggestion) — `similarity-search-scripts` (PyPI)
+#### §8.2. Python package (Suggestion) — `similarity-search-scripts` (PyPI)
 
 * **HTTP layer:** `httpx` — one dependency covers both a simple blocking call (for a straight-line script) and `asyncio` (for a script that wants to fire off several Jobs concurrently).
 * **Payloads:** plain `dict`s matching the JSON shapes in §7 (`AppendRequest`, `SearchRequest`, `HybridSearchRequest`, `FtIndexRequest`, `FtSearchRequest`, `TextConfig`, ...) — no `pydantic` model layer unless later experience shows scripts keep getting payload shapes wrong; start with the simplest thing that lets someone write a working script today.
@@ -3022,7 +3264,7 @@ No `qlist`/`slist`/`collocations` fields — those preprocessing knobs no longer
 
     Verified against a real `similarity-search-serve` subprocess: the rewritten `stress_client.py` exercises dataset create/append/search/ftsearch/hybrid_search/fetch/delete/exists/calibrate, a real `allknn` job via `run_job`, cursor pagination via `iter_cursor`, and admin token/unload-reload/jobs-gc, end to end with real assertions (not just "didn't throw") against real 128-dim LSI vectors from `test/data/frankenstein.jsonl` -- passed cleanly. The async client + `run_job_async` were separately verified running two `fft` jobs concurrently via `asyncio.gather`. No permanent automated Python test suite was added (none existed before this chunk either) -- flagged as a future follow-up, not attempted now.
 
-### 8.3. Julia package (Suggestion) — `SimilaritySearchScripts.jl` (unregistered/local at first, like `RocksDB.jl` today, §1 — candidate for the General registry once the API stabilizes)
+#### §8.3. Julia package (Suggestion) — `SimilaritySearchScripts.jl` (unregistered/local at first, like `RocksDB.jl` today, §1 — candidate for the General registry once the API stabilizes)
 
 * **HTTP layer:** `HTTP.jl`.
 * **Payloads:** plain `Dict`/`NamedTuple` values matching §7's shapes, encoded with `JSON3.jl` — again, no struct-per-endpoint modeling layer unless it earns its keep.
@@ -3041,7 +3283,7 @@ No `qlist`/`slist`/`collocations` fields — those preprocessing knobs no longer
     - **Not covered yet:** the administration routes, and §8.1's Avro mode, which has no route to use (§8.2's note).
     - **Tests:** the package's own tests need no server. `test/api/test_17_julia_client.jl` of this package's full suite runs the client against the suite's server.
 
-### 8.4. Node.js/JS package (Suggestion) — `similarity-search-scripts` (npm), added on user request, not yet built
+#### §8.4. Node.js/JS package (Suggestion) — `similarity-search-scripts` (npm), added on user request, not yet built
 
 * **HTTP layer:** the built-in `fetch` (Node ≥18, and every browser) — no HTTP client dependency needed at all, consistent with §8.1's "plain functions, not an SDK" framing. `async`/`await` throughout, matching the Python package's `asyncio` option and the Julia one's `Threads.@spawn` variant for firing off several Jobs concurrently.
 * **Payloads:** plain objects matching §7's JSON shapes (`AppendRequest`, `SearchRequest`, `HybridSearchRequest`, `FtIndexRequest`, `FtSearchRequest`, `TextConfig`, ...) — no class-per-endpoint modeling layer, same reasoning as the other two packages.
@@ -3051,7 +3293,7 @@ No `qlist`/`slist`/`collocations` fields — those preprocessing knobs no longer
 * **Job helper / cursors / Long-Lived Search Policy opt-in:** identical shape to §8.1's shared contract — `runJob(kind, params)` (submit + poll `GET /api/v1/jobs/{job_id}` + return on `done`, throw on `failed`/`cancelled`), an async iterator (`for await (const page of cursor(...))`) over cursor pages, and an explicit `fallbackToJob: true` opt-in on `search` rather than a silent retry-as-Job.
 * **Ready-made scripts:** same idea as the Python package's stress-client script — ship it as an npm `bin` entry so `npx similarity-search-scripts stress-test` works without a separate install step.
 
-### 8.5. Embedded/in-process package (new, on user request — no HTTP, direct access to the shared core engine)
+#### §8.5. Embedded/in-process package (new, on user request — no HTTP, direct access to the shared core engine)
 
 !!! note "The premise: `similarity-search` (CLI) and `similarity-search-serve` (HTTP) are already two thin shells over one shared engine"
     Verified directly against this codebase's own module structure, not assumed: `cli_handlers.jl`'s `execute_build`/`execute_search`/`execute_rebuild`/etc. and `server.jl`'s `handle_append`/`handle_search`/etc. both call the exact same underlying modules — `Dataset` (open/close a dataset, get/put metadata), `Schema` (typed metadata records, filter matching), `IndexEngine` (`SearchEngineWrapper`, `create_engine`/`add_item!`/`search_live`/`calibrate!`/`mark_deleted!`), and `Persistence` (JLD2 snapshots, Avro dump/load records) — each already a real Julia module with a real `export` list (`src/dataset.jl`, `src/schema.jl`, `src/index_engine.jl`, `src/persistence.jl`). Neither the CLI dispatcher nor the HTTP router adds any actual *capability* on top of these four modules — they only add, respectively, `ArgParse` command parsing and `Oxygen`/JSON request handling around calls those modules already expose. A script that already lives on the same machine, with direct filesystem access to the same `--workdir`, doesn't need either shell: it needs exactly what these four modules already provide, `using`-ed directly.
@@ -3071,7 +3313,7 @@ No `qlist`/`slist`/`collocations` fields — those preprocessing knobs no longer
 
     **One naming-collision fix worth knowing about**: `SimilaritySearchEngine`'s top module deliberately does *not* bring `Dataset`'s raw `open_dataset`/`close_dataset` in bare (`using .Dataset: DatasetManager, put_metadata!, get_metadata, find_by_original_id, generate_id` — `open_dataset`/`close_dataset` excluded on purpose). `Dataset.open_dataset(path::String, id::String, schema=MetaSchema(); read_only=false)` and the new friendly `open_dataset(workdir::String, id::String; read_only=false)` have the exact same 2-required-`String`-arg signature; if both were bare in the same module, `embedded.jl`'s unqualified `function open_dataset(...)` would silently extend/overwrite `Dataset.open_dataset` itself (Julia methods belong to the generic function they extend, not the module doing the extending) — corrupting the one every other qualified call site (`Dataset.open_dataset(...)` in `cli_handlers.jl`/`server.jl`) depends on. `embedded.jl` calls `Dataset.open_dataset`/`Dataset.close_dataset` qualified instead. Test coverage: `SimilaritySearchEngine.jl/test/runtests.jl` (26 tests) — dense create/append/search/calibrate/allknn/delete+exists/fetch/filtered-search, a bm25 text dataset for `ftsearch`, a close+reopen persistence round-trip (including a tombstone surviving reopen), and `read_only=true` vs. a real RocksDB lock collision on a second writer.
 
-## 9. Implementation Roadmap
+### §9. Implementation Roadmap
 
 1. **Phase 1: Foundation:** Setup Julia 1.12 App structure, `ArgParse.jl` CLI split across the three binaries (`similarity-search`, `similarity-search-serve`, `similarity-search-ctl`, §1), and internal `DistanceRegistry`. Enforce the strict one-index-per-dataset rule (§1) at the dataset-creation layer from the start, since retrofitting it later would mean migrating any multi-index dataset created under a looser rule. Structure each binary's `ArgParseSettings` so the interactive-mode layer (§1's new subsection) can introspect it directly — one declared set of args/defaults/choices per command, not a second hand-written copy for the menu tree.
 2. **Phase 1.5: Interactive Mode:** Once the three binaries' non-interactive parsers exist, add the Term.jl + stdlib `REPL.TerminalMenus` guided layer (§1) on top — command menu, per-argument prompts with dynamically-discovered pre-filled defaults, confirm-before-run panel, and the `isatty(stdin)` gate that keeps it from ever engaging inside a `LocalCLIExecutor`-spawned Job subprocess (§5.5). Pure CLI-layer work, so it can land before the server/persistence phases below without depending on them.
@@ -3081,3 +3323,203 @@ No `qlist`/`slist`/`collocations` fields — those preprocessing knobs no longer
 6. **Phase 4: Web Layer:** Implement `Oxygen.jl` routers, segmenting into `/api/v1/simsearch/` (data ops §5.1, administration §5.2, full-text §5.3), `/api/v1/jobs/`, `/api/v1/datasets/`, plus `/healthz`/`/readyz`/`/metrics`. Implement the `join_group`/`holds_metadata`/`key` dataset fields (§1, §5.3, §7), including the `key` validation whitelist (§4.6), so the multi-representation and multi-field join pattern is available before Phase 5 needs it for hybrid and per-field text search.
 7. **Phase 5: Full-Text & Hybrid:** Integrate `TextSearch.jl`, establish `TextConfig` defaults (using its current nested `normalization`/`tokenization`/`transformation` shape, §5.3), implement the `StemmerRegistry` wiring up `TextSearch.jl`'s already-shipped `SnowballTokenTransformation` extension (add `Snowball`/`Languages` as this app's own dependencies to activate it — no new stemmer implementation needed, §5.3) as its first entry, implement vocabulary-drift detection (OOV-rate tracking + `rebuild`, tracked per `key`), implement `ftsearch`'s `key`/`"*"` fan-out and grouped-by-key response (§5.3), and wire up hybrid querying against the two-dataset join-group pattern (§6) rather than a single shared-index dataset.
 8. **Phase 6: Scripting Packages (§8):** Once the HTTP surface (Phase 4) is stable, build `similarity-search-scripts` (Python) and `SimilaritySearchScripts.jl` against it — deliberately last, since both are thin wrappers over an API that should not still be shifting weekly. Ship the `run_job` blocking-poll helper and cursor iterator first (the two things that make scripting against §5.4/§5.5 tolerable), plus the §1 stress-client as the Python package's first worked-example script; Avro binary-mode support can follow once the plain-JSON path is exercised against a real deployment.
+
+## DEVELOPMENT_STRATEGY.md until 2026-11-24
+
+The text of `DEVELOPMENT_STRATEGY.md` at commit `2aa0be7`. Only the levels of the headings
+changed. `PLAN.md` holds its rules now, in "Development Strategy".
+
+**Development strategy**
+
+### One repository, two packages (as of 2026-09-12)
+
+This repository holds two packages, and the split is the point:
+
+```
+SimilaritySearchEngine.jl/     the engine -- an embedded library, no HTTP, no CLI
+└── server/                    SimilaritySearchServer -- REST API, CLIs, jobs, the three apps
+```
+
+They are **kept in sync on features and separate on failure handling**. One pull request
+changes both when an engine change reaches the surface the server exposes; one CI run tests
+both, so an engine rename breaks the server's build in the commit that caused it rather than
+weeks later.
+
+**Why they are not one package.** Loading the server's dependencies costs 1.32s and 28
+transitive packages (Oxygen, HTTP, JLD2, ArgParse and their trees, measured 2026-09-12).
+The engine's whole point is to be embeddable -- `using SimilaritySearchEngine` takes 1.45s
+and a first search 2.3s, both of which a merged package would roughly double for a caller
+who never serves a request. So: separate `Project.toml`s, separate dependency sets,
+separate registration, one repository.
+
+**Why they are not two repositories,** which is what they were until now: the server sat
+three engine-breaking changes behind for twenty days, and nothing noticed. There is no
+automation that makes two repositories notice each other; a single suite does it for free.
+
+**How to apply.** Develop against `server/`'s environment with the engine developed by path
+(`julia --project=server -e 'using Pkg; Pkg.develop(path=".")'`). A change that alters an
+exported engine name, a keyword, or an error is not done until the server compiles and its
+suite passes in the same commit. Release-wise the two are independent: the server declares a
+`[compat]` range on the engine like any other dependency, and the registry records it as a
+subdirectory package.
+
+### Errors: typed in the engine, mapped at each boundary (as of 2026-09-12)
+
+The engine raises typed exceptions (`EngineError` and its subtypes, `src/errors.jl`). It
+does not know what an HTTP status code is, and it never will. Each consumer maps categories
+to its own vocabulary:
+
+- The HTTP server maps them to status codes -- not found to 404, a conflicting state to 409,
+  an invalid request to 400, anything else to 500.
+- The CLIs map them to exit codes, so a script can branch on the reason without parsing
+  output.
+- A caller using the engine as a library catches whichever type it cares about.
+
+**Why typed rather than `error("...")`:** classifying by message text is what a consumer is
+forced into otherwise, and it breaks silently the first time somebody improves the wording.
+The category is the contract; the message is for humans.
+
+### Audience: the server is a consumer, not the audience (as of 2026-08-25, still true in one repo)
+
+`SimilaritySearchEngine.jl` **also expects people who reach for it as a Julia package** — a
+script or an application that does `using SimilaritySearchEngine`, indexes its own data and
+searches it, with no HTTP server and no CLI anywhere in the picture. That is what
+`src/embedded.jl` is for, and the paragraph-search tutorial is written for exactly that reader.
+
+Living in the same repository as the server does not make the server the audience. The two
+travel together; the engine is still written for the reader who has it as a dependency and
+nothing else.
+
+**Why it changes decisions, not just framing:**
+
+- **The public surface is published, not a seam.** What `SimilaritySearchEngine` exports is an
+  API somebody outside this repository reads, calls and depends on. It has to be ergonomic on
+  its own terms — which is also why that is exactly where defaults belong (see the policy
+  below): a caller choosing `create_project(workdir, name)` should not have to name everything
+  the internals name.
+- **A breaking change costs more than a port.** Renaming an exported type or reshaping a
+  keyword used to mean "update the server's call sites". It now also means somebody else's
+  script stops working. Breaks are still on the table at `0.x` — the engine-kind redesign is
+  one — but they are a cost to weigh rather than a free move, and they belong in a version
+  bump and the README rather than in a quiet commit.
+- **The submodules are not the API.** `IndexEngine`, `Persistence`, `Project` and `Schema` are
+  reachable from outside, and the server does call into them, but the package's exports are
+  what an outside user is invited to use. Anything a package user genuinely needs should be
+  exported from `SimilaritySearchEngine` rather than reached for as `IndexEngine.something`.
+
+**How to apply:** when a change touches an exported name or the shape of a public call, ask
+what it does to a reader who has this package as a dependency and nothing else — not only what
+it does to the server. When something is only for the server, keep it out of the package's
+exports. And when a public function grows an argument, give it a default: the surface is where
+defaults are supposed to live.
+
+### Policy: no defaults below the public surface (as of 2026-08-25)
+
+**Defaults live on the package's public surface — what `SimilaritySearchEngine` exports — and
+nowhere below it.** Every function under that line takes every argument explicitly, positional
+and keyword alike.
+
+**Why:** a default is an answer to a question. Put one on an internal function and the same
+question now has two answers in two places, and nothing tells you they disagree. This package
+had exactly that: `create_project` took `distance=nothing` and `create_engine` took
+`distance=SqL2()`, so the caller could not pass its own sentinel down without overriding the
+other default, and the code arbitrated with a `?:` whose only purpose was to decide whose
+default won:
+
+```julia
+engine = distance === nothing ?
+    IndexEngine.create_engine(index_type; minrecall, textmodel, on_change) :
+    IndexEngine.create_engine(index_type; distance, minrecall, textmodel, on_change)
+```
+
+The same shape appeared with `verbose`: this package's `fit_profile` adapter defaulted it to
+`false` while the library's own method defaults it to `true`, so which one you got depended on
+which layer you called. Neither was a bug yet. Both were a bug waiting for a reader.
+
+**How to apply:** when an internal function needs a value it does not have, the answer is to
+name it at the boundary and pass it down — not to guess. Since issue #2 (2026-11-21), the
+defaults of a project are on the constructors of its specification: `DenseVectors()` is
+`SqL2`, `Graph(minrecall=0.9)` and `Float32Vectors()`, and every function below
+`create_project` receives a complete spec.
+
+Two exemptions, both narrow:
+
+- **Qualified definitions** (`Base.show`, `TextSearch.fit_profile`) implement somebody else's
+  contract, and the shape of that signature — defaults included — belongs to whoever owns it.
+- **Public constructors of public types** are on the surface by definition (`TextItem(text;
+  doc_id=nothing, ...)`).
+
+`test/policy.jl` enforces this, parsing `src/` with Julia's own parser and failing with the file
+and function name of any offender. It is a test rather than a note because a policy nobody
+verifies drifts exactly the way the two cases above did — and because adding a default to an
+internal function breaks nothing and reads like a convenience, so nothing else would catch it.
+
+**Second level, not yet enforced:** the mechanical rule is *visibility* (not exported by the
+package), which is checkable but not quite the real rule. The real rule is *direction of call*:
+a function should not carry a default if all its callers are our own code — which includes
+submodule APIs that `SimilaritySearchServer` happens to call, and excludes nothing. That pass
+comes after this one is secured, and it needs judgement per function rather than a script.
+
+## server/test/TEST_PLAN.md until 2026-11-24
+
+The text of `server/test/TEST_PLAN.md` at commit `2aa0be7`. Only the levels of the headings
+changed. It is the plan of tests written before the server was built, in Spanish. Its section
+numbers are not cited with §. The tests that exist are listed in `PLAN.md`, "Tests".
+
+**Plan de Pruebas: SimilaritySearchServer**
+
+Este documento describe la batería de pruebas planificada para validar la funcionalidad del CLI y de la API web de `SimilaritySearchServer` antes y durante la implementación. Las pruebas estarán basadas en bases de datos pseudo-sintéticas generadas a partir de textos del Proyecto Gutenberg.
+
+### 1. Bases de Datos de Prueba
+
+Se generarán 10 bases de datos correspondientes a 10 libros clásicos (ej. Frankenstein, Dracula, Moby Dick).
+Para cada libro, los datos se dividirán en párrafos.
+
+**Formato de cada registro:**
+*   `id`: Identificador único del párrafo (ej. `doc_1`, `doc_2`).
+*   `text`: Texto crudo del párrafo.
+*   `vector`: Vector de 128 dimensiones que representa un histograma de los caracteres ASCII imprimibles presentes en el párrafo.
+*   `meta`: Diccionario de metadatos del párrafo que incluye:
+    *   `word_count` (int): Número de palabras en el párrafo.
+    *   `verb_count` (int): Conteo de verbos de uso común (ej. *is, are, was, said, have, go*).
+    *   `characters_mentioned` (list): Lista de nombres de personajes principales detectados en el párrafo (obtenidos extrayendo automáticamente las palabras capitalizadas más frecuentes a nivel del libro).
+
+Estas bases de datos se exportarán en formato JSON Lines (`.jsonl`) dentro del directorio `test/data/` para ser fácilmente consumibles tanto por la CLI (mediante `build` y `searchbatch`) como por el servidor HTTP.
+
+### 2. Escenarios de Prueba a Validar
+
+#### 2.1. Construcción de Índices (CLI)
+*   **Comando:** `similarity-search build`
+*   **Archivos de prueba:** Scripts que llamen al comando para cada una de las 10 bases de datos.
+*   **Validaciones (Expected Results):**
+    *   Creación exitosa del índice `SearchGraph` sobre los vectores densos (histogramas).
+    *   Creación de un índice secundario invertido (`BM25InvertedFile` o `InvertedFile`) sobre la columna `text`.
+    *   Extracción y almacenamiento correctos de `meta` en una Column Family (RocksDB) que soporte consultas.
+    *   Generación de los archivos bajo la estructura `data/{dataset_uuid}/`.
+
+#### 2.2. Búsqueda y Filtrado (API Web y CLI)
+*   **Búsqueda Métrica pura:** 
+    *   **Acción:** Realizar búsquedas de k-vecinos más cercanos (k-NN) usando vectores de histogramas como queries.
+    *   **Esperado:** Recuperar los `k` párrafos cuya distribución de caracteres sea más similar. Las métricas a usar serán L2 o Cosine.
+*   **Búsqueda Lexical (BM25):**
+    *   **Acción:** Buscar palabras clave como `"blood"`, `"ship"`, `"love"`.
+    *   **Esperado:** Recuperar párrafos que contengan estas palabras ordenados por relevancia.
+*   **Filtrado de Metadatos (Pre-filtro/Post-filtro):**
+    *   **Acción:** Buscar vectores pero acotando a párrafos donde `word_count > 50` y `characters_mentioned` contenga `"Alice"`.
+    *   **Esperado:** Los resultados devueltos por la búsqueda deben cumplir obligatoriamente con el predicado.
+*   **Búsqueda Híbrida (Hybrid Search):**
+    *   **Acción:** Búsqueda combinada que proporcione tanto el texto como el vector, haciendo join de los resultados usando Reciprocal Rank Fusion (RRF).
+
+#### 2.3. Tareas Pesadas (Jobs)
+*   **Batch Search:** Validar `searchbatch` desde la CLI proporcionando un archivo con miles de queries (ej. usando 1 libro como queries sobre el índice de otro libro).
+*   **allknn / closestpair:** Someter un Job para calcular el grafo exacto o pares más cercanos. Validar que la API web retorne `202 Accepted` e interactuar con `/api/v1/jobs/*` para ver el progreso.
+*   **fft / neardup:** Validar rutinas sin-índice (`fft`) y rutinas de de-duplicación.
+
+#### 2.4. Telemetría y Límites
+*   **Acción:** Saturar el servidor con múltiples consultas concurrentes de `search`.
+*   **Esperado:** Comprobar que el 80% del pool dinámico responde, mientras que la ejecución de `allknn` usa el 20% reservado, sin bloquear el hilo principal.
+*   **Token API:** Crear tokens y verificar que rechace llamadas a la API sin token (o con uno expirado/sin permisos).
+
+### 3. Estructura de Scripts
+*   `test/generate_datasets.jl`: (Independiente) Descarga los libros, genera vectores y metadatos, emite `test/data/*.jsonl`.
+*   `test/run_tests.jl`: Batería de pruebas automatizadas en Julia. Arranca un servidor de prueba y consume los JSONL generados. Utilizará `Test` de Julia para hacer aserciones sobre las respuestas HTTP y los resultados CLI.

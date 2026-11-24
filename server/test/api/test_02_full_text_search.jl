@@ -5,10 +5,10 @@ using JSON3
 # RESOLVED (was a KNOWN UPSTREAM BUG): TextSearch.jl 1.0.0 now defines its own local
 # `pairiterator` in `TextSearch.jl/src/bm25/BM25.jl` instead of importing it from
 # `SimilaritySearch.InvertedFiles` (which removed that name in `7cce0cd`) -- the cross-repo
-# race documented in PLAN.md §5.3's former "Open issue" note is fixed now that both packages
+# race documented in CHANGELOG.md §5.3's former "Open issue" note is fixed now that both packages
 # landed stable releases (SimilaritySearch v1.1.1, TextSearch v1.0.0). Verified via direct
 # CLI reproduction (`build --index-kind bm25_invfile` + `searchbatch`) before flipping these
-# back to real `@test`s -- see PLAN.md §5.3's updated note.
+# back to real `@test`s -- see CHANGELOG.md §5.3's updated note.
 #
 # `invfile`/`weighted_invfile` (§4 below) was a separate, application-side issue (a raw
 # bag-of-words no longer scores under `NormCosine` since TextSearch.jl dropped its
@@ -59,7 +59,7 @@ using JSON3
         results = JSON3.read(resp3.body).results
         @test !isempty(results)
 
-        # 5. What the vocabulary covers, and what it does not (PLAN.md §5.8). The searches
+        # 5. What the vocabulary covers, and what it does not (CHANGELOG.md §5.8). The searches
         # above already went through it, so the counters are not empty.
         vocab = JSON3.read(String(HTTP.get("$base_url/datasets/lexical_ds/vocab").body))
         @test vocab.vocsize > 0

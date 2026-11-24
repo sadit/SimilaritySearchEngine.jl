@@ -1,6 +1,6 @@
 """Synchronous client for SimilaritySearchServer's HTTP API.
 
-Plain functions over the wire, not a class-per-endpoint SDK (PLAN.md §8.1) -- every method
+Plain functions over the wire, not a class-per-endpoint SDK (CHANGELOG.md §8.1) -- every method
 here just delegates to a matching builder in ``_payloads.py`` then makes the call. No
 local workdir access anywhere: this only ever talks HTTP to a running
 ``similarity-search-serve``.
@@ -105,7 +105,7 @@ class SimilaritySearchClient:
     def calibrate(self, index, minrecall=None, numqueries=None, ksearch=None, queries=None, partition=None):
         return self._call(*p.calibrate(index, minrecall, numqueries, ksearch, queries, partition))
 
-    # --- followers (PLAN.md §5.12) ------------------------------------------------------
+    # --- followers (CHANGELOG.md §5.12) ------------------------------------------------------
 
     def create_follower(self, index, name, kind, source, disjoint=None, graph_min=None, distance=None, policy=None):
         return self._call(*p.create_follower(index, name, kind, source, disjoint, graph_min, distance, policy))

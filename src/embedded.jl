@@ -1,4 +1,4 @@
-# Friendly, function-per-operation embedded API (PLAN.md §8.5, chunk 22): a script running
+# Friendly, function-per-operation embedded API (CHANGELOG.md §8.5, chunk 22): a script running
 # on the same machine against the same --workdir a similarity-search/similarity-search-serve
 # process already uses, with no HTTP, no CLI subprocess, no running server required. Every
 # function here mirrors an existing cli_handlers.jl/server.jl code path exactly (same
@@ -8,7 +8,7 @@
 #
 # Scope is deliberately bounded to project lifecycle + core CRUD + calibrate + one
 # representative heavy op (allknn). fft/neardup/hsp/rebuild!/dump_dataset/load_dataset are
-# not built here -- a documented follow-up (PLAN.md §8.5), not an oversight.
+# not built here -- a documented follow-up (CHANGELOG.md §8.5), not an oversight.
 
 """
     SearchResult
@@ -203,17 +203,17 @@ mutable struct EmbeddedEngine
     engine::IndexEngine.AbstractSearchEngine
     store::Persistence.EngineStore
     schema_version::Int
-    # What this project declares about `meta` (PLAN.md §4.5). Empty for a project that
+    # What this project declares about `meta` (CHANGELOG.md §4.5). Empty for a project that
     # declares nothing, which is every project written before this existed and every one
     # created without the keyword.
     meta_schema::Schema.MetaSchema
-    # How much of what this project is asked for, it has words for (PLAN.md §5). See
+    # How much of what this project is asked for, it has words for (CHANGELOG.md §5). See
     # [`OOVCounters`](@ref) and [`vocabulary_report`](@ref).
     oov::OOVCounters
     dense_vectors::Base.RefValue{Union{Nothing,MMapMatrixDatabase}}
     read_only::Bool
     wrote::Base.RefValue{Bool}
-    # The project's partitions (PLAN.md §5.9), or `nothing` when it declares no partition
+    # The project's partitions (CHANGELOG.md §5.9), or `nothing` when it declares no partition
     # field. The same reference is held by the text index's `Persistence.LazyPostings`, which
     # writes the partition lists of every block it persists.
     partitions::Base.RefValue{Union{Nothing,Persistence.PartitionStore}}
@@ -226,11 +226,11 @@ mutable struct EmbeddedEngine
     # raises `ProjectClosed` (issue #4): the stores behind a closed handle are closed, and an
     # operation on them returned wrong results instead of an error.
     closed::Base.RefValue{Bool}
-    # The followers opened on this handle, by name (PLAN.md §5.11). Each one is also an
+    # The followers opened on this handle, by name (CHANGELOG.md §5.11). Each one is also an
     # observer of the events of the project, and `close_project!` closes them. The values are
     # `Follower`s, a type defined after this one.
     followers::Dict{String,Any}
-    # The observers of the events of this project (PLAN.md §5.15), in the order in which they
+    # The observers of the events of this project (CHANGELOG.md §5.15), in the order in which they
     # receive them; the number of indexed items already reported to them; and the lock that
     # reports the events one at a time. The values are `ProjectObserver`s, a type defined
     # after this one.
@@ -369,7 +369,7 @@ const _PROJECT_CFS = [Persistence.ENGINE_CF, Persistence.ADJACENCY_CF, Persisten
 """
     PartitionBy(field; graph_min=nothing)
 
-Partitions a text or a dense project by the `meta` field `field` (PLAN.md §5.9, §5.10). Given to
+Partitions a text or a dense project by the `meta` field `field` (CHANGELOG.md §5.9, §5.10). Given to
 `create_project(...; partitions=PartitionBy("repo"))` or to [`declare_partition!`](@ref).
 
 The value of the field is a non-empty string or a list of them; a list puts the item in several
@@ -494,7 +494,7 @@ function create_project(workdir::String, dataset::String, spec::ProjectSpec=Dens
     if partitions !== nothing
         kind === :sparse &&
             invalid_option(:partitions, "a text or a dense project can be partitioned; a sparse project cannot " *
-                  "be partitioned yet (PLAN.md §5.10)")
+                  "be partitioned yet (CHANGELOG.md §5.10)")
         _check_partition_field(schema, partition_by)
     end
     graph_min = _check_partition_graph_min(kind, partitions)
@@ -516,7 +516,7 @@ function create_project(workdir::String, dataset::String, spec::ProjectSpec=Dens
     eng = IndexEngine.create_engine(spec; on_change=_on_change(spec, store, project), log_io=nothing,
                                     maxbatches=runtime.maxbatches, adj_factory, edit_correction=runtime.edit_correction)
     Persistence.save_field!(store, :spec, IndexEngine.spec_to_dict(spec))
-    # The numbering of the items, which a follower checks (PLAN.md §5.11).
+    # The numbering of the items, which a follower checks (CHANGELOG.md §5.11).
     Persistence.save_field!(store, :generation, Project.generate_id())
     Persistence.save_fields!(store, IndexEngine.snapshot_state(eng))
     isempty(schema) || Persistence.save_field!(store, :meta_schema, schema)
@@ -620,7 +620,7 @@ end
     DEFAULT_PARTITION_GRAPH_MIN
 
 The number of indexed members from which a partition of a dense `SearchGraph` project has its
-own graph (PLAN.md §5.10). A smaller partition is searched with an exact scan of its members.
+own graph (CHANGELOG.md §5.10). A smaller partition is searched with an exact scan of its members.
 
 Measured on 2026-11-18 over 200,000 synthetic vectors of 128 dimensions, 16 threads: an exact
 scan took 0.12 ms for 2,000 members and 3.7 ms for 20,000, and a graph search 0.016 ms and
@@ -662,7 +662,7 @@ end
 """
     _restore_dense_partitions!(handle) -> Nothing
 
-Rebuilds the partitions of a dense project when it is opened (PLAN.md §5.10). The members come
+Rebuilds the partitions of a dense project when it is opened (CHANGELOG.md §5.10). The members come
 from `PARTITION_MEMBERS_CF`, limited to the indexed items. Each partition graph is rebuilt from
 `PARTITION_GRAPH_CF` up to its saved length, with its saved `BeamSearch`, hints and calibrated
 levels.
@@ -981,7 +981,7 @@ end
     _save_search_state!(handle::EmbeddedEngine) -> Nothing
 
 Saves what a search of a graph project starts from, so that [`open_project`](@ref) sets it on
-the rebuilt graph (PLAN.md §0, item 13): the `BeamSearch` (`index.algo[]`) as the engine field
+the rebuilt graph (CHANGELOG.md §0, item 13): the `BeamSearch` (`index.algo[]`) as the engine field
 `:beamsearch`, and the starting points of the search (`index.hints`) as `:hints`. Two calls
 change them: [`index!`](@ref index!(::EmbeddedEngine)), whose context tunes the beam and picks
 the hints while the graph grows, and [`calibrate!`](@ref), which leaves the last level it tuned.
@@ -1078,7 +1078,7 @@ function _index_quantized!(handle::EmbeddedEngine, rng::AbstractRNG)
     q = engine.quant
     _fit_quantizer!(handle, rng)
     # A sketched project with 64 staged vectors or fewer has no encoder yet: its vectors stay
-    # staged until an `index!` has more of them (PLAN.md §5.14).
+    # staged until an `index!` has more of them (CHANGELOG.md §5.14).
     q.encoder === nothing && return handle
     raw = handle.dense_vectors[]
     parts = handle.partitions[]
@@ -1173,7 +1173,7 @@ end
 """
     fit_quantizer!(handle::EmbeddedEngine; rng=Random.default_rng()) -> EmbeddedEngine
 
-Fits the encoder of a quantized (issue #1) or sketched (PLAN.md §5.14) project on a sample of
+Fits the encoder of a quantized (issue #1) or sketched (CHANGELOG.md §5.14) project on a sample of
 its staged vectors, without encoding them. [`index!`](@ref index!(::EmbeddedEngine)) fits it on
 its first call, so this is needed only to choose the `rng` of the sample and of a random
 rotation, or to fit before the whole collection is staged. Does nothing when the encoder exists.
@@ -1203,7 +1203,7 @@ quantizer_info(handle::EmbeddedEngine) = (_check_open(handle);
 """
     sketch_info(handle::EmbeddedEngine) -> Union{SketchInfo,Nothing}
 
-The sketches of a dense project (PLAN.md §5.14), or `nothing` for a project that does not store
+The sketches of a dense project (CHANGELOG.md §5.14), or `nothing` for a project that does not store
 sketches. See [`SketchInfo`](@ref) for the fields.
 """
 sketch_info(handle::EmbeddedEngine) = (_check_open(handle);
@@ -1356,7 +1356,7 @@ function append_items!(handle::EmbeddedEngine, items::AbstractVector{<:Schema.Ab
         Persistence.append_staged_texts!(Persistence.open_staged_text_store(project.db), text_sp, staged_texts)
     end
 
-    # An exact or sparse project indexed the items here (PLAN.md §5.15).
+    # An exact or sparse project indexed the items here (CHANGELOG.md §5.15).
     _report_indexed!(handle)
     return length(items)
 end
@@ -1574,14 +1574,14 @@ the only way to get it, since the context that counted them goes back to the eng
 when the call returns.
 
 `partition`, on a partitioned dense project, searches only the items of that partition
-(PLAN.md §5.10). A partition without its own graph is scanned, and the result is exact. A
+(CHANGELOG.md §5.10). A partition without its own graph is scanned, and the result is exact. A
 partition with a graph is searched with the `BeamSearch` its construction tuned. With
 `minrecall`, it uses the levels of [`calibrate!`](@ref)`(handle; partition)`, and it raises
 `NotTrained` if the partition was never calibrated: a search does not calibrate a partition.
 `filter` and `candidates` apply to the results of the partition. A name the project does not
 hold raises `UnknownPartition`.
 
-A project with [`Sketched`](@ref) storage (PLAN.md §5.14) answers with the distance between
+A project with [`Sketched`](@ref) storage (CHANGELOG.md §5.14) answers with the distance between
 sketches, which orders the results and is not the distance of the project. With `rerank > 0`,
 it asks the sketches for `rerank * k` candidates and scores them again with its own distance
 and its `Float32` vectors, so the results have the distance of the project. Before its encoder
@@ -1594,7 +1594,7 @@ function search(handle::EmbeddedEngine, vector, k::Int=10; filter=nothing, minre
     partition === nothing || return _search_partition(handle, query, k, partition; filter, minrecall, candidates, stats, vector)
     needs_save = minrecall !== nothing && handle.engine isa IndexEngine.DenseEngine{IndexEngine.GraphBackend} && isempty(handle.engine.backend.opt_beamsearch)
     # A sketched project with a second evaluation asks the sketches for `rerank * k`
-    # candidates, and scores them again with its own distance (PLAN.md §5.14).
+    # candidates, and scores them again with its own distance (CHANGELOG.md §5.14).
     r = _rerank_factor(handle.engine)
     kk = r == 0 ? k : r * k
     res_knn = filter === nothing ?
@@ -1612,7 +1612,7 @@ end
 """
     _search_partition(handle, query, k, partition; filter, minrecall, candidates, stats, vector) -> Vector{SearchResult}
 
-[`search`](@ref) in one partition of a dense project (PLAN.md §5.10). `filter` and
+[`search`](@ref) in one partition of a dense project (CHANGELOG.md §5.10). `filter` and
 `candidates` apply to the results of the partition.
 """
 function _search_partition(handle::EmbeddedEngine, query, k::Int, partition::AbstractString; filter, minrecall,
@@ -1699,7 +1699,7 @@ function searchbatch(handle::EmbeddedEngine, queries, k::Int=10)
     return _rerank_batch(handle, queries, ids, dists, k)
 end
 
-# --- The second evaluation of a sketched project (PLAN.md §5.14) -------------------------
+# --- The second evaluation of a sketched project (CHANGELOG.md §5.14) -------------------------
 
 # The number of candidates per result that a sketched project scores again with its own
 # distance and its `Float32` vectors, or 0.
@@ -1853,7 +1853,7 @@ end
 """
     partition_field(handle::EmbeddedEngine) -> Union{Nothing,String}
 
-The `meta` field this project is partitioned by, or `nothing` when it declares none (PLAN.md
+The `meta` field this project is partitioned by, or `nothing` when it declares none (CHANGELOG.md
 §5.9). See [`create_project`](@ref)'s `partition_by` and [`declare_partition!`](@ref).
 """
 function partition_field(handle::EmbeddedEngine)
@@ -1866,7 +1866,7 @@ end
     partition_graph_min(handle::EmbeddedEngine) -> Union{Nothing,Int}
 
 The number of indexed members from which a partition of this dense project has its own graph
-(PLAN.md §5.10), or `nothing` for a project that is not a partitioned dense project. See
+(CHANGELOG.md §5.10), or `nothing` for a project that is not a partitioned dense project. See
 `graph_min` of [`PartitionBy`](@ref).
 """
 function partition_graph_min(handle::EmbeddedEngine)
@@ -1883,7 +1883,7 @@ That number counts items that are not indexed yet and items deleted since, becau
 still members of the partition. An item in several partitions is counted in each. Raises
 `InvalidOption` on a project without a partition field.
 
-`graph` says whether the partition has its own graph (PLAN.md §5.10). It is `true` only for a
+`graph` says whether the partition has its own graph (CHANGELOG.md §5.10). It is `true` only for a
 partition of a dense `SearchGraph` project with at least `graph_min` indexed members (see
 [`PartitionBy`](@ref)).
 A text partition has posting lists, and `graph` is `false`.
@@ -1905,7 +1905,7 @@ end
         -> Vector{@NamedTuple{name::String, items::Int, graph::Bool}}
 
 Partitions an existing text or dense project by a `meta` field, as `create_project`'s
-`partitions` does for a new one (PLAN.md §5.9 and §5.10), and returns [`partitions`](@ref).
+`partitions` does for a new one (CHANGELOG.md §5.9 and §5.10), and returns [`partitions`](@ref).
 A field name is `PartitionBy(field)`.
 
 On a text project, it reads the `meta` of every item once, and builds the partition lists by
@@ -1938,7 +1938,7 @@ function declare_partition!(handle::EmbeddedEngine, by::PartitionBy)
     kind = IndexEngine.payload_kind(engine)
     kind === :sparse &&
         invalid_option(:partitions, "a text or a dense project can be partitioned; a sparse project cannot " *
-              "be partitioned yet (PLAN.md §5.10)")
+              "be partitioned yet (CHANGELOG.md §5.10)")
     current = partition_field(handle)
     current === nothing ||
         invalid_option(:partitions, "this project is already partitioned by $(repr(current)); a project has " *
@@ -2159,7 +2159,7 @@ end
 """
     meta_schema(handle::EmbeddedEngine) -> Schema.MetaSchema
 
-What this project declares about the `meta` of its items (PLAN.md §4.5). Empty for a project
+What this project declares about the `meta` of its items (CHANGELOG.md §4.5). Empty for a project
 that declares nothing, which is the default and the behavior every project had before this
 existed: `meta` is stored as it arrives.
 
@@ -2264,7 +2264,7 @@ end
 """
     vocabulary_report(handle::EmbeddedEngine; scan::Bool=false) -> Union{Nothing, Dict{String,Any}}
 
-What this project's vocabulary covers, and what it does not (PLAN.md §5).
+What this project's vocabulary covers, and what it does not (CHANGELOG.md §5).
 
 Reports the size of the vocabulary, how many documents it was fitted from, its ten most
 frequent tokens, and the running counters of [`OOVCounters`](@ref): how many queries were
@@ -2485,7 +2485,7 @@ The table of configurations, one per level, is persisted at once, so that `searc
 `minrecall` keyword finds it after a `close_project!` and `open_project`. The measurements are
 returned and not persisted.
 
-`partition="name"` calibrates the graph of one partition of a dense project (PLAN.md §5.10),
+`partition="name"` calibrates the graph of one partition of a dense project (CHANGELOG.md §5.10),
 and keeps its levels apart from the global ones. A partition is calibrated only by this call:
 a search with `minrecall` on an uncalibrated partition raises `NotTrained`. A partition without
 its own graph raises `InvalidOption`, because an exact scan has nothing to calibrate.
@@ -2520,7 +2520,7 @@ end
     allknn(handle::EmbeddedEngine; k=10) -> Vector{KnnRow}
 
 Runs `SimilaritySearch.allknn` synchronously against the project's dense index -- no
-Job/spool machinery at all, unlike the HTTP API's `POST /api/v1/jobs/allknn` (PLAN.md
+Job/spool machinery at all, unlike the HTTP API's `POST /api/v1/jobs/allknn` (CHANGELOG.md
 §8.5's "runs in-process" framing for the embedded surface). Errors if the project is a text
 index or empty (mirrors `cli_handlers.jl`'s `_require_dense`). Returns one [`KnnRow`](@ref)
 per item, its `_id` being the item's 1-based position in insertion order (matching

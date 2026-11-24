@@ -217,7 +217,7 @@ Quantized(quantizer::SQ=SQ(); rotation::Rotation=NoRotation(), keep_vectors::Boo
              anchorpolicy=:random)
 
 Each vector is stored as a sketch of `hyperplanes` components at `bits` bits each, instead of
-its `Float32` values (PLAN.md §5.14). The sketch is built by `SimilaritySearch.Projections`: an
+its `Float32` values (CHANGELOG.md §5.14). The sketch is built by `SimilaritySearch.Projections`: an
 `AnchoredDistantHyperplanes` model selects `hyperplanes` pairs of anchor vectors, and a
 `QuantSketch` encodes the signed margin of a vector against each pair, `d(v, b) - d(v, a)`,
 divided by `d(a, b)`. The anchors are selected under the distance of the project, so any

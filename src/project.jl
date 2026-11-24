@@ -104,7 +104,7 @@ Opens or creates a RocksDB-backed project at the given path.
   A writable open creates the listed column families that do not exist yet. A read-only open
   cannot create one, and RocksDB refuses to open a column family that does not exist, so a
   read-only open opens only the listed ones that exist. A project written before a column
-  family was added (for example the partition ones, PLAN.md §5.9) is then readable without a
+  family was added (for example the partition ones, CHANGELOG.md §5.9) is then readable without a
   writable open first. Code that reads such a column family must check that it is open.
 
 # Returns

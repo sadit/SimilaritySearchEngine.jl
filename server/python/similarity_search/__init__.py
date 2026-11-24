@@ -1,6 +1,6 @@
 """similarity_search: plain functions over similarity-search-serve's HTTP API.
 
-A scripting library, not a full SDK (PLAN.md §8) -- write a script that calls these
+A scripting library, not a full SDK (CHANGELOG.md §8) -- write a script that calls these
 functions, without hand-rolling Job-polling loops yourself. A search answers its k
 results in one response.
 """

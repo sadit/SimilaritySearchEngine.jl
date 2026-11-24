@@ -1082,10 +1082,10 @@ and calibration divide their work into batches, one task each, and the engine ta
 count from the number of threads; this server caps it at the share reserved for batch work,
 so that an append that triggers `index!` does not spread over the threads answering queries.
 A job needs no such cap: it is a subprocess started with its share in `JULIA_NUM_THREADS`.
-`serve` prints both numbers when it starts. PLAN.md §2 proposed a request
-collector for this: a channel and a pool of worker tasks that every search would pass
-through. This is the bound without that structure, and the measurements a collector would be
-justified by are the ones above.
+`serve` prints both numbers when it starts. The first specification of the server
+(`CHANGELOG.md` §2) proposed a request collector for this: a channel and a pool of worker
+tasks that every search would pass through. This is the bound without that structure, and
+the measurements a collector would be justified by are the ones above.
 
 `[resources]` divides this server's threads between answering queries and executing jobs. A
 job runs as its own process, so the reserved share is spent as a number of processes and a

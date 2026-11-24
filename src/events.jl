@@ -1,4 +1,4 @@
-# Events of a project (PLAN.md §5.15). Included after `embedded.jl`, which defines the handle
+# Events of a project (CHANGELOG.md §5.15). Included after `embedded.jl`, which defines the handle
 # that holds the observers, and before `followers.jl`, whose `Follower` is an observer.
 #
 # An event is a change of a project that a consumer can need to act on. The engine reports it
@@ -11,7 +11,7 @@ export ProjectEvent, ItemsIndexed, ProjectObserver, on_event, observe!, unobserv
 """
     ProjectEvent
 
-A change of a project that an observer can act on (PLAN.md §5.15). The engine reports each
+A change of a project that an observer can act on (CHANGELOG.md §5.15). The engine reports each
 event once, after the change is saved, to the observers that [`observe!`](@ref) added. The first
 version has one kind, [`ItemsIndexed`](@ref).
 """
@@ -35,7 +35,7 @@ end
 """
     ProjectObserver
 
-The supertype of the observers of a project (PLAN.md §5.15). A subtype adds methods of
+The supertype of the observers of a project (CHANGELOG.md §5.15). A subtype adds methods of
 [`on_event`](@ref) for the events it needs, and [`observe!`](@ref) adds an instance to a handle.
 A [`Follower`](@ref) is an observer of its leader.
 """

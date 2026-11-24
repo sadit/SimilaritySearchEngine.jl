@@ -2,7 +2,7 @@ using Test
 using HTTP
 using JSON3
 
-# Join groups were removed on 2026-11-10 (PLAN.md §0, item 11). A record with several text
+# Join groups were removed on 2026-11-10 (CHANGELOG.md §0, item 11). A record with several text
 # fields is one dataset per field, each appended with the record's doc_id. These tests check
 # that pattern, and that the removed fields and routes are refused instead of ignored.
 @testset "6. One text dataset per field, without join groups" begin

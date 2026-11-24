@@ -1,4 +1,4 @@
-# Sketched dense projects (PLAN.md §5.14). Part of `IndexEngine`, next to `quantization.jl`: a
+# Sketched dense projects (CHANGELOG.md §5.14). Part of `IndexEngine`, next to `quantization.jl`: a
 # sketched project keeps the state of a quantized one (`QuantState`), with a `SketchEncoder` in
 # place of an `SQEncoder`. Its codes are sketches of `SimilaritySearch.Projections`: an
 # `AnchoredDistantHyperplanes` model encoded by a `QuantSketch` at 1, 2, 4 or 8 bits per
@@ -118,14 +118,14 @@ _prepare_query(enc::SketchEncoder, vector::AbstractVector{Float32}) = sketch_vec
 """
     issketched(engine) -> Bool
 
-Whether `engine` is a dense engine whose vectors are stored as sketches (PLAN.md §5.14).
+Whether `engine` is a dense engine whose vectors are stored as sketches (CHANGELOG.md §5.14).
 """
 issketched(engine::AbstractSearchEngine) = isquantized(engine) && engine.quant.spec isa Sketched
 
 """
     SketchInfo
 
-What `sketch_info(h)` reports about the sketches of a dense project (PLAN.md §5.14).
+What `sketch_info(h)` reports about the sketches of a dense project (CHANGELOG.md §5.14).
 
 - `storage`: the [`Sketched`](@ref) storage the project was created with.
 - `fitted`: whether the encoder exists. It is fitted at the first `index!` with more than 64

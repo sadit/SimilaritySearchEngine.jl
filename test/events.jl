@@ -1,4 +1,4 @@
-# Events of a project (PLAN.md §5.15): one `ItemsIndexed` per call that indexes items, with the
+# Events of a project (CHANGELOG.md §5.15): one `ItemsIndexed` per call that indexes items, with the
 # range of their `_id`s, to the observers that `observe!` added. The followers are observers.
 
 struct EventRecorder <: ProjectObserver

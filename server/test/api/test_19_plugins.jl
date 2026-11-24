@@ -2,7 +2,7 @@ using Test
 using HTTP
 using JSON3
 
-# Plugins in the server (PLAN.md §5.13, issue #5, phases 6a and 6b). `ensure_test_server` loads the test
+# Plugins in the server (CHANGELOG.md §5.13, issue #5, phases 6a and 6b). `ensure_test_server` loads the test
 # plugin of `server/test/plugins/`, as `serve` loads `[plugins]` before it opens any dataset.
 @testset "19. Plugins" begin
     with_test_server() do base_url, workdir

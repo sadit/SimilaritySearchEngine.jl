@@ -71,7 +71,7 @@ identity_fields(::Nothing) = Dict{String, Any}("user" => nothing, "token_fingerp
     log_request!(manager, ctx, op_type, index_uuid, t0, snapshot; token=nothing, distance_name=nothing, dimension=nothing, extra=Dict{String,Any}())
 
 Logs one `op_log` record for a request that just finished: elapsed wall-clock time since
-`t0` (`time()`-based, matching PLAN.md §4.3's "delta computing time"), and the real
+`t0` (`time()`-based, matching CHANGELOG.md §4.3's "delta computing time"), and the real
 distance-evaluation count for *this* operation via `SimilaritySearch.distance_evaluations`
 diffed against `snapshot` (from `snapshot_costs`, taken before the operation ran) -- 0 if
 `ctx`/`snapshot` is `nothing` rather than erroring, since not every op touches an index
@@ -106,7 +106,7 @@ function log_request!(manager::Project.ProjectManager, ctx, op_type::String, ind
 end
 
 # ==========================================
-# Aggregates for /metrics (PLAN.md §5.8)
+# Aggregates for /metrics (CHANGELOG.md §5.8)
 # ==========================================
 
 """
@@ -139,7 +139,7 @@ struct MetricsRegistry
     duration_buckets::Dict{Tuple{String, String}, Vector{Int}}
     evaluations::Dict{String, Int}                          # dataset => distance computations
     items_inserted::Dict{String, Int}                       # dataset => items
-    # Time spent waiting for a query slot (PLAN.md §2, see `Server._with_query_slot`). Zero on
+    # Time spent waiting for a query slot (CHANGELOG.md §2, see `Server._with_query_slot`). Zero on
     # a server that never reaches its bound, which is what says the bound is not binding.
     wait_seconds::Base.RefValue{Float64}
     waits::Base.RefValue{Int}

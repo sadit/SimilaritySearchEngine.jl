@@ -3,7 +3,7 @@ uuid = "75d86282-de3d-4ee9-a9ff-97bf3abee96b"
 version = "0.1.0"
 authors = ["Eric S. Tellez <donsadit@gmail.com>"]
 
-# Only HTTP and JSON (PLAN.md §8.3): this package talks to a remote server and must not need
+# Only HTTP and JSON (CHANGELOG.md §8.3): this package talks to a remote server and must not need
 # the engine, SimilaritySearch, TextSearch or RocksDB to be installed.
 [deps]
 HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"

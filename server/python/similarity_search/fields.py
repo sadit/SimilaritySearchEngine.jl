@@ -1,6 +1,6 @@
 """Search several text datasets with one query, one dataset per field of a record.
 
-The server has no route for this: join groups were removed on 2026-11-10 (PLAN.md §0, item
+The server has no route for this: join groups were removed on 2026-11-10 (CHANGELOG.md §0, item
 11). Each field of a record is a text dataset of its own, appended with the same `doc_id` in
 every field dataset, and the caller keeps the map from field name to dataset id. These
 helpers send one `ftsearch` request per dataset and return the results by field name.

@@ -1,4 +1,4 @@
-# Leader and follower datasets, phase 2: the framework (PLAN.md §5.11, issue #5). The engine
+# Leader and follower datasets, phase 2: the framework (CHANGELOG.md §5.11, issue #5). The engine
 # defines no kind of follower in this phase, so the kind is defined here, in a module registered
 # as a plugin. That also checks that a kind can be defined outside the engine.
 
@@ -127,7 +127,7 @@ end
         on_index = create_follower(h, "i", FTK.GroupsSpec(Keywords()))
         manual = create_follower(h, "m", FTK.GroupsSpec(Keywords()); policy=Manual())
         periodic = create_follower(h, "p", FTK.GroupsSpec(Keywords()); policy=Periodic(seconds=60))
-        # The append indexes the items, and reports them (PLAN.md §5.15): OnIndex and OnWrite,
+        # The append indexes the items, and reports them (CHANGELOG.md §5.15): OnIndex and OnWrite,
         # which is another name of it, process them there.
         append_items!(h, [follower_item(i) for i in 11:20])
         @test on_write.position == 20 && on_index.position == 20

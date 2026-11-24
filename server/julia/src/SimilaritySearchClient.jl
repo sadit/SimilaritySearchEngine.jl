@@ -1,7 +1,7 @@
 """
     SimilaritySearchClient
 
-A client of the HTTP API of `similarity-search-serve` (PLAN.md §8.3).
+A client of the HTTP API of `similarity-search-serve` (CHANGELOG.md §8.3).
 
 The functions have the names, the arguments and the result types of the engine's own functions
 (`create_project`, `append_items!`, `search`, `ftsearch`, `fetch_items`, `calibrate!`, ...).

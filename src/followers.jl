@@ -1,4 +1,4 @@
-# Leader and follower datasets (PLAN.md §5.11, issue #5).
+# Leader and follower datasets (CHANGELOG.md §5.11, issue #5).
 #
 # A follower organizes the items of a leader without copying them. It reads the records, the
 # `meta` and, when its key source asks for it, the payload of each item of the leader, and it
@@ -24,7 +24,7 @@ const FOLLOWER_SYNC_BLOCK = 16_384
 """
     KeySource
 
-The part of an item of the leader that a follower uses (PLAN.md §5.11). A key source is a type
+The part of an item of the leader that a follower uses (CHANGELOG.md §5.11). A key source is a type
 with a method of [`keys_of`](@ref). The engine includes [`Keywords`](@ref), [`Refs`](@ref),
 [`DocId`](@ref) and [`MetaValue`](@ref). A key source defined outside the engine belongs to a
 module registered with [`register_plugin!`](@ref).
@@ -96,7 +96,7 @@ end
 """
     FollowerSpec
 
-What a follower holds and how it is built from the items of its leader (PLAN.md §5.11). A kind
+What a follower holds and how it is built from the items of its leader (CHANGELOG.md §5.11). A kind
 of follower is a subtype with a field `source::KeySource`, or a method of `key_source`, and
 methods of these functions, all qualified with `SimilaritySearchEngine.`:
 
@@ -133,10 +133,10 @@ close_follower_state!(state) = nothing
 """
     SyncPolicy
 
-When a follower processes the new items of its leader (PLAN.md §5.11): [`OnIndex`](@ref),
+When a follower processes the new items of its leader (CHANGELOG.md §5.11): [`OnIndex`](@ref),
 [`OnWrite`](@ref), [`Periodic`](@ref) or [`Manual`](@ref). The leader reports its new items to
 its open followers with an [`ItemsIndexed`](@ref) event, and the policy says what the follower
-does with it (PLAN.md §5.15).
+does with it (CHANGELOG.md §5.15).
 """
 abstract type SyncPolicy end
 
@@ -152,7 +152,7 @@ struct OnIndex <: SyncPolicy end
 """
     OnWrite()
 
-Another name of [`OnIndex`](@ref), since 2026-11-23 (PLAN.md §5.15). It processed the new items
+Another name of [`OnIndex`](@ref), since 2026-11-23 (CHANGELOG.md §5.15). It processed the new items
 after each `append_items!` of the leader. A follower processes indexed items only, so a leader
 that stages its items had nothing new for it until `index!`, and in the server, whose `append`
 indexes, it did the same work as `OnIndex`. A follower created with it keeps it.
@@ -171,8 +171,8 @@ struct Manual <: SyncPolicy end
 
 The follower processes the new items when it is `items` or more items behind its leader, or
 every `seconds`. At least one of the two is given. The follower checks `items` at each event of
-its leader, and processes in [`on_event`](@ref) (PLAN.md §5.15). The task of `serve` processes it
-every `seconds`, and when its lag reaches `items` (PLAN.md §5.12). The engine alone has no task,
+its leader, and processes in [`on_event`](@ref) (CHANGELOG.md §5.15). The task of `serve` processes it
+every `seconds`, and when its lag reaches `items` (CHANGELOG.md §5.12). The engine alone has no task,
 so a policy with only `seconds` is treated as [`Manual`](@ref).
 """
 struct Periodic <: SyncPolicy
@@ -203,7 +203,7 @@ const _ENGINE_MODULE = @__MODULE__
     register_plugin!(mod::Module) -> Module
 
 Registers `mod` as a plugin: its types can be the spec or the key source of a follower
-(PLAN.md §5.11). The name of the plugin is `nameof(mod)`. A follower saves that name, and
+(CHANGELOG.md §5.11). The name of the plugin is `nameof(mod)`. A follower saves that name, and
 `open_follower` raises [`PluginNotLoaded`](@ref) in a process that has not registered it,
 because the engine saves the spec with `Serialization`, and a value of a type from a module
 that is not loaded cannot be read back.
@@ -254,7 +254,7 @@ end
 """
     Follower
 
-An open follower (PLAN.md §5.11), from [`create_follower`](@ref) or [`open_follower`](@ref).
+An open follower (CHANGELOG.md §5.11), from [`create_follower`](@ref) or [`open_follower`](@ref).
 It holds its leader handle, and it is registered in it: [`close_project!`](@ref) of the leader
 closes it.
 """
@@ -374,7 +374,7 @@ end
 """
     create_follower(leader::EmbeddedEngine, name, spec::FollowerSpec; policy=OnIndex()) -> Follower
 
-Creates the follower `name` of `leader` (PLAN.md §5.11), processes every indexed item of the
+Creates the follower `name` of `leader` (CHANGELOG.md §5.11), processes every indexed item of the
 leader, and returns it open. `leader` must be writable: its list of followers is saved in it.
 
 The follower is stored in [`follower_dir`](@ref)`(workdir, leader, name)`. Its canonical name
@@ -403,7 +403,7 @@ function create_follower(leader::EmbeddedEngine, name::AbstractString, spec::Fol
     check_follower_spec(spec, leader)
     generation = _leader_generation(leader)
     if generation === nothing
-        # A leader created before generations existed (PLAN.md §5.11).
+        # A leader created before generations existed (CHANGELOG.md §5.11).
         generation = Project.generate_id()
         Persistence.save_field!(leader.store, :generation, generation)
     end
@@ -474,14 +474,14 @@ end
 """
     open_follower(leader::EmbeddedEngine, name) -> Union{Follower, FollowerView}
 
-Opens the follower `name` of `leader` (PLAN.md §5.11). `name` is a follower name, or a
+Opens the follower `name` of `leader` (CHANGELOG.md §5.11). `name` is a follower name, or a
 canonical name with or without the leader part: `"by_repo"`, `"repos/by_repo"`. With a value,
 `"by_repo=unicach"`, it returns a [`FollowerView`](@ref) restricted to that value.
 
 A follower that is already open on `leader` is returned again, not opened twice. A follower
 opened from a read-only handle of its leader is read-only. Opening processes nothing: a follower
 that lags behind its leader stays behind until the next event of the leader, as its policy says,
-or until [`sync!`](@ref). The open follower is an observer of its leader (PLAN.md §5.15).
+or until [`sync!`](@ref). The open follower is an observer of its leader (CHANGELOG.md §5.15).
 
 Raises [`UnknownFollower`](@ref) for a name that the leader does not list,
 [`PluginNotLoaded`](@ref) when the follower needs a plugin that is not registered, and
@@ -525,7 +525,7 @@ end
     close_follower!(leader::EmbeddedEngine, name)
 
 Closes the follower `name` if it is open on `leader`; does nothing otherwise. For a caller that
-holds the leader and a name, such as the server before it deletes a follower (PLAN.md §5.12).
+holds the leader and a name, such as the server before it deletes a follower (CHANGELOG.md §5.12).
 """
 function close_follower!(leader::EmbeddedEngine, name::AbstractString)
     f = get(leader.followers, String(name), nothing)
@@ -537,7 +537,7 @@ end
     open_followers(leader::EmbeddedEngine) -> Vector{Follower}
 
 The followers open on `leader`, sorted by name. The server walks them to process the followers
-with a [`Periodic`](@ref) policy (PLAN.md §5.12).
+with a [`Periodic`](@ref) policy (CHANGELOG.md §5.12).
 """
 open_followers(leader::EmbeddedEngine) = sort!(Follower[f for f in values(leader.followers)]; by=f -> f.name)
 
@@ -605,7 +605,7 @@ function _leader_item(leader::EmbeddedEngine, id::Int, payload::Bool)
 end
 
 # An open follower is registered in its leader handle by name, and it observes the events of
-# the leader (PLAN.md §5.15).
+# the leader (CHANGELOG.md §5.15).
 function _register_follower!(leader::EmbeddedEngine, name::String, f::Follower)
     leader.followers[name] = f
     observe!(leader, f)
@@ -615,7 +615,7 @@ end
 """
     on_event(f::Follower, leader::EmbeddedEngine, e::ItemsIndexed)
 
-What a follower does with new items of its leader, as its policy says (PLAN.md §5.15):
+What a follower does with new items of its leader, as its policy says (CHANGELOG.md §5.15):
 [`OnIndex`](@ref) and [`OnWrite`](@ref) process them with [`sync!`](@ref);
 [`Periodic`](@ref) with `items` processes them when its lag reaches `items`; [`Manual`](@ref)
 and `Periodic` with only `seconds` do nothing. A follower opened from a read-only handle does
@@ -693,7 +693,7 @@ end
 
 Lists in `leader` a follower whose directory already exists in
 [`follower_dir`](@ref)`(workdir, leader, name)`, and writes the name of the leader in it
-(PLAN.md §5.12). It processes nothing. A rebuilt leader has a new generation, so a follower
+(CHANGELOG.md §5.12). It processes nothing. A rebuilt leader has a new generation, so a follower
 attached to it stays stale until [`rebuild_follower!`](@ref). A leader loaded from a copy has the
 generation of the copy, so a follower copied with it is ready.
 

@@ -2,7 +2,7 @@ using Test
 using HTTP
 using JSON3
 
-# Followers over HTTP (PLAN.md §5.12, issue #5, phases 5a and 5b). The engine's own tests check
+# Followers over HTTP (CHANGELOG.md §5.12, issue #5, phases 5a and 5b). The engine's own tests check
 # what a follower computes; this file checks that the server creates, opens, processes, searches
 # and reports followers, that it maps their errors, and that similarity-search-ctl calls it.
 @testset "18. Followers" begin
@@ -161,7 +161,7 @@ using JSON3
         @test HTTP.delete("$base_url/datasets/fl_ctl_dense").status == 200
 
         # A follower that cannot process an item stops at it, and its status has the error. The
-        # leader keeps the item, and the append answers 200 for it (PLAN.md §5.15): an error of a
+        # leader keeps the item, and the append answers 200 for it (CHANGELOG.md §5.15): an error of a
         # follower does not fail the call of the leader.
         @test HTTP.post("$base_url/datasets", [], JSON3.write(Dict("id" => "fl_bad", "index_type" => "bm25_invfile"))).status == 201
         @test HTTP.post("$base_url/datasets/fl_bad/append", [], JSON3.write(Dict("items" => docs[1:10]))).status == 200

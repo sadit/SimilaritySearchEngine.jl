@@ -1,4 +1,4 @@
-# Followers over HTTP (PLAN.md §5.12, issue #5, phase 5a). Included in `module Server`.
+# Followers over HTTP (CHANGELOG.md §5.12, issue #5, phase 5a). Included in `module Server`.
 #
 # A follower is processed in this process, because a job is a read-only subprocess. `OnIndex`
 # and `OnWrite` run inside the request that writes the leader (`append` calls `index!`), and
@@ -15,7 +15,7 @@ _clear_follower_error!(app, canonical::String) =
 """
     open_dataset_followers!(app, id, handle) -> Nothing
 
-Opens every follower that the leader `id` lists (PLAN.md §5.12). A follower that cannot be
+Opens every follower that the leader `id` lists (CHANGELOG.md §5.12). A follower that cannot be
 opened, because it is stale, needs a plugin that is not loaded, or has lost its directory, stays
 closed, and its error is kept for its status. The leader stays available.
 """
@@ -48,7 +48,7 @@ const _SET_DISTANCES = Dict(
     parse_key_source(source) -> Union{SSE.KeySource, String}
 
 The key source that a wire name selects: `keywords`, `refs`, `doc_id`, `meta:<field>`, or
-`Plugin.name` of a plugin (PLAN.md §5.13). A key source of a plugin with options is an object,
+`Plugin.name` of a plugin (CHANGELOG.md §5.13). A key source of a plugin with options is an object,
 `{"name": "Plugin.name", ...}`. A `String` result is the message of a `400`. A plugin that is not
 loaded raises `PluginNotLoaded`.
 """
@@ -104,9 +104,9 @@ end
 """
     parse_follower_request(data) -> Union{NamedTuple, String}
 
-The name, the spec and the policy of `POST /api/v1/datasets/{id}/followers` (PLAN.md §5.12):
+The name, the spec and the policy of `POST /api/v1/datasets/{id}/followers` (CHANGELOG.md §5.12):
 `(name, spec, policy)`, or the message of a `400`. `kind` is `partition` (with `disjoint` and
-`graph_min`), `keyword` (with `distance`), or a kind of a plugin (PLAN.md §5.13): `Plugin.name`,
+`graph_min`), `keyword` (with `distance`), or a kind of a plugin (CHANGELOG.md §5.13): `Plugin.name`,
 or `{"name": "Plugin.name", ...}` with its options. A plugin that is not loaded raises
 `PluginNotLoaded`.
 """
@@ -204,7 +204,7 @@ end
 
 _body(req::HTTP.Request) = (b = String(req.body); isempty(b) ? Dict{String,Any}() : JSON3.read(codeunits(b), Dict{String,Any}))
 
-"`POST /api/v1/datasets/{id}/followers`: creates a follower (PLAN.md §5.12)."
+"`POST /api/v1/datasets/{id}/followers`: creates a follower (CHANGELOG.md §5.12)."
 function handle_create_follower(req::HTTP.Request, app, id::String)
     handle = _leader_or_404(app, id)
     handle isa HTTP.Response && return handle
@@ -311,7 +311,7 @@ end
 `POST /api/v1/datasets/{id}/followers/{f}/search`: with `{f} = name=value`, `search` in a
 partition of a dense leader (`vector`, `k`, `filter`, `minrecall`); with a keyword follower, a
 search by keys (`keys`, `k`, `t`, `filter`). `k` is limited by the `max_k` of the leader
-(PLAN.md §5.16).
+(CHANGELOG.md §5.16).
 """
 function handle_follower_search(req::HTTP.Request, app, id::String, f::String)
     handle = _leader_or_404(app, id)
@@ -452,12 +452,12 @@ end
     process_periodic_followers!(app; now=time()) -> Int
 
 Processes each open follower with a `Periodic` policy whose period has passed since its last
-processing, or whose lag has reached its number of items (PLAN.md §5.12). Returns the number of
+processing, or whose lag has reached its number of items (CHANGELOG.md §5.12). Returns the number of
 followers processed. An error is kept for the status of the follower, and the others are still
 processed.
 
 An `append` already processes a follower whose lag reaches its number of items, at the event of
-its leader (PLAN.md §5.15). The check of the number of items here processes a follower that was
+its leader (CHANGELOG.md §5.15). The check of the number of items here processes a follower that was
 opened with that lag, before the next event of its leader.
 """
 function process_periodic_followers!(app; now::Float64=time())
@@ -490,13 +490,13 @@ end
     start_follower_task!(app) -> Task
 
 Starts the task of `serve` that processes the periodic followers every
-`app.followers.check_seconds` seconds (PLAN.md §5.12).
+`app.followers.check_seconds` seconds (CHANGELOG.md §5.12).
 """
 start_follower_task!(app) = errormonitor(@async while true
     sleep(app.followers.check_seconds)
     try
         # In the newest world, so that the methods of a plugin loaded after this task started
-        # are visible (PLAN.md §5.13).
+        # are visible (CHANGELOG.md §5.13).
         Base.invokelatest(process_periodic_followers!, app)
     catch e
         @error "the periodic follower task failed; it continues" exception=(e, catch_backtrace())

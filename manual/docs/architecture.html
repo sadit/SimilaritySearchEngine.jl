@@ -779,7 +779,7 @@ window.Quarto = {
 </section>
 <section id="sketched-dense-indexes" class="level3">
 <h3 class="anchored" data-anchor-id="sketched-dense-indexes">Sketched Dense Indexes</h3>
-<p>A dense project created with <code>storage=Sketched(hyperplanes; bits)</code> stores a sketch of each vector instead of the vector (PLAN.md §5.14). The sketch is built by <code>SimilaritySearch.Projections</code>:</p>
+<p>A dense project created with <code>storage=Sketched(hyperplanes; bits)</code> stores a sketch of each vector instead of the vector (CHANGELOG.md §5.14). The sketch is built by <code>SimilaritySearch.Projections</code>:</p>
 <ul>
 <li>An <code>AnchoredDistantHyperplanes</code> model selects <code>hyperplanes</code> pairs of vectors of a sample, the anchors. Each pair <code>(a, b)</code> defines a hyperplane: the vectors closer to <code>a</code> than to <code>b</code> under the distance of the project are on one side.</li>
 <li>A <code>QuantSketch</code> encodes the signed margin of a vector <code>v</code> against each pair, <code>d(v, b) - d(v, a)</code>, divided by <code>d(a, b)</code>, at <code>bits</code> bits. At 1 bit it keeps the sign, in <code>UInt64</code> words compared with the Hamming distance. At 2, 4 and 8 bits it keeps a <code>UInt8</code> code of the margin, and the codes are compared with the squared Euclidean distance of <code>SQgu2</code>, <code>SQgu4</code> or <code>SQgu8</code>.</li>
@@ -923,7 +923,7 @@ window.Quarto = {
 </section>
 <section id="leader-and-follower-datasets" class="level2">
 <h2 class="anchored" data-anchor-id="leader-and-follower-datasets">Leader and Follower Datasets</h2>
-<p>A <strong>follower</strong> is a dataset that organizes the items of another dataset, its <strong>leader</strong> (issue #5, <code>server/PLAN.md</code> §5.11). It reads the items of the leader and does not copy them. It stores its own structure, expressed with the <code>_id</code>s of the leader. A leader can have several followers, and each one is created, rebuilt and deleted without a change to the items of the leader.</p>
+<p>A <strong>follower</strong> is a dataset that organizes the items of another dataset, its <strong>leader</strong> (issue #5, <code>CHANGELOG.md</code> §5.11). It reads the items of the leader and does not copy them. It stores its own structure, expressed with the <code>_id</code>s of the leader. A leader can have several followers, and each one is created, rebuilt and deleted without a change to the items of the leader.</p>
 <p>The engine includes the framework of followers and two kinds, the partition follower and the keyword follower, since 2026-11-22.</p>
 <section id="concepts" class="level3">
 <h3 class="anchored" data-anchor-id="concepts">Concepts</h3>
@@ -1012,7 +1012,7 @@ window.Quarto = {
 </section>
 <section id="events-of-a-project" class="level2">
 <h2 class="anchored" data-anchor-id="events-of-a-project">Events of a Project</h2>
-<p>An <strong>event</strong> is a change of a project that a consumer can need to act on (<code>server/PLAN.md</code> §5.15). An <strong>observer</strong> is a consumer of the events of a project. The engine reports events since 2026-11-23, and the followers are observers of their leader.</p>
+<p>An <strong>event</strong> is a change of a project that a consumer can need to act on (<code>CHANGELOG.md</code> §5.15). An <strong>observer</strong> is a consumer of the events of a project. The engine reports events since 2026-11-23, and the followers are observers of their leader.</p>
 <p>There is one kind of event, <code>ItemsIndexed(sp, ep)</code>: the items with <code>_id</code> from <code>sp</code> to <code>ep</code> became searchable.</p>
 <table class="caption-top table">
 <colgroup>

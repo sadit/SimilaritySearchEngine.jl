@@ -2,7 +2,7 @@ using Test
 using HTTP
 using JSON3
 
-# Partitioned text datasets over HTTP (PLAN.md §5.9). The engine's own tests check that a
+# Partitioned text datasets over HTTP (CHANGELOG.md §5.9). The engine's own tests check that a
 # partition search equals the global search restricted to the partition; this file checks that
 # the API carries the field, the partition and the errors through.
 @testset "16. Partitioned text datasets" begin
@@ -85,7 +85,7 @@ using JSON3
         @test JSON3.read(String(resp.body)).kind == "InvalidOption"
         @test failed(() -> HTTP.get("$base_url/datasets/plain_ds/partitions")).status == 400
 
-        # A dense dataset accepts `partition_by` since PLAN.md §5.10. A sparse one is refused
+        # A dense dataset accepts `partition_by` since CHANGELOG.md §5.10. A sparse one is refused
         # at creation.
         @test HTTP.post("$base_url/datasets", [], JSON3.write(Dict(
             "id" => "dense_part", "index_type" => "searchgraph", "partition_by" => "repo"))).status == 201
@@ -96,7 +96,7 @@ using JSON3
     end
 end
 
-# Partitioned dense datasets over HTTP (PLAN.md §5.10). The engine's tests check the scan, the
+# Partitioned dense datasets over HTTP (CHANGELOG.md §5.10). The engine's tests check the scan, the
 # graphs and the reopen; this file checks that the API carries the partition, the threshold,
 # the calibration of one partition and the errors through.
 @testset "16b. Partitioned dense datasets" begin

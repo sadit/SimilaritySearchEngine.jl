@@ -201,7 +201,7 @@ function prune_expired!(manager::TokenManager)
 end
 
 # ==========================================
-# Authorization (PLAN.md §4.1)
+# Authorization (CHANGELOG.md §4.1)
 # ==========================================
 
 """

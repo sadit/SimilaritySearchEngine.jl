@@ -2,7 +2,7 @@ using Test
 using HTTP
 using JSON3
 
-# A declared meta schema over HTTP (PLAN.md §4.5): declared at creation, enforced on append,
+# A declared meta schema over HTTP (CHANGELOG.md §4.5): declared at creation, enforced on append,
 # reported back, and used by a filter to compare in the declared type. The declaration itself
 # belongs to the engine; what this file checks is that it survives the round trip through the
 # API and governs what the endpoints do.

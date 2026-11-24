@@ -1,4 +1,4 @@
-# Partition followers (PLAN.md §5.11, issue #5, phase 3). A partition search through a follower
+# Partition followers (CHANGELOG.md §5.11, issue #5, phase 3). A partition search through a follower
 # must equal the global search of the leader restricted to the partition, as the partitions
 # inside a project do (test/text_partitions.jl, test/dense_partitions.jl).
 

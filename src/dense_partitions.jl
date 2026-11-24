@@ -1,4 +1,4 @@
-# Partitions of a dense project (PLAN.md §5.10). Part of `IndexEngine`: the structures live in
+# Partitions of a dense project (CHANGELOG.md §5.10). Part of `IndexEngine`: the structures live in
 # memory, and `embedded.jl` reads and writes them through `Persistence`.
 #
 # A partition is a `SubDatabase` of the vectors of the global index: its `map` is the sorted
@@ -12,7 +12,7 @@ export DensePartition, DensePartitions, enable_partitions!, new_partitions, rest
 """
     enable_partitions!(engine::DenseEngine, graph_min::Integer, on_change) -> DensePartitions
 
-Gives `engine` an empty set of partitions (PLAN.md §5.10). `graph_min` is the number of members
+Gives `engine` an empty set of partitions (CHANGELOG.md §5.10). `graph_min` is the number of members
 from which a partition of a `SearchGraph` project has its own graph; an exact project never
 builds one. `on_change` is `number -> (index, sp, ep) -> nothing`, the observer that saves a
 range of the graph of partition `number`, or `nothing`.
@@ -27,7 +27,7 @@ end
     new_partitions(engine::DenseEngine, graph_min::Integer, on_change) -> DensePartitions
 
 An empty set of partitions over the vectors of `engine`, not attached to it. A partition
-follower (PLAN.md §5.11) holds its own set; [`enable_partitions!`](@ref) attaches one to the
+follower (CHANGELOG.md §5.11) holds its own set; [`enable_partitions!`](@ref) attaches one to the
 engine for the partitions inside a project. The arguments are those of `enable_partitions!`.
 """
 function new_partitions(engine::DenseEngine, graph_min::Integer, on_change::Union{Nothing,Function})
@@ -86,7 +86,7 @@ end
 Appends the ids `first_id`, `first_id + 1`, ... to their partitions in `parts`, as
 [`_add_members!`](@ref) does, skipping an id that its partition already ends with or exceeds.
 Adding the same ids twice therefore gives the same partitions, which a follower needs when it
-repeats a block (PLAN.md §5.11). Then indexes the partition graphs of a `SearchGraph` engine. All
+repeats a block (CHANGELOG.md §5.11). Then indexes the partition graphs of a `SearchGraph` engine. All
 of it runs under the write lock of `engine`, whose vectors the partitions are views of. Returns
 the numbers of the partitions whose graph changed.
 """
@@ -150,7 +150,7 @@ index_partition_graphs!(engine::DenseEngine{GraphBackend}) = write_lock(() -> _i
 
 Rebuilds partition `number` when a project is opened: its members are `ids`, sorted. A graph is
 rebuilt when `graph_len > 0`: the direct neighbors of local ids `1:graph_len` come from
-`load_neighbors(i)`, and `beamsearch` and `hints` are set on it as on the global graph (PLAN.md
+`load_neighbors(i)`, and `beamsearch` and `hints` are set on it as on the global graph (CHANGELOG.md
 §0, item 13). A graph that holds fewer members than `ids` gets the rest from the next
 [`index!`](@ref index!(::DenseEngine{GraphBackend}, ::Function)).
 """
@@ -203,7 +203,7 @@ end
     search_partition_live(engine::DenseEngine, number::UInt32, query, k::Int, minrecall)
         -> (id=..., dist=..., deleted=..., distance_evaluations=...)
 
-[`search_live`](@ref) over partition `number` of a dense project (PLAN.md §5.10). The ids
+[`search_live`](@ref) over partition `number` of a dense project (CHANGELOG.md §5.10). The ids
 returned are `_id`s. A partition without a graph is scanned, and `minrecall` has no effect on
 it. A partition with a graph is searched with its `BeamSearch`, or with its level for
 `minrecall`. A partition that has a graph and no calibrated level raises `NotTrained` when
@@ -291,7 +291,7 @@ end
     partition_search_state(engine::DenseEngine) -> Dict{UInt32,NamedTuple}
 
 The `BeamSearch` and the hints of each partition graph, by partition number: what
-`embedded.jl` saves so that a reopened partition graph searches as it did (PLAN.md §0, item 13).
+`embedded.jl` saves so that a reopened partition graph searches as it did (CHANGELOG.md §0, item 13).
 """
 partition_search_state(engine::DenseEngine) =
     engine.partitions === nothing ? Dict{UInt32,NamedTuple}() : partition_search_state(engine, engine.partitions)

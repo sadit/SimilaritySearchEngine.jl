@@ -45,7 +45,7 @@ using JSON3
     @test_throws SSE.InvalidOption dataset_spec("searchgraph", nothing, 16, nothing)
 end
 
-@testset "the storage of a dense dataset on the wire (PLAN.md §5.14)" begin
+@testset "the storage of a dense dataset on the wire (CHANGELOG.md §5.14)" begin
     S = SimilaritySearchServer.Server
     spec(storage; kind="exhaustive_search", distance="normcosine") = dataset_spec(kind, distance, nothing, storage)
     @test spec(nothing).storage == Float32Vectors()
@@ -143,7 +143,7 @@ end
 
 
 # ---------------------------------------------------------------------------------------
-# Authorization (PLAN.md §4.1). No server and no socket: the decision is a pure function of
+# Authorization (CHANGELOG.md §4.1). No server and no socket: the decision is a pure function of
 # the token record and the permission a route asks for, and `_guard` is where it is taken.
 # ---------------------------------------------------------------------------------------
 
@@ -269,7 +269,7 @@ end
 
 
 # ---------------------------------------------------------------------------------------
-# The thread budget of job execution (PLAN.md §2). Arithmetic and a command, no processes.
+# The thread budget of job execution (CHANGELOG.md §2). Arithmetic and a command, no processes.
 # ---------------------------------------------------------------------------------------
 
 @testset "the reserved share becomes processes and threads" begin
@@ -317,7 +317,7 @@ end
 
 
 # ---------------------------------------------------------------------------------------
-# The counters of /metrics (PLAN.md §5.8), without a server: they are an aggregate of the
+# The counters of /metrics (CHANGELOG.md §5.8), without a server: they are an aggregate of the
 # same values that go into the operation log.
 # ---------------------------------------------------------------------------------------
 
@@ -380,7 +380,7 @@ end
 
 
 # ---------------------------------------------------------------------------------------
-# The declared meta schema (PLAN.md §4.5) crossing the wire: the engine owns the type, this
+# The declared meta schema (CHANGELOG.md §4.5) crossing the wire: the engine owns the type, this
 # package only translates the request into it and reports it back.
 # ---------------------------------------------------------------------------------------
 
@@ -430,7 +430,7 @@ end
 
 
 # ---------------------------------------------------------------------------------------
-# The bound on concurrent searches (PLAN.md §2). No server: the bound is a semaphore and a
+# The bound on concurrent searches (CHANGELOG.md §2). No server: the bound is a semaphore and a
 # derivation, and both can be exercised directly.
 # ---------------------------------------------------------------------------------------
 
@@ -521,7 +521,7 @@ end
 end
 
 # ---------------------------------------------------------------------------------------
-# Followers on the wire (PLAN.md §5.12): strings to the engine's spec, source and policy.
+# Followers on the wire (CHANGELOG.md §5.12): strings to the engine's spec, source and policy.
 # ---------------------------------------------------------------------------------------
 
 @testset "the wire's follower requests map onto the engine's specs" begin
@@ -557,7 +557,7 @@ end
 end
 
 # ---------------------------------------------------------------------------------------
-# Plugins (PLAN.md §5.13): loading `[plugins]`, and the wire names of a plugin.
+# Plugins (CHANGELOG.md §5.13): loading `[plugins]`, and the wire names of a plugin.
 # ---------------------------------------------------------------------------------------
 
 @testset "a plugin of [plugins] is loaded once, set up and registered" begin

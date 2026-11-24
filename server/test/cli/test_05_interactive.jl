@@ -9,7 +9,7 @@ using JSON3
     # (the rest of this file exercises interactive.jl's pure helpers in-process --
     # there is no way to drive REPL.TerminalMenus' actual keypress loop from a
     # non-interactive test harness, and `run_interactive`'s own TTY gate is precisely
-    # what makes that a non-goal rather than a gap: see PLAN.md §1's "defense in depth
+    # what makes that a non-goal rather than a gap: see CHANGELOG.md §1's "defense in depth
     # against deadlocking a Job-spawned subprocess" note.)
 
     cli_script = joinpath(@__DIR__, "..", "..", "src", "apps", "similarity-search.jl")
@@ -177,7 +177,7 @@ using JSON3
     # it, never shown as one menu item among many. The actual real-subprocess-boots-with-
     # CLI-flags / config-file-fallback-workdir-bug-fix behavior was verified by hand (not
     # as an automated test here, to avoid a slow, real-port-binding integration test) --
-    # see PLAN.md's chunk 18/21 notes.
+    # see CHANGELOG.md's chunk 18/21 notes.
 
     @test_throws KeyError settings["serve"]
 

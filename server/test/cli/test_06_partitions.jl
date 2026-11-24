@@ -2,7 +2,7 @@ using Test
 using JSON3
 
 # `build --partition-by`, `searchbatch --partition`, and a `rebuild` that keeps the partition
-# field (PLAN.md §5.9).
+# field (CHANGELOG.md §5.9).
 @testset "CLI partitions" begin
     workdir = mktempdir()
     data_path = joinpath(@__DIR__, "..", "..", "..", "test", "data", "frankenstein.jsonl")
@@ -41,7 +41,7 @@ using JSON3
 end
 
 # A dense dataset: `build --partition-by --partition-graph-min`, `searchbatch --partition`, and
-# a `rebuild` that keeps both (PLAN.md §5.10).
+# a `rebuild` that keeps both (CHANGELOG.md §5.10).
 @testset "CLI dense partitions" begin
     workdir = mktempdir()
     data_path = joinpath(@__DIR__, "..", "..", "..", "test", "data", "frankenstein.jsonl")

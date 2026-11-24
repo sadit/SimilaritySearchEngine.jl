@@ -1,4 +1,4 @@
-# Keyword followers and posting lists (PLAN.md §5.11, issue #5, phase 4).
+# Keyword followers and posting lists (CHANGELOG.md §5.11, issue #5, phase 4).
 
 kw_keys(i) = vcat(i % 2 == 0 ? ["even"] : ["odd"], i % 3 == 0 ? ["three"] : String[], i % 10 == 0 ? ["ten"] : String[],
                   i == 7 ? ["seven"] : String[])
@@ -36,7 +36,7 @@ kw_has(i, key) = i % 13 != 0 && key in kw_keys(i)
         @test_throws UnsupportedOperation open_follower(h, "kw=three")
 
         # New items reach the follower when they become searchable (OnIndex): an exact leader
-        # indexes them in the append, which reports them (PLAN.md §5.15).
+        # indexes them in the append, which reports them (CHANGELOG.md §5.15).
         append_items!(h, [kw_item(i) for i in 61:70])
         @test f.position == 70
         index!(h)

@@ -1,4 +1,4 @@
-"""The one piece of real ergonomic value PLAN.md §8.1 calls out: a `run_job` helper that
+"""The one piece of real ergonomic value CHANGELOG.md §8.1 calls out: a `run_job` helper that
 submits a Job and blocks until it reaches a terminal state, instead of every script
 hand-writing the same submit-then-poll loop.
 """

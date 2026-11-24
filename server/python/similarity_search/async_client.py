@@ -1,7 +1,7 @@
 """Async twin of `client.py` -- same method surface, same `_payloads` builders, just
 `httpx.AsyncClient` + `async def` throughout. Exists so a script can fire off several
 Jobs/searches concurrently (`asyncio.gather(...)`) instead of blocking on each one in turn
--- the actual ergonomic payoff of choosing `httpx` (PLAN.md §8.1) over a sync-only library.
+-- the actual ergonomic payoff of choosing `httpx` (CHANGELOG.md §8.1) over a sync-only library.
 """
 
 import httpx
@@ -96,7 +96,7 @@ class AsyncSimilaritySearchClient:
     async def calibrate(self, index, minrecall=None, numqueries=None, ksearch=None, queries=None, partition=None):
         return await self._call(*p.calibrate(index, minrecall, numqueries, ksearch, queries, partition))
 
-    # --- followers (PLAN.md §5.12) ------------------------------------------------------
+    # --- followers (CHANGELOG.md §5.12) ------------------------------------------------------
 
     async def create_follower(self, index, name, kind, source, disjoint=None, graph_min=None, distance=None, policy=None):
         return await self._call(*p.create_follower(index, name, kind, source, disjoint, graph_min, distance, policy))

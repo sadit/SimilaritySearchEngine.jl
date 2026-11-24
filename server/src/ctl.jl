@@ -1,15 +1,15 @@
-# similarity-search-ctl's own CLI argument parsing (PLAN.md §1's admin command surface).
+# similarity-search-ctl's own CLI argument parsing (CHANGELOG.md §1's admin command surface).
 #
 # !!! note "Separate ArgParseSettings from build_settings() -- a genuinely different binary"
 #     `similarity-search-ctl` talks HTTP to a *running* `similarity-search-serve`, never
-#     touches a local workdir directly (PLAN.md §1's "admin is a control-plane client, not
+#     touches a local workdir directly (CHANGELOG.md §1's "admin is a control-plane client, not
 #     a second process touching the same RocksDB files" note) -- its command surface
 #     (list/stats/jobs */add-token/del-token) has nothing in common with `similarity-search`'s
 #     data-operation commands (build/searchbatch/.../load), so it gets its own settings
 #     object rather than being force-fit into `build_settings()`'s subcommand list.
 #
 # !!! note "Scoped to what already has a real HTTP endpoint behind it"
-#     PLAN.md's full admin surface (§1) is `list | log | stats | dump | load | add-token |
+#     CHANGELOG.md's full admin surface (§1) is `list | log | stats | dump | load | add-token |
 #     del-token | prune-tokens | log-tokens | jobs queue|result|block|resume|kill|gc`. This
 #     file now covers every one of those, including `log` (chunk 17) -- `Telemetry.log_operation`
 #     is wired into `search`/`ftsearch`/`append`/`delete` (`server.jl`'s `_run_search`/
@@ -21,7 +21,7 @@
 #
 # !!! note "`interactive` (chunk 16): `-ctl` gets a real guided form too"
 #     `interactive.jl`'s `run_interactive_ctl` introspects this same settings object --
-#     the second (and, per `jobs`'s own nesting, structurally harder) half of PLAN.md's
+#     the second (and, per `jobs`'s own nesting, structurally harder) half of CHANGELOG.md's
 #     Interactive Mode section, now that this file gives it a real command surface to
 #     introspect at all (its own prerequisite, chunks 12/15).
 
@@ -30,7 +30,7 @@
 
 The `similarity-search-ctl` command line: the control-plane subcommands that talk to a
 running server over HTTP (`list`, `stats`, `log`, the token commands, the `jobs` subtree, and
-the follower commands of PLAN.md §5.12). The counterpart of [`build_settings`](@ref), which is the data plane against a
+the follower commands of CHANGELOG.md §5.12). The counterpart of [`build_settings`](@ref), which is the data plane against a
 working directory, and introspected by `interactive.jl` the same way.
 """
 function build_ctl_settings()

@@ -1,7 +1,7 @@
 using Test
 using JSON3
 
-# The storage of a dense dataset in `similarity-search` (PLAN.md §5.14, phase 7b), run in this
+# The storage of a dense dataset in `similarity-search` (CHANGELOG.md §5.14, phase 7b), run in this
 # process: `build --storage`, `describe`, `searchbatch`, `rebuild`, `dump` and `load`.
 @testset "CLI storage of dense datasets" begin
     workdir = mktempdir()

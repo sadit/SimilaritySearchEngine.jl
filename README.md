@@ -15,7 +15,7 @@ This repository holds **three packages**:
 | `SimilaritySearchServer` | REST API, CLIs, job queue, and three installable apps over that engine | [`server/`](server/) |
 | `SimilaritySearchClient` | a Julia client of the REST API, with the engine's function names; depends on HTTP.jl and JSON3 only | [`server/julia/`](server/julia/) |
 
-They are developed together and tested in one CI run, with separate dependency sets: loading the server's tree costs 1.32 s and 28 transitive packages, which a caller embedding the engine never pays. [`DEVELOPMENT_STRATEGY.md`](DEVELOPMENT_STRATEGY.md) explains why the line is drawn there and where the error boundary lives.
+They are developed together and tested in one CI run, with separate dependency sets: loading the server's tree costs 1.32 s and 28 transitive packages, which a caller embedding the engine never pays. The section "Development Strategy" of [`PLAN.md`](PLAN.md) says why the packages are separate, how they are kept in step, and where the errors are mapped. `PLAN.md` also describes the state of the packages and the planned work, and [`CHANGELOG.md`](CHANGELOG.md) records their history.
 
 ---
 

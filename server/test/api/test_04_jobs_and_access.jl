@@ -38,7 +38,7 @@ using JSON3
         end
 
         # 2. allknn Job Execution -- a real `SimilaritySearch.allknn` call via the
-        # `allknn` CLI subcommand (PLAN.md §1/§5.5), dispatched as a subprocess and
+        # `allknn` CLI subcommand (CHANGELOG.md §1/§5.5), dispatched as a subprocess and
         # polled to completion; its result file is fetched back via /result.
         resp = HTTP.post("$base_url/jobs/allknn", [], JSON3.write(Dict("dataset" => "ops_dataset", "k" => 5)))
         @test resp.status == 202
@@ -119,7 +119,7 @@ using JSON3
         @test resp.status == 409
         wait_terminal(pending_job_id)  # drain it so it doesn't linger past the test
 
-        # 9. dump/load as a Job/HTTP surface (PLAN.md §5.5's job-kind enum) -- the same
+        # 9. dump/load as a Job/HTTP surface (CHANGELOG.md §5.5's job-kind enum) -- the same
         # execute_dump/execute_load CLI functions from chunk 10, now reachable without a
         # CLI subprocess of their own. dump's result is a bundle *directory*, unlike every
         # other HEAVY_JOB_KINDS result (a single file) -- GET .../result reports it as a
@@ -173,7 +173,7 @@ using JSON3
         end
         @test resp.status == 400
 
-        # 12. DELETE /api/v1/jobs/{job_id} (PLAN.md §5.5): best-effort cancel of a job
+        # 12. DELETE /api/v1/jobs/{job_id} (CHANGELOG.md §5.5): best-effort cancel of a job
         # that hasn't started running yet -- distinct from kill (only for a running job).
         # Driven directly against the job spool (same throwaway-manager-free style as this
         # file's other job-state assertions) rather than racing the shared dispatcher.

@@ -22,7 +22,7 @@
 end
 
 @testset "the beam search of a graph survives a reopen" begin
-    # PLAN.md §0, item 13: the graph used to be rebuilt with `BeamSearch()` and no hints, so
+    # CHANGELOG.md §0, item 13: the graph used to be rebuilt with `BeamSearch()` and no hints, so
     # a search without `minrecall` took 350 distance evaluations instead of 2,534 after a
     # reopen, and started from random points. With both saved, a search after the reopen
     # costs about what it cost before.
@@ -346,7 +346,7 @@ end
 end
 
 @testset "the metadata of a dump bundle are JSON lines" begin
-    # PLAN.md §5.16, phase 9c: `dataset.jsonl` replaced `dataset.avro` on 2026-11-23.
+    # CHANGELOG.md §5.16, phase 9c: `dataset.jsonl` replaced `dataset.avro` on 2026-11-23.
     P = SimilaritySearchEngine.Persistence
     mktempdir() do dir
         path = joinpath(dir, "dataset.jsonl")

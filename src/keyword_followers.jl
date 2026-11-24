@@ -1,4 +1,4 @@
-# Keyword followers and posting lists (PLAN.md §5.11, issue #5, phase 4).
+# Keyword followers and posting lists (CHANGELOG.md §5.11, issue #5, phase 4).
 #
 # A keyword follower is an inverted file of SimilaritySearch over the keys of its key source,
 # `Keywords()` by default. Its posting lists are keyed by the key itself, a `String`
@@ -21,7 +21,7 @@ const KEYWORD_ITEMS_CF = "keyword_items"
     KeywordFollower(source=Keywords(); distance=Dist.Sets.Jaccard())
 
 A follower that indexes the keys of each item of its leader in an inverted file of
-SimilaritySearch (PLAN.md §5.11). A query is a set of keys, and [`search`](@ref) ranks the items
+SimilaritySearch (CHANGELOG.md §5.11). A query is a set of keys, and [`search`](@ref) ranks the items
 of the leader by `distance` between their keys and the query.
 
 `distance` is a distance between sets. `Dist.Sets.Jaccard`, `Dist.Sets.Dice`,
@@ -196,7 +196,7 @@ search(f::Follower, query, k::Int=10; kwargs...) = unsupported_operation(:search
 """
     posting_list(h, key; limit=nothing) -> Vector{Int32}
 
-The `_id`s of the items that hold `key`, in ascending order (PLAN.md §5.11). `h` is a project or
+The `_id`s of the items that hold `key`, in ascending order (CHANGELOG.md §5.11). `h` is a project or
 a follower with an inverted index:
 
 - a keyword follower: `key` is a key of its source, a `String`;

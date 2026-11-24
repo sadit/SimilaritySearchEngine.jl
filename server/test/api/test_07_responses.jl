@@ -3,7 +3,7 @@ using HTTP
 using JSON3
 using CodecZlib
 
-# Responses without cursors (PLAN.md §5.16): a search answers its `k` results in one response,
+# Responses without cursors (CHANGELOG.md §5.16): a search answers its `k` results in one response,
 # `k` is limited by the `max_k` of the dataset, a large response is compressed with gzip when
 # the request accepts it, and the listings keep `offset` and `limit`.
 @testset "7. Responses: max_k, no cursors, gzip and listings" begin

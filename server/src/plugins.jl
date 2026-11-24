@@ -1,4 +1,4 @@
-# Plugins of the server (PLAN.md §5.13, issue #5, phase 6). Included in `module Server`.
+# Plugins of the server (CHANGELOG.md §5.13, issue #5, phase 6). Included in `module Server`.
 #
 # A plugin is a Julia module that adds key sources and kinds of follower. `serve` loads the
 # plugins of `[plugins]` in its configuration before it opens any dataset, registers each one in
@@ -31,7 +31,7 @@ const PLUGINS_LOCK = ReentrantLock()
     PluginLoadError(plugin, msg)
 
 A plugin of the configuration that could not be loaded. `serve` does not start, and prints the
-message (PLAN.md §5.13).
+message (CHANGELOG.md §5.13).
 """
 struct PluginLoadError <: Exception
     plugin::String
@@ -230,7 +230,7 @@ plugin_dict(p::LoadedPlugin) = Dict{String,Any}("name" => p.name, first(p.origin
     "key_sources" => sort!(["$(p.name).$k" for k in keys(p.key_sources)]),
     "follower_kinds" => sort!(["$(p.name).$k" for k in keys(p.follower_kinds)]))
 
-"`GET /api/v1/plugins`: the plugins that this server loaded (PLAN.md §5.13)."
+"`GET /api/v1/plugins`: the plugins that this server loaded (CHANGELOG.md §5.13)."
 function handle_list_plugins(req::HTTP.Request, app)
     list = lock(() -> [plugin_dict(p) for p in sort!(collect(values(PLUGINS)); by=p -> p.name)], PLUGINS_LOCK)
     return json_response(200, Dict("status" => "ok", "plugins" => list))

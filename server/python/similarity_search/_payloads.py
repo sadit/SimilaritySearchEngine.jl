@@ -3,7 +3,7 @@
 No HTTP calls happen here -- each function just returns
 ``(method, path, json_body_or_None, query_params_or_None)`` for one endpoint, built from
 plain keyword arguments matching the real wire shapes in ``src/server.jl``'s route table
-(read directly against a running implementation, not against PLAN.md's original
+(read directly against a running implementation, not against CHANGELOG.md's original
 aspirational text -- see the package README for what that means in practice, e.g. no
 long-query 429 fallback: it does not exist server-side today).
 
@@ -133,7 +133,7 @@ def calibrate(index, minrecall=None, numqueries=None, ksearch=None, queries=None
     return "POST", f"/api/v1/datasets/{index}/calibrate", body, None
 
 
-# --- followers (PLAN.md §5.12) ------------------------------------------------------
+# --- followers (CHANGELOG.md §5.12) ------------------------------------------------------
 
 def _follower_path(index, follower, rest=""):
     """The path of a route of a follower. ``follower`` is a name, or ``name=value`` for one

@@ -14,7 +14,7 @@ Three packages, one repository:
 - **`SimilaritySearchServer`** (`server/`) -- everything that exposes the engine to something
   other than a Julia process: the REST API (`server/src/server.jl`, Oxygen), the CLIs
   (`server/src/cli_handlers.jl`, `server/src/ctl_handlers.jl`, ArgParse), the job model
-  (`server/src/jobs.jl`), tokens, cursors, telemetry, and the three installable apps in
+  (`server/src/jobs.jl`), tokens, telemetry, and the three installable apps in
   `server/src/apps/`.
 - **`SimilaritySearchClient`** (`server/julia/`) -- the Julia client of the HTTP API. Its
   functions have the names and the result types of the engine's functions, and it depends on
@@ -22,10 +22,13 @@ Three packages, one repository:
   own copy of the engine's error types, and the server's light suite checks that the two lists
   are equal. Its tests against a running server are in the server's full suite.
 
-`server/PLAN.md` is the system specification the server implements (REST routes, job model,
-pagination, tokens). `DEVELOPMENT_STRATEGY.md` at the root says why the split is where it is,
-how the two stay in sync, and where the error boundary lives -- read it before moving code
-across that line.
+`PLAN.md` describes the three packages on the date of its last cleanup, the decisions that
+hold, and the planned work. Its first section, "Development Strategy", says why the packages are
+separate, how they stay in sync, and where the errors are mapped. Read it before you move code
+from one package to another. `CHANGELOG.md` keeps the history: the commits by date, and every
+design with its phases and measurements. The code cites a design as `CHANGELOG.md §5.N`, or as
+`PLAN.md §5.N` while the design is planned. "How This File Is Kept" in `PLAN.md` says how a
+cleanup moves text from `PLAN.md` to `CHANGELOG.md`.
 
 ## Working in both at once
 

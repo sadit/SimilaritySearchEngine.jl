@@ -38,7 +38,7 @@ using JSON3
         @test desc.tombstone_ratio ≈ 0.15
 
         # `rebuild` writes, and a write genuinely cannot run concurrently with a server that
-        # still has the same dataset open (RocksDB's exclusive write lock) -- PLAN.md's own
+        # still has the same dataset open (RocksDB's exclusive write lock) -- CHANGELOG.md's own
         # admin note already establishes that live-dataset write access goes through the
         # server's HTTP API, not a second process touching the files directly. Since nothing
         # else in this suite touches "rebuild_http_ds" again, unload it from the live server

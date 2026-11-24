@@ -9,7 +9,7 @@ Enumerated choice lists for arguments whose valid values are a closed set.
 used both to build each argument's `range_tester` below (so the non-interactive CLI now
 rejects an invalid value immediately, rather than failing later inside the relevant
 `execute_*` function or a library call) and by the interactive layer (`interactive.jl`) to
-render a selection menu instead of free text for these fields, per PLAN.md's Interactive
+render a selection menu instead of free text for these fields, per CHANGELOG.md's Interactive
 Mode "single source of truth" principle -- applied here to the one piece of metadata
 `ArgParseField` genuinely can't carry on its own.
 """
@@ -40,7 +40,7 @@ field_choices(cmd_name::AbstractString, dest_name::AbstractString) =
     add_follower_create_args!(table) -> table
 
 Adds the arguments of `follower-create` to `table`, the settings of that command in
-`similarity-search` or in `similarity-search-ctl` (PLAN.md §5.12). Both commands send the same
+`similarity-search` or in `similarity-search-ctl` (CHANGELOG.md §5.12). Both commands send the same
 request: [`follower_request`](@ref) turns the parsed arguments into it.
 """
 function add_follower_create_args!(t::ArgParseSettings)
@@ -120,7 +120,7 @@ end
 
 The `similarity-search` command line: every data-plane subcommand (`build`, `search`,
 `searchbatch`, `allknn`, `fft`, `neardup`, `hsp`, `closestpair`, `describe`, `rebuild`,
-`dump`, `load`, the follower commands of PLAN.md §5.12 and `postings`) with its options. Built fresh on each call rather than held in a constant,
+`dump`, `load`, the follower commands of CHANGELOG.md §5.12 and `postings`) with its options. Built fresh on each call rather than held in a constant,
 because `interactive.jl` introspects the same object to generate its guided forms.
 """
 function build_settings()
@@ -445,10 +445,10 @@ end
 """
     build_serve_settings() -> ArgParseSettings
 
-`similarity-search-serve`'s own settings object (PLAN.md §1, chunk 21) -- a genuinely
+`similarity-search-serve`'s own settings object (CHANGELOG.md §1, chunk 21) -- a genuinely
 different, separate `ArgParseSettings` from `build_settings()`'s data-operations one, not
 a shared parser both binaries happen to use. `serve` is a thin, single-purpose binary
-(PLAN.md's own framing): it has exactly two commands, `serve` and `interactive`, and none
+(CHANGELOG.md's own framing): it has exactly two commands, `serve` and `interactive`, and none
 of `similarity-search`'s eleven data-operation subcommands (`build` through `load`) are
 reachable through it at all -- `similarity-search-server build ...` is now an ArgParse
 "unrecognized command" error, not a working (if undocumented) escape hatch, same as how
@@ -458,7 +458,7 @@ plain `similarity-search serve` is now the mirror-image error (`serve` isn't one
 hardcoded literal," layered in `main_serve`/`run_serve`, not here (an `ArgParseField`
 default can only be one fixed value, not "whatever the config file says"). This is also
 what gives `run_interactive_serve` (`interactive.jl`) real fields to introspect at all --
-PLAN.md §1's Interactive Mode section's own prerequisite for `serve`'s guided form.
+CHANGELOG.md §1's Interactive Mode section's own prerequisite for `serve`'s guided form.
 """
 function build_serve_settings()
     s = ArgParseSettings(description = "SimilaritySearchServer HTTP API server")

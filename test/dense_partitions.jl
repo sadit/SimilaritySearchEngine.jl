@@ -1,4 +1,4 @@
-# Partitions of a dense project (PLAN.md §5.10). Three partitions of 40, 300 and 1,200
+# Partitions of a dense project (CHANGELOG.md §5.10). Three partitions of 40, 300 and 1,200
 # items, and item 1 in both "a" and "b". With `graph_min=250`, "a" is scanned and
 # "b" and "c" have graphs.
 dense_partition_corpus(rng) = begin

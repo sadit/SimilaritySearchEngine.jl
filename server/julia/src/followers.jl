@@ -1,4 +1,4 @@
-# Followers of a remote dataset (PLAN.md §5.12, issue #5, phase 5c). The functions have the
+# Followers of a remote dataset (CHANGELOG.md §5.12, issue #5, phase 5c). The functions have the
 # names of the engine's functions. A follower is created with the wire names of the server, as
 # `create_project` creates a dataset: this package does not declare the spec types of the engine.
 

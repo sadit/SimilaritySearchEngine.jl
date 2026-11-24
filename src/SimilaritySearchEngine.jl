@@ -12,14 +12,14 @@ using Random: Random, AbstractRNG
 # `SparseVector{Float32,Int32}`, so the names have to be in scope where that surface is defined.
 using SparseArrays: SparseArrays, SparseVector, AbstractSparseVector, sparsevec
 
-# Extracted verbatim from SimilaritySearchServer.jl (PLAN.md §8.5, chunk 22) -- these four
+# Extracted verbatim from SimilaritySearchServer.jl (CHANGELOG.md §8.5, chunk 22) -- these four
 # modules were already the real shared engine both `similarity-search` (CLI) and
 # `similarity-search-serve` (HTTP) call into; they never depended on anything else in that
 # package (Jobs/Cursors/Tokens/Telemetry/Executors/Server are HTTP/CLI-specific glue that
 # stayed behind). Schema before Project (Project needs it); IndexEngine/Persistence are
 # independent of both and of each other.
 # Errors first: every submodule below raises them, and a consumer maps them (see
-# DEVELOPMENT_STRATEGY.md, "Errors: typed in the engine, mapped at each boundary").
+# PLAN.md, "Errors").
 include("errors.jl")
 using .Errors
 include("schema.jl")
@@ -41,14 +41,14 @@ using .Persistence
 using .Project: ProjectManager, put_metadata!, get_metadata, get_meta, get_raw_meta, find_by_doc_id, find_all_by_doc_id, generate_id
 using .IndexEngine
 
-# The friendly, no-HTTP-required embedded API (PLAN.md §8.5) built on top of the four
+# The friendly, no-HTTP-required embedded API (CHANGELOG.md §8.5) built on top of the four
 # modules above -- a script does `using SimilaritySearchEngine` and calls these directly,
 # with no Job/token/HTTP surface at all (the trust boundary here is OS file permissions on
 # workdir, same as the CLI).
 include("embedded.jl")
-# Events of a project (PLAN.md §5.15): what changed, reported once per call to its observers.
+# Events of a project (CHANGELOG.md §5.15): what changed, reported once per call to its observers.
 include("events.jl")
-# Leader and follower datasets (PLAN.md §5.11): a follower organizes the items of a project
+# Leader and follower datasets (CHANGELOG.md §5.11): a follower organizes the items of a project
 # without copying them.
 include("followers.jl")
 # The first kind of follower: partitions, disjoint or not, of a text or a dense leader.
@@ -106,7 +106,7 @@ export Dist
 
 # What an open quantized project reports (issue #1), and the explicit fit of its encoder.
 export QuantizerInfo, fit_quantizer!, quantizer_info
-# What an open sketched project reports (PLAN.md §5.14).
+# What an open sketched project reports (CHANGELOG.md §5.14).
 export SketchInfo, sketch_info
 
 # For asking an *open* project what it holds -- which a Julia caller needs, because the item
@@ -122,7 +122,7 @@ export ProfileNotInstalled, UnknownPartition, PendingBacklog, NothingStaged, NoI
 export EmptyProject, ProjectClosed, CorruptedStorage
 export UnknownFollower, PluginNotLoaded, StaleFollower, HasFollowers
 
-# Leader and follower datasets (PLAN.md §5.11, issue #5). The functions that a kind of follower
+# Leader and follower datasets (CHANGELOG.md §5.11, issue #5). The functions that a kind of follower
 # implements (`create_follower_state`, `process_items!`, ...) are not exported: a kind extends
 # them qualified, as `SimilaritySearchEngine.process_items!`.
 export KeySource, Keywords, Refs, DocId, MetaValue, keys_of, needs_payload

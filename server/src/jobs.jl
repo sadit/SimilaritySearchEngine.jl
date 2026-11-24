@@ -232,7 +232,7 @@ end
 """
     cancel_job!(manager::JobManager, id::String) -> Symbol
 
-Cancels a job that hasn't started running yet (PLAN.md §5.5's `DELETE
+Cancels a job that hasn't started running yet (CHANGELOG.md §5.5's `DELETE
 /api/v1/jobs/{job_id}` -- distinct from `kill`, which only ever applies to an already-
 `running` job consuming the reserved compute pool, §5.5's own explicit "kill vs. DELETE"
 note). Moves `id` out of `queued/`/`blocked/` straight into `failed/` with
@@ -277,7 +277,7 @@ end
 """
     purge_finished!(manager::JobManager; retention_seconds::Real=86400) -> Vector{String}
 
-The actual disk-reclaim half of `similarity-search-ctl jobs gc` (PLAN.md §5.5's warning
+The actual disk-reclaim half of `similarity-search-ctl jobs gc` (CHANGELOG.md §5.5's warning
 that `completed`/`failed` grow unboundedly otherwise, since nothing else ever removes a
 finished job's file). Deletes every `completed/`/`failed/` job record whose `finished_at`
 is older than `retention_seconds` ago, along with its `result_ref` file if it has one and

@@ -52,7 +52,7 @@ function ensure_test_server()
         start_follower_task!(app)
 
         # The test plugin is loaded before the server starts, as `serve` loads `[plugins]`
-        # (PLAN.md §5.13). `api/19` uses it.
+        # (CHANGELOG.md §5.13). `api/19` uses it.
         load_plugins!(Dict{String,Any}("plugins" => Dict{String,Any}("SSETestPlugin" => Dict{String,Any}(
             "path" => joinpath(@__DIR__, "plugins", "sse_test_plugin.jl"),
             "settings" => Dict{String,Any}("label" => "test")))))

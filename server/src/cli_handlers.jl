@@ -37,7 +37,7 @@ cli_exit_code(e::SSE.EngineError) =
          e isa SSE.ConflictingState ? 5 :
          e isa SSE.InvalidRequest ? 2 : 70)
 
-"The `--config` file of the running command, named by the message of a plugin that is not loaded (PLAN.md §5.13)."
+"The `--config` file of the running command, named by the message of a plugin that is not loaded (CHANGELOG.md §5.13)."
 const CLI_CONFIG = Ref{String}("config.toml")
 
 """
@@ -98,7 +98,7 @@ function execute_build(cmd_args::Dict)
     inserted > 0 && SSE.index!(handle)
     # The project persists itself, which is also why `search`, `describe` and every job below
     # reopen it instead of reading a separate file. The sidecar of the server holds what the
-    # project does not: `max_k` (PLAN.md §5.16), which `dump` and `load` carry to a server.
+    # project does not: `max_k` (CHANGELOG.md §5.16), which `dump` and `load` carry to a server.
     SSE.close_project!(handle)
     write(joinpath(workdir, project_id, "descriptor.json"), JSON3.write(Dict(
         "id" => project_id, "index_kind" => index_kind, "distance" => distance,
@@ -317,7 +317,7 @@ function execute_searchbatch(cmd_args::Dict)
     kind = SSE.payload_kind(handle.engine)
     partition = get(cmd_args, "partition", nothing)
     # `--follower name=value` searches one partition of a partition follower, and `--follower
-    # name` a keyword follower with the keys of each query (PLAN.md §5.12).
+    # name` a keyword follower with the keys of each query (CHANGELOG.md §5.12).
     fname = get(cmd_args, "follower", nothing)
     target = handle
     if fname !== nothing
@@ -401,13 +401,13 @@ end
 
 Real, sampled nearest-neighbor distance statistics (min/mean/max over up to the first 100
 items' own nearest live neighbor) -- the "distance statistics ... to help people know
-about their data" PLAN.md §1's `describe` note asks for. `nothing` if the index has fewer
+about their data" CHANGELOG.md §1's `describe` note asks for. `nothing` if the index has fewer
 than 2 items (no pair to measure) or isn't dense.
 
 A quantized or sketched index holds codes, so the queries are the `Float32` vectors that the
 dataset keeps (`keep_vectors`), and `nothing` when it does not keep them. A sketched dataset
 without a second evaluation (`rerank` 0) answers with distances between sketches, which are not
-the distance of the dataset, so it has no statistics either (PLAN.md §5.14).
+the distance of the dataset, so it has no statistics either (CHANGELOG.md §5.14).
 """
 function _dense_distance_stats(handle)
     engine = handle.engine
@@ -471,7 +471,7 @@ function execute_describe(cmd_args::Dict)
         "tombstone_count" => tombstones,
         "tombstone_ratio" => doc_count == 0 ? 0.0 : tombstones / doc_count,
     )
-    # The largest k of a search when a server serves the dataset (PLAN.md §5.16), from the
+    # The largest k of a search when a server serves the dataset (CHANGELOG.md §5.16), from the
     # sidecar of the server; a dataset without one has the default.
     descriptor_file = joinpath(handle.dir, "descriptor.json")
     desc["max_k"] = isfile(descriptor_file) ?
@@ -481,11 +481,11 @@ function execute_describe(cmd_args::Dict)
         # The vocabulary and its out-of-vocabulary rates belong to the engine, which fitted
         # it. `sample=0` asks for every document rather than the bounded sample the HTTP
         # endpoint takes: this command is offline and nobody is waiting on a connection, so it
-        # answers exactly (PLAN.md §5's drift signal, see `execute_rebuild`).
+        # answers exactly (CHANGELOG.md §5's drift signal, see `execute_rebuild`).
         desc["vocab"] = SSE.vocabulary_report(handle; scan=true, sample=0)
     else
         # The distance of the dataset: a quantized or sketched index searches with the distance
-        # of its codes (PLAN.md §5.14).
+        # of its codes (CHANGELOG.md §5.14).
         spec = SSE.project_spec(handle)
         desc["distance"] = string(nameof(typeof(spec.distance)))
         if spec isa SSE.DenseVectors
@@ -581,9 +581,9 @@ end
 """
     execute_rebuild(cmd_args::Dict) -> Int
 
-`rebuild` (PLAN.md §1): purges soft-deleted (tombstoned) documents and, for a text index,
+`rebuild` (CHANGELOG.md §1): purges soft-deleted (tombstoned) documents and, for a text index,
 retrains the `Vocabulary` from scratch against the dataset's current live corpus -- the
-only way to recover from vocabulary drift (PLAN.md §1's note: `TextSearch.jl`'s
+only way to recover from vocabulary drift (CHANGELOG.md §1's note: `TextSearch.jl`'s
 `Vocabulary` never mutates after training, so append-time out-of-vocabulary tokens are
 silently and permanently dropped otherwise).
 
@@ -601,7 +601,7 @@ purging tombstones means the survivors get **renumbered** to fresh sequential do
 rewritten under the new ids, not merely filtered in place. For a `SearchGraph`, the fresh
 index is additionally passed through `SimilaritySearch.rebuild` (a real library function,
 not hand-rolled): it recomputes graph topology seeing the whole survivor set at once,
-rather than the incremental one-vertex-at-a-time bias `add_item!` reintroduces -- PLAN.md
+rather than the incremental one-vertex-at-a-time bias `add_item!` reintroduces -- CHANGELOG.md
 §1's "use specific functions when available" guidance for a case where one exists.
 """
 function execute_rebuild(cmd_args::Dict)
@@ -622,7 +622,7 @@ function execute_rebuild(cmd_args::Dict)
     # appended again.
     spec = SSE.project_spec(handle)
     # A quantized or sketched project encodes its vectors again, with a new encoder, from the
-    # Float32 vectors it keeps. Without them there is nothing to encode (PLAN.md §5.14).
+    # Float32 vectors it keeps. Without them there is nothing to encode (CHANGELOG.md §5.14).
     if spec isa SSE.DenseVectors && spec.storage isa Union{SSE.Quantized,SSE.Sketched} && !spec.storage.keep_vectors
         SSE.close_project!(handle; compact=false)
         println("Error: dataset '$project_id' stores its vectors as $(spec.storage isa SSE.Quantized ? "quantized codes" : "sketches") " *
@@ -635,7 +635,7 @@ function execute_rebuild(cmd_args::Dict)
                  SSE.PartitionBy(partition_by; graph_min=SSE.partition_graph_min(handle))
 
     # The followers stay in `<dir>.followers`, beside the project, and are attached to the new
-    # project (PLAN.md §5.12). A follower whose directory is missing is not kept.
+    # project (CHANGELOG.md §5.12). A follower whose directory is missing is not kept.
     old_followers = SSE.followers(handle)
     follower_names = [_follower_short_name(st.name) for st in old_followers if !st.missing]
     for st in old_followers
@@ -712,9 +712,9 @@ _dense_index_kind_name(::SimilaritySearch.ParallelExhaustiveSearch) = "parallel_
 """
     execute_dump(cmd_args::Dict) -> Int
 
-`dump` (PLAN.md §4.4/§1): exports a dataset as a portable bundle directory --
+`dump` (CHANGELOG.md §4.4/§1): exports a dataset as a portable bundle directory --
 `dataset.jsonl` (the metadata of every item, deleted or not, one `Persistence.DumpRecord` per
-line, PLAN.md §5.16), `project/` (a copy of the project directory, which is the index: `load`
+line, CHANGELOG.md §5.16), `project/` (a copy of the project directory, which is the index: `load`
 restores it as it is and never rebuilds it from the lines, so the bundle comes back with the
 same graph topology and posting lists it had when it was written), `followers/`, and
 `manifest.json` (index_kind/distance/edit_correction/max_k -- everything `load` needs to
@@ -767,7 +767,7 @@ function execute_dump(cmd_args::Dict)
     mkpath(output_dir)
     Persistence.write_dump_records(joinpath(output_dir, "dataset.jsonl"), records)
 
-    # The followers are copied before the project (PLAN.md §5.12). A server can append to the
+    # The followers are copied before the project (CHANGELOG.md §5.12). A server can append to the
     # dataset while this runs. A follower copied first has processed at most the items of the
     # copied project, and processes the rest after `load`. A follower copied after the project
     # could hold items that the copy of the project does not have.
@@ -855,14 +855,14 @@ end
 """
     execute_load(cmd_args::Dict) -> Int
 
-`load` (PLAN.md §4.4/§1): the inverse of `execute_dump` -- always targets the HTTP-layout
+`load` (CHANGELOG.md §4.4/§1): the inverse of `execute_dump` -- always targets the HTTP-layout
 directory (`<workdir>/datasets/{id}/`), so a subsequently-(re)started `serve` picks it up
 via `Server.reload_datasets!` with no extra step, regardless of which layout the original
 dump came from. Refuses to overwrite an existing target (`--dataset` must be a fresh id).
 Copies `project/` back as it is (see `execute_dump` for why this is a copy and not a
 reconstruction from the lines). When the bundle has `dataset.jsonl`, it then writes the
 record and the `meta` of each line over the copy, so that metadata edited in the bundle with a
-text editor or `jq` takes effect (PLAN.md §5.16). The lines are read before anything is
+text editor or `jq` takes effect (CHANGELOG.md §5.16). The lines are read before anything is
 copied, so a line that cannot be read leaves no dataset behind. The deleted items come from the
 copy of the project, not from `deleted`. A bundle without `dataset.jsonl` is loaded from
 `project/` alone. A bundle written before 2026-11-23 has `dataset.avro` instead, which is
@@ -916,7 +916,7 @@ function execute_load(cmd_args::Dict)
     end
     # The project lists its followers already. Attaching each one writes the new id of its
     # leader in it. The project and its followers come from the same bundle, so they have the
-    # same generation and the followers are not stale (PLAN.md §5.12).
+    # same generation and the followers are not stale (CHANGELOG.md §5.12).
     code = Cint(0)
     if isdir(followers_dst)
         for fname in sort(readdir(followers_dst))
@@ -943,20 +943,20 @@ function execute_load(cmd_args::Dict)
     return code
 end
 
-# --- Followers (PLAN.md §5.12, issue #5, phase 5b) ----------------------------------------
+# --- Followers (CHANGELOG.md §5.12, issue #5, phase 5b) ----------------------------------------
 
 """
     follower_request(cmd_args) -> Union{Dict{String,Any}, String}
 
 The body of `POST /api/v1/datasets/{id}/followers` that the arguments of `follower-create`
-describe (PLAN.md §5.12), or the message of an invalid combination. `similarity-search` reads it
+describe (CHANGELOG.md §5.12), or the message of an invalid combination. `similarity-search` reads it
 with `Server.parse_follower_request`, and `similarity-search-ctl` sends it to the server.
 """
 function follower_request(cmd_args::AbstractDict)
     d = Dict{String,Any}("name" => cmd_args["name"], "kind" => cmd_args["kind"], "source" => cmd_args["source"])
     kind = cmd_args["kind"]
     # The options of a key source or of a kind of a plugin go in an object with its name
-    # (PLAN.md §5.13).
+    # (CHANGELOG.md §5.13).
     for (flag, field) in (("source-options", "source"), ("kind-options", "kind"))
         text = get(cmd_args, flag, nothing)
         text === nothing && continue
@@ -1056,7 +1056,7 @@ end
 """
     execute_follower_create(cmd_args) -> Cint
 
-`follower-create` (PLAN.md §5.12): creates a follower of the dataset, processes every indexed
+`follower-create` (CHANGELOG.md §5.12): creates a follower of the dataset, processes every indexed
 item, and prints its status. A follower with `--policy periodic` is processed by a running
 server; this command line processes it with `follower-sync`.
 """
@@ -1078,7 +1078,7 @@ end
 """
     execute_follower_list(cmd_args) -> Cint
 
-`follower-list` (PLAN.md §5.12): prints the status of every follower of the dataset, as one JSON
+`follower-list` (CHANGELOG.md §5.12): prints the status of every follower of the dataset, as one JSON
 object. It opens the dataset read-only, so it runs while a server holds the dataset.
 """
 function execute_follower_list(cmd_args::AbstractDict)
@@ -1092,7 +1092,7 @@ end
 """
     execute_follower_sync(cmd_args) -> Cint
 
-`follower-sync` (PLAN.md §5.12): processes the indexed items of the leader that the follower has
+`follower-sync` (CHANGELOG.md §5.12): processes the indexed items of the leader that the follower has
 not processed yet, and prints its status.
 """
 function execute_follower_sync(cmd_args::AbstractDict)
@@ -1111,7 +1111,7 @@ end
 """
     execute_follower_rebuild(cmd_args) -> Cint
 
-`follower-rebuild` (PLAN.md §5.12): builds the follower again from every indexed item of its
+`follower-rebuild` (CHANGELOG.md §5.12): builds the follower again from every indexed item of its
 leader, with the spec and the policy it was created with. A follower is stale after its leader is
 rebuilt, and this command is what makes it usable again.
 """
@@ -1129,7 +1129,7 @@ end
 """
     execute_follower_delete(cmd_args) -> Cint
 
-`follower-delete` (PLAN.md §5.12): deletes the directory of the follower and its name in the list
+`follower-delete` (CHANGELOG.md §5.12): deletes the directory of the follower and its name in the list
 of the leader.
 """
 function execute_follower_delete(cmd_args::AbstractDict)
@@ -1145,7 +1145,7 @@ end
 """
     execute_migrate_partitions(cmd_args) -> Cint
 
-`migrate-partitions` (PLAN.md §5.11): moves the partitions of a dataset created with
+`migrate-partitions` (CHANGELOG.md §5.11): moves the partitions of a dataset created with
 `--partition-by` to a partition follower named `--name`. `--disjoint` is required: the command
 does not choose between disjoint and non-disjoint partitions.
 """
@@ -1163,7 +1163,7 @@ end
 """
     execute_postings(cmd_args) -> Cint
 
-`postings` (PLAN.md §5.11): prints the ids of the items that hold one key, in ascending order,
+`postings` (CHANGELOG.md §5.11): prints the ids of the items that hold one key, in ascending order,
 as one JSON object. The key is a token of a text dataset, a dimension of a sparse dataset, or,
 with `--follower`, a key of a keyword follower. `--limit N` returns the first `N` ids. It opens
 the dataset read-only, so it runs while a server holds the dataset.
@@ -1193,7 +1193,7 @@ function execute_postings(cmd_args::AbstractDict)
     end
 end
 
-# --- Plugins (PLAN.md §5.13, issue #5, phase 6b) ------------------------------------------
+# --- Plugins (CHANGELOG.md §5.13, issue #5, phase 6b) ------------------------------------------
 
 """
     needs_plugins(cmd_name, cmd_args) -> Bool

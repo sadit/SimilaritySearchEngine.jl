@@ -1,4 +1,4 @@
-# Partitions (PLAN.md §5.9). Sizes are deliberately uneven, one value is a list (an item in
+# Partitions (CHANGELOG.md §5.9). Sizes are deliberately uneven, one value is a list (an item in
 # two partitions), and some items have no partition at all.
 _repo_of(i) = i % 7 == 0 ? ["a", "c"] : i % 3 == 0 ? "b" : i % 40 == 1 ? "tiny" : i % 11 == 0 ? nothing : "a"
 function partitioned_items(rows)
@@ -116,7 +116,7 @@ end
         @test isempty(ftsearch(h, rows[1]["text"], 3; partition="nueva"))
         close_project!(h)
 
-        # A dense project can be partitioned since PLAN.md §5.10; a sparse one cannot yet.
+        # A dense project can be partitioned since CHANGELOG.md §5.10; a sparse one cannot yet.
         @test_throws InvalidOption create_project(workdir, "sparse_part_ds", SparseVectors(8); partitions=PartitionBy("repo"))
         @test_throws InvalidOption create_project(workdir, "int_ds", TextDocuments(FitFromCorpus()); partitions=PartitionBy("repo"), meta_schema=["repo" => :int64])
     end

@@ -606,7 +606,7 @@ maybe_trim_cache!(adj) = nothing
 """
     DensePartition
 
-One partition of a dense project (PLAN.md §5.10): the `_id`s of its members, and the graph that
+One partition of a dense project (CHANGELOG.md §5.10): the `_id`s of its members, and the graph that
 searches them once there are enough of them.
 
 - `ids`: the `_id`s of the members, ascending. It is the `map` of the `SubDatabase` that the
@@ -628,7 +628,7 @@ end
 """
     DensePartitions
 
-The partitions of a dense project (PLAN.md §5.10), by partition number.
+The partitions of a dense project (CHANGELOG.md §5.10), by partition number.
 
 - `graph_min`: the number of members from which a partition has its own graph. `typemax(Int)`
   on an exact project, which never builds one.
@@ -671,10 +671,10 @@ being defined-but-inert on the other.
 - `deleted_ids::Set{UInt32}`: logically deleted document ids -- `UInt32` across every engine
   kind, matching the id type search results come back as.
 - `lock::ReadWriteLock`: see its docstring for why a reader/writer lock and not a mutex.
-- `partitions::Union{Nothing,DensePartitions}`: the partitions of the project (PLAN.md §5.10),
+- `partitions::Union{Nothing,DensePartitions}`: the partitions of the project (CHANGELOG.md §5.10),
   or `nothing` when it declares no partition field.
 - `quant::Union{Nothing,QuantState}`: the codes of the project, quantized (issue #1) or sketched
-  (PLAN.md §5.14), or `nothing` for a project of `Float32` vectors. See [`Quantized`](@ref) and
+  (CHANGELOG.md §5.14), or `nothing` for a project of `Float32` vectors. See [`Quantized`](@ref) and
   [`Sketched`](@ref).
 """
 mutable struct DenseEngine{B} <: AbstractSearchEngine
@@ -682,10 +682,10 @@ mutable struct DenseEngine{B} <: AbstractSearchEngine
     search_ctx_pool::ContextPool
     deleted_ids::Set{UInt32}
     lock::ReadWriteLock
-    # The partitions of the project (PLAN.md §5.10), or `nothing` when it declares no partition
+    # The partitions of the project (CHANGELOG.md §5.10), or `nothing` when it declares no partition
     # field. Set by `enable_partitions!`.
     partitions::Union{Nothing,DensePartitions}
-    # The codes of the project, quantized (issue #1) or sketched (PLAN.md §5.14), or `nothing`
+    # The codes of the project, quantized (issue #1) or sketched (CHANGELOG.md §5.14), or `nothing`
     # for a project of `Float32` vectors. Set by `enable_quantization!`.
     quant::Union{Nothing,QuantState}
 end
@@ -697,7 +697,7 @@ DenseEngine(backend::B, search_ctx_pool::ContextPool, deleted_ids::Set{UInt32}, 
     isquantized(engine) -> Bool
 
 Whether `engine` is a dense engine that stores codes instead of `Float32` vectors: the codes of
-a scalar quantizer (issue #1) or sketches (PLAN.md §5.14, see `issketched`). Both stage the
+a scalar quantizer (issue #1) or sketches (CHANGELOG.md §5.14, see `issketched`). Both stage the
 vectors at `append_items!` and encode them at `index!`.
 """
 isquantized(engine::AbstractSearchEngine) = engine isa DenseEngine && engine.quant !== nothing
@@ -780,7 +780,7 @@ end
 The number of items that a search of `engine` can return: the length of the graph, of the exact
 index, of the sparse or text inverted file, or the number of codes of a quantized project. An
 item that is staged and not indexed yet is not counted. A follower processes the items of its
-leader up to this number (PLAN.md §5.11).
+leader up to this number (CHANGELOG.md §5.11).
 """
 indexed_length(engine::FullTextEngine) = engine.backend.index === nothing ? 0 : length(engine.backend.index)
 indexed_length(engine::AbstractSearchEngine) = length(engine.backend.index)
@@ -789,7 +789,7 @@ indexed_length(engine::AbstractSearchEngine) = length(engine.backend.index)
     document_tokens(engine::FullTextEngine, ids::AbstractUnitRange) -> Vector{Vector{UInt32}}
 
 The token ids of each indexed document in `ids`, read from the document vectors that the text
-index holds in memory. A partition follower builds its posting lists from them (PLAN.md
+index holds in memory. A partition follower builds its posting lists from them (CHANGELOG.md
 §5.11), without reading or tokenizing the text again.
 """
 function document_tokens(engine::FullTextEngine, ids::AbstractUnitRange)
@@ -1257,7 +1257,7 @@ _search_context(::Type{InvertedFileContext}) = InvertedFileContext(maxbatches=SE
     create_engine(spec::ProjectSpec; on_change, log_io, maxbatches, adj_factory, edit_correction) -> AbstractSearchEngine
 
 Creates a new, empty engine for `spec`. Every keyword is required, and none of them has a default
-here (see DEVELOPMENT_STRATEGY.md): `create_project` is the public boundary that chooses.
+here (see PLAN.md, "Defaults"): `create_project` is the public boundary that chooses.
 
 - `on_change::Union{Nothing,Function}`, if given, is installed as a `SimilaritySearch.CallbackLog`
   observer: an `(index, sp, ep) -> nothing` callback fired on every `:add!` event, for example to
@@ -1439,7 +1439,7 @@ restore_engine(state; on_change::Union{Nothing,Function}, log_io::Union{Nothing,
 function restore_engine(::Val{:dense}, state; on_change::Union{Nothing,Function}, log_io::Union{Nothing,IO}, maxbatches::Union{Nothing,Integer})
     if state.backend === :graph
         index = build_searchgraph(state.distance, state.vector_blocks, state.load_neighbors, state.graph_len)
-        # The beam that `index!` tuned and the hints it picked (PLAN.md §0, item 13). A project
+        # The beam that `index!` tuned and the hints it picked (CHANGELOG.md §0, item 13). A project
         # saved before these fields existed has neither: it keeps the library's default beam
         # and starts each search from random points, until `index!` or `calibrate!`.
         beamsearch = get(state, :beamsearch, nothing)
@@ -1632,7 +1632,7 @@ current_beamsearch(::AbstractSearchEngine) = nothing
                ksearch=10, queries=nothing, tradeoff=1.5, transition=(-1, 1), nboot=1000,
                confidence=0.95, rng=default_rng()) -> Vector{CalibrationLevel}
 
-Runs `SimilaritySearch.jl`'s `optimize_index!` hyperparameter search (PLAN.md §5.6) against
+Runs `SimilaritySearch.jl`'s `optimize_index!` hyperparameter search (CHANGELOG.md §5.6) against
 `engine.backend.index` once per recall level in `levels`. Each resulting `BeamSearch` is stored
 in `engine.backend.opt_beamsearch[level]`, so that [`search_live`](@ref) can serve a per-request
 `minrecall` from it. Then the recall of that configuration is measured on a second sample of
@@ -1682,11 +1682,11 @@ the interval then describes the tuning queries, and it is optimistic for other q
 - `nboot`: the number of resamples behind each interval; at least 2.
 - `confidence`: the level of each interval, strictly between 0 and 1.
 - `rng`: draws the query samples and the resamples, so that a run can be repeated.
-- `partition`: the number of a partition with a graph (PLAN.md §5.10). Calibrates that graph
+- `partition`: the number of a partition with a graph (CHANGELOG.md §5.10). Calibrates that graph
   and stores the levels in its own table instead of the global one. Raises `InvalidOption`
   for a partition without a graph.
 - `partitions`: the set of partitions that `partition` belongs to, when it is not the one of
-  `engine`: the set of a partition follower (PLAN.md §5.11).
+  `engine`: the set of a partition follower (CHANGELOG.md §5.11).
 """
 function calibrate!(engine::DenseEngine{GraphBackend}; levels=DEFAULT_MINRECALL_LEVELS, numqueries::Int=64,
                     ksearch::Int=10, queries=nothing, tradeoff::Real=1.5, transition=(-1, 1),
@@ -1904,7 +1904,7 @@ end
 """
     index!(engine::DenseEngine{GraphBackend}, partition_members::Function) -> Vector{UInt32}
 
-[`index!`](@ref index!(::DenseEngine{GraphBackend})) for a partitioned project (PLAN.md §5.10).
+[`index!`](@ref index!(::DenseEngine{GraphBackend})) for a partitioned project (CHANGELOG.md §5.10).
 After the global graph indexes its backlog, `partition_members(ids)` returns the partition
 numbers of each newly indexed id, and the ids join their partitions. Then every partition graph
 indexes its new members, and every partition that reached the threshold gets its graph. All of
@@ -2049,7 +2049,7 @@ above this one, which is also where such a policy belongs.
 
 # Keyword Arguments
 - `bs_override::Union{Nothing, BeamSearch}`: an ad hoc `BeamSearch` configuration to
-  search with for this call only (PLAN.md §3/§7's per-request `beamsearch_overrides`),
+  search with for this call only (CHANGELOG.md §3/§7's per-request `beamsearch_overrides`),
   instead of `engine.backend.index.algo[]`'s calibrated default. Only meaningful for a
   `DenseEngine{GraphBackend}` — accepted and ignored on every other engine kind, which has no
   `BeamSearch` to override in the first place. Takes priority over `minrecall` below.
@@ -2139,7 +2139,7 @@ search_live(engine::FullTextEngine, query, k::Int; bs_override, minrecall, polic
 """
     search_partition_live(engine::FullTextEngine, partition_adj::Function, query, k::Int; policy) -> (id=..., dist=..., deleted=..., distance_evaluations=...)
 
-[`search_live`](@ref) over one partition of a text project (PLAN.md §5.9). `partition_adj`
+[`search_live`](@ref) over one partition of a text project (CHANGELOG.md §5.9). `partition_adj`
 takes the vocabulary size and returns that partition's posting lists as an
 `AbstractAdjList{UInt32}`. The search runs on an index that is the live one with those lists in
 place of its own: same vocabulary, scorer, document vectors and query pipeline, so each

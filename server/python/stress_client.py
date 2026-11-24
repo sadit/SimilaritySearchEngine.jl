@@ -1,7 +1,7 @@
 """SimilaritySearchServer stress/smoke client.
 
 A real, end-to-end exercise of `similarity_search`'s full API surface against a live
-`similarity-search-serve` -- doubles as this package's own correctness check (PLAN.md
+`similarity-search-serve` -- doubles as this package's own correctness check (CHANGELOG.md
 §8.2's "ship a worked example of using the library" ask) and as a quick way to confirm a
 running server is actually healthy end-to-end, not just that `/healthz` returns 200.
 """
@@ -16,7 +16,7 @@ from similarity_search import SimilaritySearchClient, run_job
 
 def _load_docs(n=30):
     """Real dense+text docs from this repo's own test fixtures (128-dim LSI vectors,
-    see PLAN.md's chunk on regenerating test/data/*.jsonl) -- not synthetic random data,
+    see CHANGELOG.md's chunk on regenerating test/data/*.jsonl) -- not synthetic random data,
     so search/hybrid_search actually return meaningful, checkable hits."""
     # `server/python/` -> `server/` -> the repository root, where the fixtures live: they
     # belong to the engine's own test data and are shared by both packages.

@@ -1,4 +1,4 @@
-# Enforces the no-defaults-below-the-public-surface policy (DEVELOPMENT_STRATEGY.md).
+# Enforces the no-defaults-below-the-public-surface policy (PLAN.md, "Defaults").
 #
 # A policy nobody verifies drifts, and this one drifts silently: adding a default to an
 # internal function breaks nothing and reads like a convenience. What it actually does is put

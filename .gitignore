@@ -42,7 +42,6 @@
 /server/workdir/
 /server/Manifest.toml
 /server/julia/Manifest.toml
-/server/docs/build/
 
 # The Python client's virtualenv and build droppings
 server/python/venv/

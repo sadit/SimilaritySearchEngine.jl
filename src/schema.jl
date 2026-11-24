@@ -302,7 +302,7 @@ raw_meta(::Nothing) = nothing
 
 
 # ==========================================
-# The declared shape of `meta` (PLAN.md §4.5)
+# The declared shape of `meta` (CHANGELOG.md §4.5)
 # ==========================================
 
 """
@@ -311,7 +311,7 @@ raw_meta(::Nothing) = nothing
 The types a field of `meta` can be declared as. `:timestamp` is an ISO 8601 instant, stored
 as the string `Dates.DateTime` prints and compared as an instant rather than as text.
 
-`:geopoint` of PLAN.md §4.5 is not here. That type existed to be indexed, and a value-to-ids
+`:geopoint` of CHANGELOG.md §4.5 is not here. That type existed to be indexed, and a value-to-ids
 index is the wrong shape for "within a radius" or "inside a box"; a project that stores
 coordinates declares two `:float64` fields or leaves them undeclared.
 """
@@ -477,7 +477,7 @@ get_field(record::MetadataRecord, name::String) = get_field(record, nothing, nam
 """
     matches_filter(record::MetadataRecord, meta, filter::AbstractDict, schema) -> Bool
 
-Post-filter predicate for `/search`-family endpoints (PLAN.md §5.4). `filter` maps field
+Post-filter predicate for `/search`-family endpoints (CHANGELOG.md §5.4). `filter` maps field
 names to either a bare value (equality) or a spec dict supporting `gte`/`lte`/`gt`/`lt`
 (range), `in`/`nin` (set membership), and `eq`/`neq`. A field missing from the record/meta fails the filter.
 

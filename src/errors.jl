@@ -109,7 +109,7 @@ struct UnknownPartition <: NotFound
 end
 
 """
-A follower name that the leader does not list in its followers (PLAN.md §5.11). `name` is the
+A follower name that the leader does not list in its followers (CHANGELOG.md §5.11). `name` is the
 name that was asked for; the message lists the names closest to it.
 """
 struct UnknownFollower <: NotFound
@@ -119,7 +119,7 @@ end
 
 """
 A follower whose spec or key source has a type from a plugin module that is not registered in
-this process (PLAN.md §5.11). `plugin` is the name of the module.
+this process (CHANGELOG.md §5.11). `plugin` is the name of the module.
 """
 struct PluginNotLoaded <: NotFound
     plugin::String
@@ -171,7 +171,7 @@ end
 
 """
 A follower built from an earlier numbering of the items of its leader: the leader was rebuilt
-after the follower processed its items (PLAN.md §5.11). `follower` is the canonical name.
+after the follower processed its items (CHANGELOG.md §5.11). `follower` is the canonical name.
 `rebuild_follower!` builds the follower again.
 """
 struct StaleFollower <: ConflictingState
@@ -180,7 +180,7 @@ struct StaleFollower <: ConflictingState
 end
 
 """
-A request to delete a leader that has followers (PLAN.md §5.11). `followers` holds their names;
+A request to delete a leader that has followers (CHANGELOG.md §5.11). `followers` holds their names;
 each one is deleted first with `delete_follower!`.
 """
 struct HasFollowers <: ConflictingState

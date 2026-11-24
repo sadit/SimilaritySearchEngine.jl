@@ -2,7 +2,7 @@ using Test
 using HTTP
 using JSON3
 
-# Authentication over HTTP (PLAN.md §4.1). The decision itself is tested without a socket in
+# Authentication over HTTP (CHANGELOG.md §4.1). The decision itself is tested without a socket in
 # `test_boundary.jl`; what this file adds is that the decision is actually reached on a real
 # request, on the routes as they are registered.
 #
