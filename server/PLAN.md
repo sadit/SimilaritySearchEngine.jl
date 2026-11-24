@@ -54,10 +54,13 @@ of it exist.
    refuses to start. **Still open:** the operation log records the token string presented by
    each caller, which is why reading the log is an administrative operation; storing a hash
    of it instead would make the log safe to read with `read`.
-2. **Remnants of the port.** Removed on 2026-09-13: the `JLD2` dependency, `src/snapshots.jl`,
-   and the passages that described a snapshot file as current behavior. Still pending: two
-   docstrings in `server.jl` that document `parse_meta_schema` and `serialize_meta_schema`,
-   functions that do not exist, and that describe the §4.5 schema that was never built.
+2. ~~**Remnants of the port.**~~ Done on 2026-09-13: the `JLD2` dependency, `src/snapshots.jl`,
+   and the passages that described a snapshot file as current behavior were removed. The same
+   day, item 5 added `parse_meta_schema` and `serialize_meta_schema` to `server.jl` (commit
+   ee91116). Their docstrings describe the schema that was built, not the one §4.5 proposes.
+   On 2026-11-24 the docstring of `descriptor_path` stopped saying that `descriptor.json` holds
+   `meta_schema` and that a reopen restores secondary indexes: the declaration is read from the
+   project, and `meta` has no index.
 3. ~~**The 80/20 split**~~ Done on 2026-09-13. The keys were read by nothing, and job
    subprocesses ran on one thread each, because `Base.julia_cmd()` does not carry the
    `--threads` of the process that spawns them. `batch_threads_pct` now yields a pair,

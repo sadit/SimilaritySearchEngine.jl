@@ -517,11 +517,12 @@ serialize_meta_schema(schema) =
 """
     descriptor_path(app, id) -> String
 
-Path of a dataset's small persistent sidecar (`index_kind`/`distance`/`created_at`/
-`meta_schema`) — recorded at creation time so `GET /api/v1/datasets`/`GET
-/api/v1/datasets/{id}` can list every dataset without needing it loaded into
-`app.handles`, and so `reload_datasets!` can reopen each one (with its original
-`meta_schema`, hence its original secondary-index column families) on server startup.
+Path of the `descriptor.json` of a dataset. It holds `index_kind`, `distance`, `created_at`,
+`edit_correction` and `max_k`, written at creation. `GET /api/v1/datasets` and
+`GET /api/v1/datasets/{id}` read it to list a dataset that is not in `app.handles`.
+`reload_datasets!` reads it to reopen each dataset when the server starts. The `meta_schema`
+of a dataset is not in this file: the project stores it, and `dataset_descriptor` reads it
+from the project.
 """
 descriptor_path(app::AppState, id::String) = joinpath(app.workdir, "datasets", id, "descriptor.json")
 
