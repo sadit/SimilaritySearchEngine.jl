@@ -5,7 +5,7 @@ using JSON
     workdir = mktempdir()
     data_path = joinpath(@__DIR__, "..", "..", "..", "test", "data", "frankenstein.jsonl")
 
-    # Every command runs in this process (`_cli_ok`, `_cli_fails`). Each command opens the
+    # Every command runs in this process (`_cli_ok`, `_cli_code`). Each command opens the
     # project from its files and closes it.
 
     # --- Dense (searchgraph) ---------------------------------------------------
@@ -71,14 +71,16 @@ using JSON
     desc_lex2 = JSON.parse(read(desc_lex_out2, String))
     @test desc_lex2.doc_count == 724
 
-    # closestpair is meaningless against a text (non-dense) index -- must fail cleanly.
+    # `closestpair` needs a dense index. On a text index, the engine raises an invalid request:
+    # exit code 2.
     cp_lex_out = tempname()
-    @test _cli_fails("closestpair", "--dataset", "desc_lex", "--workdir", workdir, "--output", cp_lex_out)
+    @test _cli_code("closestpair", "--dataset", "desc_lex", "--workdir", workdir, "--output", cp_lex_out) == 2
 
     # --- Error paths --------------------------------------------------------------
 
-    @test _cli_fails("describe", "--dataset", "does_not_exist", "--workdir", workdir, "--output", tempname())
-    @test _cli_fails("rebuild", "--dataset", "does_not_exist", "--workdir", workdir)
+    # A dataset that does not exist is refused by the command before it calls the engine: exit code 1.
+    @test _cli_code("describe", "--dataset", "does_not_exist", "--workdir", workdir, "--output", tempname()) == 1
+    @test _cli_code("rebuild", "--dataset", "does_not_exist", "--workdir", workdir) == 1
 
     rm(workdir, force=true, recursive=true)
 end

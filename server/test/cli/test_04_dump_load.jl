@@ -6,7 +6,7 @@ using SimilaritySearchEngine
     workdir = mktempdir()
     data_path = joinpath(@__DIR__, "..", "..", "..", "test", "data", "frankenstein.jsonl")
 
-    # Every command runs in this process (`_cli_ok`, `_cli_fails`, `_run_cli`).
+    # Every command runs in this process (`_cli_ok`, `_cli_code`, `_run_cli`).
 
     # --- Dense (searchgraph) round-trip ------------------------------------------
 
@@ -92,13 +92,13 @@ using SimilaritySearchEngine
     # A dataset without items is dumped and loaded: its `dataset.jsonl` is empty.
     empty_input = joinpath(workdir, "empty.jsonl")
     touch(empty_input)
-    @test first(_run_cli(["build", "--dataset", "dump_empty", "--input", empty_input, "--index-kind", "exhaustive_search",
-                          "--workdir", workdir])) == 0
+    @test _cli_ok("build", "--dataset", "dump_empty", "--input", empty_input, "--index-kind", "exhaustive_search",
+                  "--workdir", workdir)
     bundle_empty = joinpath(workdir, "bundle_empty")
-    @test first(_run_cli(["dump", "--dataset", "dump_empty", "--workdir", workdir, "--output", bundle_empty])) == 0
+    @test _cli_ok("dump", "--dataset", "dump_empty", "--workdir", workdir, "--output", bundle_empty)
     @test filesize(joinpath(bundle_empty, "dataset.jsonl")) == 0
     @test JSON.parse(read(joinpath(bundle_empty, "manifest.json"), String)).record_count == 0
-    @test first(_run_cli(["load", "--bundle", bundle_empty, "--dataset", "dump_empty_restored", "--workdir", workdir])) == 0
+    @test _cli_ok("load", "--bundle", bundle_empty, "--dataset", "dump_empty_restored", "--workdir", workdir)
     @test isdir(joinpath(workdir, "datasets", "dump_empty_restored"))
 
     out_search = tempname()
@@ -128,18 +128,19 @@ using SimilaritySearchEngine
 
     # --- Error paths ---------------------------------------------------------------
 
-    @test _cli_fails("dump", "--dataset", "does_not_exist", "--workdir", workdir, "--output", joinpath(workdir, "bundle_missing"))
+    # The command refuses each of these before it calls the engine: exit code 1.
+    @test _cli_code("dump", "--dataset", "does_not_exist", "--workdir", workdir, "--output", joinpath(workdir, "bundle_missing")) == 1
 
     empty_bundle_target = joinpath(workdir, "bundle_already_exists")
     mkpath(empty_bundle_target)
-    @test _cli_fails("dump", "--dataset", "dump_dense", "--workdir", workdir, "--output", empty_bundle_target) # output already exists
+    @test _cli_code("dump", "--dataset", "dump_dense", "--workdir", workdir, "--output", empty_bundle_target) == 1 # output already exists
 
-    @test _cli_fails("load", "--bundle", bundle_dense, "--dataset", "dump_dense_restored", "--workdir", workdir) # target already exists
+    @test _cli_code("load", "--bundle", bundle_dense, "--dataset", "dump_dense_restored", "--workdir", workdir) == 1 # target already exists
 
     incomplete_bundle = joinpath(workdir, "incomplete_bundle")
     mkpath(incomplete_bundle)
     write(joinpath(incomplete_bundle, "manifest.json"), "{}") # missing project/
-    @test _cli_fails("load", "--bundle", incomplete_bundle, "--dataset", "from_incomplete", "--workdir", workdir)
+    @test _cli_code("load", "--bundle", incomplete_bundle, "--dataset", "from_incomplete", "--workdir", workdir) == 1
 
     rm(workdir, force=true, recursive=true)
 end

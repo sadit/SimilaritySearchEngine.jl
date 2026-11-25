@@ -30,9 +30,9 @@ using JSON
     before = partition_ids()
     @test all(ids -> !isempty(ids) && all(id -> id % 3 == 0, ids), before)
 
-    # An unknown partition is an engine error, and the command fails.
-    @test _cli_fails("searchbatch", "--dataset", "part_cli", "--queries", queries, "--output", tempname(), "--partition", "cuatro",
-                     "--workdir", workdir)
+    # An unknown partition is a `NotFound` error of the engine: exit code 4.
+    @test _cli_code("searchbatch", "--dataset", "part_cli", "--queries", queries, "--output", tempname(), "--partition", "cuatro",
+                    "--workdir", workdir) == 4
 
     # Nothing was deleted, so the rebuilt project has the same ids, and it is still partitioned.
     @test _cli_ok("rebuild", "--dataset", "part_cli", "--workdir", workdir)
@@ -71,8 +71,8 @@ end
         ids = partition_ids(p)
         @test all(x -> length(x) == 5 && all(inp, x), ids)
     end
-    @test _cli_fails("searchbatch", "--dataset", "dense_cli", "--queries", queries, "--output", tempname(), "--partition", "cuatro",
-                     "--workdir", workdir)
+    @test _cli_code("searchbatch", "--dataset", "dense_cli", "--queries", queries, "--output", tempname(), "--partition", "cuatro",
+                    "--workdir", workdir) == 4
 
     @test _cli_ok("rebuild", "--dataset", "dense_cli", "--workdir", workdir)
     @test all(x -> all(id -> id % 3 == 0, x), partition_ids("tres"))

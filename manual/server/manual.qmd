@@ -1102,7 +1102,7 @@ The number of threads the server itself has is the one given to Julia when it st
 
 The suite has two levels. A run can also select some of its files.
 
-- **light** (321 assertions, approximately 28 s, measured on 2026-11-23): the interface with
+- **light** (364 assertions, approximately 36 s, measured on 2026-11-25): the interface with
   the engine. It verifies the mapping from the names used in requests to engine types, from
   engine errors to status codes and exit codes, and from the items of a request to engine
   items. It also verifies that the Julia client has every error type of the engine. No server

@@ -25,8 +25,8 @@ include(joinpath(@__DIR__, "..", "..", "test", "selection.jl"))
 #
 # The other files are end-to-end. The `api/` files share one HTTP server, started by the first
 # file that needs it, and the job routes start Julia subprocesses. Each file creates its own
-# datasets, so any subset of the files can run alone. Measured 2026-11-23, the light run took
-# 26 s (288 assertions) and the full run 37 min (1,273 assertions).
+# datasets, so any subset of the files can run alone. The light run took 36 s (364 assertions,
+# measured 2026-11-25). The full run took 13 min (1,450 assertions, measured 2026-11-24).
 const SELECTION = TestSelection(ARGS)
 
 const TEST_FILES = [

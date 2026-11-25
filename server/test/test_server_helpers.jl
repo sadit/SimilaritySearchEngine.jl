@@ -113,23 +113,13 @@ the errors of ArgParse, because ArgParse calls `exit()` for them.
 _run_cli(args::Vector{String}) = _capture_main(SimilaritySearchServer.main, args)
 
 """
-Runs a `similarity-search` command in this process with [`_run_cli`](@ref), and returns `true`
-when its exit code is 0. Each argument is converted to a `String`.
+Runs a `similarity-search` command in this process with [`_run_cli`](@ref), and returns its exit
+code. Each argument is converted to a `String`. The commands convert an engine error to an exit
+code (`cli_exit_code`), so an exception is a fault of the command. This function does not catch
+it, and `@test` reports it as an error. The real binary ends with exit code 1 on an exception, so
+a test of the real binary cannot tell a fault from a refusal of the command.
 """
-_cli_ok(args...) = first(_run_cli(String[string(a) for a in args])) == 0
+_cli_code(args...) = first(_run_cli(String[string(a) for a in args]))
 
-"""
-Runs a `similarity-search` command in this process with [`_run_cli`](@ref), and returns `true`
-when the command fails. A command fails when its exit code is not 0, or when it raises an
-exception. The real binary ends with exit code 1 on an exception that the command does not
-convert to an exit code.
-"""
-function _cli_fails(args...)
-    code = try
-        first(_run_cli(String[string(a) for a in args]))
-    catch e
-        e isa InterruptException && rethrow()
-        return true
-    end
-    return code != 0
-end
+"Runs a `similarity-search` command with [`_cli_code`](@ref), and returns `true` when its exit code is 0."
+_cli_ok(args...) = _cli_code(args...) == 0

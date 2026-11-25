@@ -280,6 +280,7 @@ Where to read more: `manual/server/manual.qmd` and the server tutorial
 | server, full | 1,450 | 12 min 41 s | 2026-11-24, with the commands of `cli/` in the test process |
 | Julia client, without a server | 63 | | 2026-11-23 |
 | server, light | 351 | | 2026-11-24, after §5.17 |
+| server, light | 364 | 36 s | 2026-11-25 |
 | Node.js client, without a server | 72 tests | | 2026-11-24, Node.js 22.23.5 and 24.22.3 |
 | server, `api/21` (Node.js client against a server) | 7, over 12 tests of Node.js | 3 min 40 s | 2026-11-24 |
 
