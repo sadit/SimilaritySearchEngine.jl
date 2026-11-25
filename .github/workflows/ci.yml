@@ -16,6 +16,15 @@ on:
         required: false
         default: full
 
+# The package images that julia-actions/cache keeps are compiled for this target. By default they
+# are compiled for the CPU of the runner, and Julia rejects an image compiled for another CPU. The
+# runners do not all have the same CPU. In 5 of the 10 runs of the engine job on 2026-11-24 and
+# 2026-11-25, all its dependencies were compiled again, which added 4 to 5.5 minutes. In the run of
+# eef7b1d, the Manifest was the same as in the run whose cache it restored. The variable does not
+# change the code that the JIT compiles while the tests run.
+env:
+  JULIA_CPU_TARGET: generic
+
 jobs:
   # Every change, both packages, light level: the engine's suite without its whole-dataset
   # algorithms and corpus fits, and the server's boundary tests without the HTTP/CLI
@@ -44,9 +53,12 @@ jobs:
         with:
           version: ${{ matrix.version }}
       - uses: julia-actions/cache@v3
+      # Pkg.test installs the dependencies and runs their build scripts. Pkg.test loads only the
+      # images compiled with --check-bounds=yes, so no step precompiles the images without it:
+      # for the engine alone, that was 59 to 94 s each time its code changed.
       - name: Test the engine
         if: matrix.package == 'engine'
-        run: julia --project=. -e 'using Pkg; Pkg.build(); Pkg.test()'
+        run: julia --project=. -e 'using Pkg; Pkg.test()'
         env:
           # The suite exercises real concurrency (readers against a writer), so a
           # single-threaded runner would silently skip what those tests are for.
@@ -59,11 +71,17 @@ jobs:
       # The light level starts no subprocess, so the precompile workload of the server
       # (server/src/precompile_workload.jl) does not make it faster. Without the workload, the
       # precompilation of the server took 6 s instead of 66 s in a test run (2026-11-25).
+      #
+      # JULIA_PKG_PRECOMPILE_AUTO=0 stops Pkg.develop from precompiling the images without
+      # --check-bounds, which Pkg.test does not load. When the engine changed, that took 69 to
+      # 71 s. Pkg.test runs in its own process, without the variable, so it still precompiles
+      # the images it loads.
       - name: Test the server against this repository's engine
         if: matrix.package == 'server'
         run: |
           printf '[SimilaritySearchServer]\nprecompile_workload = false\n' > server/LocalPreferences.toml
-          julia --project=server -e 'using Pkg; Pkg.develop(path="."); Pkg.build(); Pkg.test()'
+          JULIA_PKG_PRECOMPILE_AUTO=0 julia --project=server -e 'using Pkg; Pkg.develop(path=".")'
+          julia --project=server -e 'using Pkg; Pkg.test()'
         env:
           JULIA_NUM_THREADS: auto
 
@@ -114,8 +132,11 @@ jobs:
         run: julia --project=. -e 'using Pkg; Pkg.test(test_args=["full"])'
         env:
           JULIA_NUM_THREADS: auto
+      # As in the light job: Pkg.test and the job subprocesses of the server, which inherit
+      # --check-bounds=yes, load only the images compiled with it.
       - name: Server, full level
         run: |
-          julia --project=server -e 'using Pkg; Pkg.develop(path="."); Pkg.test(test_args=["full"])'
+          JULIA_PKG_PRECOMPILE_AUTO=0 julia --project=server -e 'using Pkg; Pkg.develop(path=".")'
+          julia --project=server -e 'using Pkg; Pkg.test(test_args=["full"])'
         env:
           JULIA_NUM_THREADS: auto
