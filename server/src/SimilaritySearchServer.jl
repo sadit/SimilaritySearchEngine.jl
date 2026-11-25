@@ -277,4 +277,6 @@ function main_serve(args::Vector{String})::Cint
                              follower_check_seconds, gzip, gzip_min_bytes)
 end
 
+include("precompile_workload.jl")
+
 end # module

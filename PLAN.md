@@ -281,6 +281,8 @@ Where to read more: `manual/server/manual.qmd` and the server tutorial
 | Julia client, without a server | 63 | | 2026-11-23 |
 | server, light | 351 | | 2026-11-24, after §5.17 |
 | server, light | 364 | 36 s | 2026-11-25 |
+| server, light | 365 | 37 s | 2026-11-25, with the precompile workload of the server |
+| server, full | 1,451 | 8 min 54 s | 2026-11-25, with the precompile workload of the server |
 | Node.js client, without a server | 72 tests | | 2026-11-24, Node.js 22.23.5 and 24.22.3 |
 | server, `api/21` (Node.js client against a server) | 7, over 12 tests of Node.js | 3 min 40 s | 2026-11-24 |
 
@@ -289,6 +291,23 @@ The times were measured with 8 threads. The test files of `cli/` run the command
 Julia process, and `cli/01` to `cli/06` took 21 min 54 s of the 38 min. On 2026-11-24 they took
 2 min 0 s. Three tests still run the real binary, in `cli/01` and `cli/02`. `cli/05` runs it for
 the errors of ArgParse, which call `exit()`.
+
+The server has a precompile workload since 2026-11-25 (`server/src/precompile_workload.jl`). The
+precompilation of the package runs 13 commands of `similarity-search` on 300 items: the 9 kinds of
+job, `searchbatch` of a dense and of a text dataset, and `describe`. The package image keeps the
+compiled code, so a job, which runs its command in a new Julia process, compiles less. Measured on
+2026-11-25, each command took 3.0 to 5.0 s in a new process with the workload, and 8.2 to 23.8 s
+without it. The text `build` took 19.8 s, against 41.9 s. The full suite took 8 min 54 s, against
+12 min 41 s, and `api/04` took 44 s, against 2 min 2 s. The precompilation of the server takes 46 s
+instead of 6 s, and 66 s in a test run, which uses `--check-bounds=yes`. The package image has
+29.5 MB instead of 2.5 MB. `using SimilaritySearchServer` takes 3.0 s instead of 2.6 s.
+
+The workload does not compile the graph of the query expansion of a text dataset. TextSearch.jl
+builds that graph for a vocabulary of more than 4096 tokens, and a workload of that size adds about
+10 s to the precompilation. The preference `precompile_workload = false`, in
+`server/LocalPreferences.toml`, turns the workload off. The light job of CI uses it: the light
+level starts no subprocess. The test file `precompile` checks the exit codes of the workload, and
+it is skipped when the workload is off.
 
 `Pkg.test(test_args=["jobs", "api/17"])` runs only the files with those names or tags
 (`TEST_FILES` in each `runtests.jl`). The full suite of the server runs before a release, and

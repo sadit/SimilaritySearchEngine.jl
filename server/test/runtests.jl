@@ -21,18 +21,20 @@ include(joinpath(@__DIR__, "..", "..", "test", "selection.jl"))
 # the functions between this package and the engine: which kind of project a wire name means,
 # which status code and exit code an engine error becomes, what an incoming item turns into.
 # An engine change breaks these functions first, so the light run fails on the day of that
-# change. This is the reason both packages are in one repository.
+# change. This is the reason both packages are in one repository. The file `precompile` runs the
+# commands of the precompile workload in this process (`server/src/precompile_workload.jl`).
 #
 # The other files are end-to-end. The `api/` files share one HTTP server, started by the first
 # file that needs it, and the job routes start Julia subprocesses. Each file creates its own
-# datasets, so any subset of the files can run alone. The light run took 36 s (364 assertions,
-# measured 2026-11-25). The full run took 13 min (1,450 assertions, measured 2026-11-24).
+# datasets, so any subset of the files can run alone. Measured on 2026-11-25, the light run took
+# 37 s (365 assertions) and the full run 9 min (1,451 assertions).
 const SELECTION = TestSelection(ARGS)
 
 const TEST_FILES = [
     TestFile("config", "test_config.jl"; tags=["config"]),
     TestFile("boundary", "test_boundary.jl"; tags=["errors", "auth"]),
     TestFile("dispatcher", "test_dispatcher.jl"; tags=["jobs"]),
+    TestFile("precompile", "test_precompile_workload.jl"; tags=["cli", "precompile"]),
     TestFile("e2e", "test_e2e.jl"; tags=["api", "jobs"], light=false),
     TestFile("api/01", "api/test_01_metric_search.jl"; tags=["api", "dense", "search"], light=false),
     TestFile("api/02", "api/test_02_full_text_search.jl"; tags=["api", "text", "search"], light=false),

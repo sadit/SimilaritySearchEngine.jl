@@ -43,6 +43,10 @@
 /server/Manifest.toml
 /server/julia/Manifest.toml
 
+# A developer's preferences for the server, such as `precompile_workload = false`
+# (server/src/precompile_workload.jl). The light job of CI writes this file too.
+/server/LocalPreferences.toml
+
 # The Python client's virtualenv and build droppings
 server/python/venv/
 server/python/**/__pycache__/

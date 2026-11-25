@@ -923,6 +923,13 @@ A job's state is `queued`, `running`, `blocked`, `completed` or `failed`.
 `GET /api/v1/jobs/{job_id}/result` sends the file the job wrote, in parts, except for `dump`, whose
 result is a directory: for that one it answers `{"bundle_dir": ..., "manifest": {...}}`.
 
+Each job runs a command of `similarity-search` in a new Julia process. The package image of the
+server holds the compiled code of these commands: the precompilation of the package runs each
+command on 300 items (`server/src/precompile_workload.jl`). Measured on 2026-11-25, a `build` of
+724 vectors took 3.8 s in a new process, against 20.3 s without that code. The other kinds of job
+took 3.0 to 5.0 s on the same dataset. The precompilation of the package takes 46 s, once after
+each installation or update.
+
 A **bundle** of `dump` is a directory with `project/`, a copy of the project, `followers/`,
 `manifest.json`, and `dataset.jsonl`. `dataset.jsonl` holds the metadata of each item as one
 JSON line, in the order of `_id`:
@@ -1102,13 +1109,13 @@ The number of threads the server itself has is the one given to Julia when it st
 
 The suite has two levels. A run can also select some of its files.
 
-- **light** (364 assertions, approximately 36 s, measured on 2026-11-25): the interface with
+- **light** (365 assertions, approximately 37 s, measured on 2026-11-25): the interface with
   the engine. It verifies the mapping from the names used in requests to engine types, from
   engine errors to status codes and exit codes, and from the items of a request to engine
-  items. It also verifies that the Julia client has every error type of the engine. No server
-  is started and no subprocess is created. This level detects a change in the engine on the
-  day it is made.
-- **full** (1,450 assertions, approximately 13 minutes with 8 threads, measured on 2026-11-24):
+  items. It also verifies that the Julia client has every error type of the engine, and that
+  the commands of the precompile workload end with exit code 0. No server is started and no
+  subprocess is created. This level detects a change in the engine on the day it is made.
+- **full** (1,451 assertions, approximately 9 minutes with 8 threads, measured on 2026-11-25):
   the end-to-end suites for the API, the jobs, the command lines and the clients. They start a
   server and execute subprocesses. The tests of the command lines run most commands in the test
   process.
@@ -1118,8 +1125,21 @@ julia --project=server -e 'using Pkg; Pkg.develop(path="."); Pkg.test()'
 julia --project=server -e 'using Pkg; Pkg.test(test_args=["full"])'
 ```
 
+A test run precompiles the server with its own options (`--check-bounds=yes`). With the precompile
+workload, this took 66 s on 2026-11-25, after each change to the engine or to the server. The light
+level does not use the compiled commands, because it creates no subprocess. To turn the workload off,
+create `server/LocalPreferences.toml` with these lines:
+
+```toml
+[SimilaritySearchServer]
+precompile_workload = false
+```
+
+The precompilation then took 8 s. The file `precompile` is skipped, and the jobs of the full level
+start slower. The light job of CI uses this file.
+
 Each test file has a name and a list of tags. The table `TEST_FILES` in
-`server/test/runtests.jl` lists them. The names are `config`, `boundary`, `dispatcher`, `e2e`, `api/01` to
+`server/test/runtests.jl` lists them. The names are `config`, `boundary`, `dispatcher`, `precompile`, `e2e`, `api/01` to
 `api/21` and `cli/01` to `cli/08`. Examples of tags are `jobs`, `responses`, `client`,
 `partitions`, `followers`, `plugins`, `storage`, `auth` and `cli`. A run that receives names or tags includes only the files that
 match one of them. The word `light` adds the files of the light level.

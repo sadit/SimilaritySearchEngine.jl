@@ -53,8 +53,24 @@ cd server/node && npm install && npm test
 
 While working, run only the test files a change touches: `Pkg.test(test_args=["jobs", "api/17"])`
 selects files by name or tag (`TEST_FILES` in each `runtests.jl`, `test/selection.jl`). The
-server's full suite took 13 minutes on 2026-11-24. Run it with `test_args=["full"]` before a release
+server's full suite took 9 minutes on 2026-11-25. Run it with `test_args=["full"]` before a release
 and before a commit that changes the job model, the dispatcher or the shared test server.
+
+The server has a precompile workload (`server/src/precompile_workload.jl`). Its precompilation
+runs the commands of `similarity-search` on 300 items, and the package image keeps the compiled
+code. A job runs its command in a new Julia process, so the workload makes each job start sooner.
+Measured on 2026-11-25, a `build` of 724 vectors took 3.8 s in a new process, against 20.3 s
+without the workload. The precompilation of the server took 46 s, and 66 s in a test run, against
+6 s without the workload. It runs again after each change to the engine or to the server. To
+iterate without it, create `server/LocalPreferences.toml`, which git ignores:
+
+```toml
+[SimilaritySearchServer]
+precompile_workload = false
+```
+
+The light job of CI writes this file. Delete the file before you measure the full suite, because
+the times of its job files depend on the workload.
 
 A new engine error type is not finished until the Julia client has a type of the same name, in
 the same category (`server/julia/src/errors.jl`), and the Node.js client has a class of the same

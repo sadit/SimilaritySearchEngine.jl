@@ -56,9 +56,13 @@ jobs:
       - name: Test the Julia client
         if: matrix.package == 'client'
         run: julia --project=server/julia -e 'using Pkg; Pkg.test()'
+      # The light level starts no subprocess, so the precompile workload of the server
+      # (server/src/precompile_workload.jl) does not make it faster. Without the workload, the
+      # precompilation of the server took 6 s instead of 66 s in a test run (2026-11-25).
       - name: Test the server against this repository's engine
         if: matrix.package == 'server'
         run: |
+          printf '[SimilaritySearchServer]\nprecompile_workload = false\n' > server/LocalPreferences.toml
           julia --project=server -e 'using Pkg; Pkg.develop(path="."); Pkg.build(); Pkg.test()'
         env:
           JULIA_NUM_THREADS: auto
