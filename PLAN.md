@@ -542,7 +542,7 @@ HTML, with the text that Quarto generated in the other pages.
 
 ### Possible Later Work
 
-The designs recorded these as "not in this version". None of them is planned.
+The designs recorded most of these as "not in this version". None of them is planned.
 
 - Partitions of sparse projects; more than one partition field; the intersection of two
   partitions (§5.9, §5.10).
@@ -557,6 +557,34 @@ The designs recorded these as "not in this version". None of them is planned.
 - A route that runs several searches in one request, if a measurement shows that the round
   trips matter next to the time of the searches (§0, item 11).
 - `SlurmExecutor`: jobs that run on SLURM with the same commands (§5.5).
+- Serving projects of other directories (discussed on 2026-11-26, not from a design). The server
+  serves the datasets of one directory, `<workdir>/datasets/`. The case discussed was the four
+  projects of ReposMx in its `data/index/engine/`. There are two forms: one server process for
+  several directories, or one process per directory. Both forms need:
+  - Opening a project in the layout `<dir>/<name>` without `descriptor.json`. The CLI already
+    opens this layout (`_open_handle`). `edit_correction` and `max_k` come from the configuration.
+  - Read-only directories. Another process, such as the indexing of ReposMx, writes them. The
+    engine needs an error type for a write on a read-only handle. Today RocksDB raises its own
+    error, and the server answers `500`. The server refuses `DELETE` there, because it removes
+    the directory. It also refuses `build`, `load`, `rebuild` and followers.
+  - A `reload` after the other process writes the projects.
+
+  One process for several directories also needs:
+  - A table from dataset id to directory, project name and read-only flag. It replaces the
+    paths `joinpath(app.workdir, "datasets", id)` of `server.jl`, which are 8.
+  - A table of directories in `config.toml`. `generate_default_config` writes the keys
+    `datasets`, `indices` and `spool` of `[paths]`, and no code reads them.
+  - A prefix of dataset ids per directory, because two directories can hold projects with the
+    same name.
+  - Jobs that receive the directory and the project name of their dataset.
+
+  One process shares the threads, the port, the token store and `/metrics`. Separate processes
+  keep apart the pauses of the garbage collector, crashes, restarts, the version of the engine
+  and the plugins. Each separate process needs its own port and token store. Its threads are
+  set by hand, so that the sum does not exceed the cores. To serve ReposMx over HTTP with its
+  ranking, `POST /api/v1/datasets/{id}/ftsearch` also needs `policy`, a query as a list of
+  tokens, and `candidates`. The `ftsearch` of the engine accepts the three since 2026-11-10
+  (`cc5e336`). The route reads only `text`, `k`, `filter` and `partition`.
 
 ## Open Questions
 
