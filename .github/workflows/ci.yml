@@ -22,6 +22,13 @@ on:
 # 2026-11-25, all its dependencies were compiled again, which added 4 to 5.5 minutes. In the run of
 # eef7b1d, the Manifest was the same as in the run whose cache it restored. The variable does not
 # change the code that the JIT compiles while the tests run.
+#
+# All the images of a cache must have the same target. An image for `generic` whose dependencies
+# have native images compiles the code that it uses from those dependencies again. On 2026-11-26,
+# SimilaritySearchClient took 540 s that way, against 2.0 s with native images and 1.95 s with
+# generic images everywhere. In the run of 4bb2a26, the first after this variable, the engine
+# took 235 s against 90 to 117 s before, and the server 128 s against 4 to 5 s. For this reason
+# the two cache steps use the prefix `julia-cache-generic`, which no cache with native images has.
 env:
   JULIA_CPU_TARGET: generic
 
@@ -53,6 +60,8 @@ jobs:
         with:
           version: ${{ matrix.version }}
       - uses: julia-actions/cache@v3
+        with:
+          cache-name: julia-cache-generic;workflow=${{ github.workflow }};job=${{ github.job }}
       # Pkg.test installs the dependencies and runs their build scripts. Pkg.test loads only the
       # images compiled with --check-bounds=yes, so no step precompiles the images without it:
       # for the engine alone, that was 59 to 94 s each time its code changed.
@@ -123,6 +132,8 @@ jobs:
         with:
           version: '1.12'
       - uses: julia-actions/cache@v3
+        with:
+          cache-name: julia-cache-generic;workflow=${{ github.workflow }};job=${{ github.job }}
       # api/21 of the server's full level tests the Node.js client against the test server. It
       # uses the `node` in PATH, installs the client and builds it.
       - uses: actions/setup-node@v7
