@@ -1,6 +1,6 @@
 name = "SimilaritySearchServer"
 uuid = "381ed5c1-5ad0-425d-862d-01f56a64d1b8"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Eric S. Tellez <donsadit@gmail.com>"]
 
 [deps]
@@ -36,7 +36,7 @@ Random = "1"
 RocksDB = "1.0.0"
 SHA = "0.7"
 SimilaritySearch = "1.6.11"
-SimilaritySearchEngine = "0.1"
+SimilaritySearchEngine = "0.2"
 SparseArrays = "1"
 TOML = "1"
 TextSearch = "1.3"

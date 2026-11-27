@@ -99,6 +99,66 @@ close_project!(h)
 
 ---
 
+## Incompatible Changes in 0.2.0
+
+Version 0.2.0 (2026-11-26) is the first change of the version number. The package was 0.1.0
+from its first commit, on 2026-08-18, and its API changed under that number. This list covers
+the changes since 2026-09-12, the date of the license and of the first compat bounds. Each item
+says what to change in a program written for an earlier commit. "Commits by Date" in
+[`CHANGELOG.md`](CHANGELOG.md) lists every commit. The server changed to 0.2.0 on the same date,
+and [its list](#incompatible-changes-in-the-server-020) is in the section about the server.
+
+**Errors (2026-09-12).** The engine raises an `EngineError`. Its category is `InvalidRequest`,
+`NotFound`, `ConflictingState` or `StorageFailure`, and each error has its own type under the
+category, such as `PendingBacklog`. Before, the engine raised `ErrorException` with a message.
+Catch a type, not a message. Since 2026-11-24, a query or an item of a dense `Float32` project
+with another length raises `WrongDimension`. Before, such a query raised the `DimensionMismatch`
+of Julia, and an exact project kept such an item in its metadata but not in its vector file.
+
+**Calibration (2026-10-13).** `calibrate!` returns one `CalibrationLevel` per level, with the
+recall that the level reaches. Before, it returned the table of `BeamSearch` configurations.
+
+**Project specs (2026-11-21, issue #2).** `create_project` takes a `ProjectSpec` as its third
+argument, in place of keywords:
+
+| Before | Now |
+|---|---|
+| `engine=DenseEngine, backend=SearchGraph, distance=d, minrecall=r` | `DenseVectors(d; index=Graph(minrecall=r))` |
+| `backend=ExhaustiveSearch` | `DenseVectors(d; index=Exhaustive())` |
+| `backend=ParallelExhaustiveSearch` | `DenseVectors(d; index=Exhaustive(parallel=true))` |
+| `quantizer=...` (2026-11-20 only) | `DenseVectors(d; storage=Quantized(SQ(bits)))` |
+| `engine=SparseEngine, dimension=n, distance=d` | `SparseVectors(n, d)` |
+| `engine=FullTextEngine, backend=BM25InvertedFile, textmodel=m` | `TextDocuments(m; index=BM25())` |
+| `engine=FullTextEngine, backend=TextInvertedFile, textmodel=m` | `TextDocuments(m; index=VectorSpace())` |
+| `partition_by=f, partition_graph_min=n` | `partitions=PartitionBy(f; graph_min=n)` |
+| `maxbatches`, `postings_cache_max`, `postings_cache_base`, `edit_correction` | `runtime=Runtime(...)`, with the same names |
+
+`meta_schema` and `schema_version` are unchanged. The same commit made these changes too:
+
+- `open_project` takes `runtime=Runtime(...)` in place of `maxbatches`, `postings_cache_max`,
+  `postings_cache_base` and `edit_correction`.
+- `declare_partition!(h, field)` is `declare_partition!(h, PartitionBy(field))`.
+- These names are no longer exported: `DenseEngine`, `SparseEngine`, `FullTextEngine`,
+  `SearchGraph`, `ExhaustiveSearch`, `ParallelExhaustiveSearch`, `InvertedFile`,
+  `BM25InvertedFile` and `TextInvertedFile`. They still exist, for example as
+  `SimilaritySearchEngine.SearchGraph`. `BACKENDS`, `default_backend` and `ScalarQuantizer`
+  were removed.
+- A project saved before this change has no saved spec. `open_project` builds the spec from the
+  fields that the project saved. A quantized project created on 2026-11-20 must be created
+  again.
+
+**Exact projects (2026-11-22, issue #3).** An exact project of `Float32` vectors keeps its
+vectors in its vector file. The first writable open with 0.2.0 moves them to that file and
+removes the copy that earlier versions read. A read-only open does not change the project.
+
+**Metadata (2026-11-24).** The `meta` that a filter function receives, and the value of
+`get_meta(...; lazy=true)`, are a `JSON.Object{String,Any}` of JSON.jl v1. Before, they were a
+`JSON3.Object`, whose keys are `Symbol`s. `meta["year"]`, `meta[:year]` and `meta.year` work as
+before. Code that iterates the keys, or compares them with `Symbol`s, has to compare them with
+`String`s.
+
+---
+
 ## Documentation
 
 Both packages of this repository are documented on
@@ -165,3 +225,58 @@ Pkg.develop(path=".")            # ... and the server against it
 Julia 1.12 or later is required by both, and by the server outright: its `[apps]` entries need `Pkg.Apps`, which does not exist before 1.12.
 
 Its documentation is not separate either: the [server manual](https://sadit.github.io/SimilaritySearchEngine.jl/server/manual.html), the [server tutorial](https://sadit.github.io/SimilaritySearchEngine.jl/server/tutorial.html) and the [Server API](https://sadit.github.io/SimilaritySearchEngine.jl/api/server.html) are sections of the same site as the engine's.
+
+### Incompatible Changes in the Server 0.2.0
+
+The server changed from 0.1.0 to 0.2.0 on 2026-11-26, with the engine. It requires the engine
+0.2. This list covers the changes since 2026-09-12, the date the server came into this
+repository. Each item says what to change in a client, a script or a working directory made for
+an earlier commit.
+
+**Routes (2026-09-13).** An operation on one dataset has its route under that dataset.
+`/api/v1/simsearch/{id}/X` is now `/api/v1/datasets/{id}/X`, for `append`, `search`,
+`ftsearch`, `fetch`, `exists`, `delete` and `calibrate`. `POST /api/v1/simsearch/hybrid_search`
+is now `POST /api/v1/search/hybrid`. The old routes have no aliases.
+
+**Identifiers of an item (2026-09-14).** Every response names an item with `doc_id` and `_id`.
+`doc_id` is the identifier that the caller gave, and it can be `null`. `_id` is the integer that
+the engine assigned. Before, a search result used `id` for the first and `doc_id` for the
+second. The response of `fetch` no longer has `id`. `POST /api/v1/datasets/{id}/delete` takes
+`_id`. Before, it took that integer under the name `doc_id`.
+
+**Operation log (2026-09-14).** An entry of `GET /api/v1/datasets/{id}/log` has `user` and
+`token_fingerprint` in place of `token`. `user` is the name on the token, when the token is
+valid. `token_fingerprint` is the first 16 hexadecimal digits of the SHA-256 of the token.
+Before, the entry kept the token itself. The server does not rewrite the entries written before
+2026-09-14.
+
+**Join groups (2026-11-10).** The server has no join groups. `POST /api/v1/datasets` answers 400
+to a request with `fields`, `join_group` or `holds_metadata`, and the error message names what
+replaces them. The routes `POST /api/v1/search/group` and `GET /api/v1/datasets/{id}/join_group`
+were removed. Until 2026-09-13, the first one was `POST /api/v1/simsearch/ftsearch`. Each text
+field is now a dataset of its own. To search several fields with one text, send one `ftsearch`
+request to each dataset, as `ftsearch_fields` of the Python client does. A descriptor written
+before 2026-11-10 still loads, and the server ignores the three fields.
+
+**Text queries (2026-11-10).** `ftsearch` answers 400 to a `text` that is not a string. The
+command `searchbatch` exits with a status other than 0 after an engine error. Before, it exited
+with 0.
+
+**Size of a response (2026-11-23).** The server has no result cursors. The route
+`/api/v1/cursors/{cursor_id}` was removed, and a request with `page_size` answers 400
+`InvalidOption`. Each dataset has a `max_k`, and a request with a larger `k` answers 400
+`InvalidOption`. The limit applies to `search`, `ftsearch`, the hybrid search and the searches
+of a follower. A dataset created before 2026-11-23 has the default `max_k`, 100.
+`POST /api/v1/admin/datasets/{id}/reload` with the body `{"max_k": n}` changes it. The Python
+client no longer has `page_size`, `poll_cursor` and `iter_cursor`. The Julia client no longer
+has `search_pages`.
+
+**Dump bundles (2026-11-24).** `dump` writes the metadata of the items to `dataset.jsonl`, one
+JSON object per item, in place of `dataset.avro`. A program that reads `dataset.avro` from a
+bundle has to read `dataset.jsonl`. `load` accepts a bundle with `dataset.avro`. It ignores that
+file with a warning, and it restores the metadata from `project/`.
+
+**Datasets of a working directory (2026-11-22).** `serve` opens each dataset with write access.
+So the first start of 0.2.0 converts the exact projects of the working directory, as the item
+"Exact projects" of [the list of the engine](#incompatible-changes-in-020) says. The conversion
+removes the copy of the vectors that a server of an earlier commit reads.
